@@ -1,0 +1,157 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN THEME SWITCHER (V2.0)
+# Uses include files instead of fragile sed replacements
+# ==============================================================================
+
+THEME_DIR="$HOME/Tebian/configs/themes"
+CONFIG_DIR="$HOME/.config"
+SWAY_THEME_FILE="$CONFIG_DIR/sway/theme"
+
+apply_theme() {
+    local theme="$1"
+    local theme_path="$THEME_DIR/$theme"
+    
+    if [ ! -d "$theme_path" ]; then
+        notify-send "Theme Error" "Theme '$theme' not found"
+        exit 1
+    fi
+    
+    echo "Applying $theme theme..."
+    
+    # 1. Sway theme (include file)
+    mkdir -p "$CONFIG_DIR/sway"
+    cp "$theme_path/sway-theme" "$SWAY_THEME_FILE"
+    
+    # 2. Update bar mode in main sway config (sadly, sway doesn't support variables here)
+    local bar_mode="hide"
+    local bar_hidden="hide"
+    case "$theme" in
+        solid|paper) bar_mode="dock"; bar_hidden="show" ;;
+        *) bar_mode="hide"; bar_hidden="hide" ;;
+    esac
+    sed -i -E "s/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)[[:space:]]*$/    mode $bar_mode/" "$CONFIG_DIR/sway/config"
+    
+    # 3. Kitty
+    cp "$theme_path/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
+    
+    # 4. Fuzzel
+    mkdir -p "$CONFIG_DIR/fuzzel"
+    cp "$theme_path/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+    
+    # 5. Mako
+    cp "$theme_path/mako" "$CONFIG_DIR/mako/config"
+    
+    # 6. Wallpaper
+    local wallpaper_dir="$HOME/.local/share/backgrounds/tebian"
+    local wallpaper_src="$HOME/Tebian/assets/wallpapers/${theme}.jpg"
+    if [ -f "$wallpaper_src" ]; then
+        mkdir -p "$wallpaper_dir"
+        cp "$wallpaper_src" "$wallpaper_dir/default.jpg"
+        pkill swaybg 2>/dev/null
+        swaybg -i "$wallpaper_dir/default.jpg" -m fill &
+    fi
+    
+    # 7. GTK theme (dark/light based on theme)
+    local gtk_settings="$CONFIG_DIR/gtk-3.0/settings.ini"
+    mkdir -p "$CONFIG_DIR/gtk-3.0"
+    # Create settings.ini if it doesn't exist
+    if [ ! -f "$gtk_settings" ]; then
+        cat > "$gtk_settings" <<'GTKEOF'
+[Settings]
+gtk-application-prefer-dark-theme=true
+gtk-theme-name=Adwaita-dark
+gtk-icon-theme-name=Papirus-Dark
+gtk-cursor-theme-name=Adwaita
+GTKEOF
+    fi
+    # Ensure icon theme line exists
+    grep -q '^gtk-icon-theme-name=' "$gtk_settings" || echo "gtk-icon-theme-name=Papirus-Dark" >> "$gtk_settings"
+    if [ "$theme" = "paper" ]; then
+        sed -i 's/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=false/' "$gtk_settings"
+        sed -i 's/^gtk-theme-name=.*/gtk-theme-name=Adwaita/' "$gtk_settings"
+        sed -i 's/^gtk-icon-theme-name=.*/gtk-icon-theme-name=Papirus/' "$gtk_settings"
+    else
+        sed -i 's/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=true/' "$gtk_settings"
+        sed -i 's/^gtk-theme-name=.*/gtk-theme-name=Adwaita-dark/' "$gtk_settings"
+        sed -i 's/^gtk-icon-theme-name=.*/gtk-icon-theme-name=Papirus-Dark/' "$gtk_settings"
+    fi
+
+    # 8. gtklock CSS colors (update from theme.conf)
+    local theme_conf="$theme_path/theme.conf"
+    if [ -f "$theme_conf" ] && [ -f "$CONFIG_DIR/gtklock/style.css" ]; then
+        local t_text t_accent t_red
+        t_text=$(grep '^TEXT=' "$theme_conf" | cut -d= -f2)
+        t_accent=$(grep -m1 '^FROST=\|^PURPLE=\|^CYAN=\|^BLUE=' "$theme_conf" | cut -d= -f2)
+        t_red=$(grep '^RED=' "$theme_conf" | cut -d= -f2)
+        [ -z "$t_accent" ] && t_accent="$t_text"
+        [ -z "$t_red" ] && t_red="#bf616a"
+
+        local gtklock_css="$CONFIG_DIR/gtklock/style.css"
+        # Update clock/date/username text colors
+        sed -i "/#clock-label/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_text/" "$gtklock_css"
+        sed -i "/#date-label/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_text/" "$gtklock_css"
+        sed -i "/#user-name/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_text/" "$gtklock_css"
+        sed -i "/#input-field {/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_text/" "$gtklock_css"
+        sed -i "s/caret-color: #[0-9a-fA-F]\{6\}/caret-color: $t_accent/" "$gtklock_css"
+        sed -i "/#error-label/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_red/" "$gtklock_css"
+    fi
+
+    # 9. wob.ini colors
+    local wob_conf="$CONFIG_DIR/wob/wob.ini"
+    if [ -f "$wob_conf" ] && [ -f "$theme_conf" ]; then
+        local t_base t_surface
+        t_base=$(grep '^BASE=' "$theme_conf" | cut -d= -f2)
+        t_surface=$(grep '^SURFACE0=' "$theme_conf" | cut -d= -f2)
+        [ -n "$t_base" ] && sed -i "s/^background_color = .*/background_color = ${t_base#\#}FF/" "$wob_conf"
+        [ -n "$t_surface" ] && sed -i "s/^bar_color = .*/bar_color = ${t_surface#\#}FF/" "$wob_conf"
+    fi
+
+    # 10. Cursor theme (use Adwaita for consistency — available everywhere)
+    local cursor_size=24
+    [ "$theme" = "paper" ] && cursor_size=24
+    mkdir -p "$CONFIG_DIR/gtk-3.0"
+    if [ -f "$gtk_settings" ]; then
+        if ! grep -q '^gtk-cursor-theme-name=' "$gtk_settings"; then
+            echo "gtk-cursor-theme-name=Adwaita" >> "$gtk_settings"
+        fi
+        sed -i 's/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=Adwaita/' "$gtk_settings"
+    fi
+    # Set cursor for Sway/Wayland
+    mkdir -p "$CONFIG_DIR/environment.d"
+    local cursor_conf="$CONFIG_DIR/environment.d/tebian-cursor.conf"
+    echo "XCURSOR_THEME=Adwaita" > "$cursor_conf"
+    echo "XCURSOR_SIZE=$cursor_size" >> "$cursor_conf"
+
+    # 11. Login screen (gtkgreet) theme — requires sudo
+    local greetd_css="/etc/greetd/style.css"
+    if [ -f "$greetd_css" ] && [ -f "$theme_conf" ]; then
+        local t_bg t_fg
+        t_bg=$(grep '^BASE=' "$theme_conf" | cut -d= -f2)
+        t_fg=$(grep '^TEXT=' "$theme_conf" | cut -d= -f2)
+        if [ -n "$t_bg" ] && [ -n "$t_fg" ]; then
+            sudo -n sed -i "s/background-color: #[0-9a-fA-F]\{6\}/background-color: $t_bg/" "$greetd_css" 2>/dev/null
+            sudo -n sed -i "s/color: #[0-9a-fA-F]\{6\}/color: $t_fg/" "$greetd_css" 2>/dev/null
+        fi
+    fi
+
+    # 12. Reload running services
+    if [ -n "$WAYLAND_DISPLAY" ]; then
+        swaymsg reload 2>/dev/null
+        pkill mako 2>/dev/null; mako &
+        notify-send "Tebian Theme" "$theme theme applied"
+    fi
+
+    echo "Done!"
+}
+
+# Main
+if [ -z "$1" ]; then
+    echo "Usage: tebian-theme <glass|solid|cyber|paper>"
+    echo ""
+    echo "Available themes:"
+    ls -1 "$THEME_DIR"
+    exit 1
+fi
+
+apply_theme "$1"

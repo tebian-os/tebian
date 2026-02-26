@@ -1,0 +1,76 @@
+#!/bin/bash
+sleep 0.5
+
+# Tebian "Smart Start" - Terminal Workspace Selector
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+get_term() {
+    if command -v kitty &>/dev/null; then echo "kitty"
+    elif command -v foot &>/dev/null; then echo "foot"
+    elif command -v alacritty &>/dev/null; then echo "alacritty"
+    elif command -v xterm &>/dev/null; then echo "xterm"
+    else echo "kitty"
+    fi
+}
+TERM_APP=$(get_term)
+
+# Root directory for our work
+SESSIONS_DIR="$HOME/Sessions"
+DATE=$(date +%Y-%m-%d)
+
+# 1. Generate the list of options
+OPTIONS="🏠 Home
+🆕 New Daily Session
+📂 Scratchpad
+----------------"
+RECENT_SESSIONS=$(find "$SESSIONS_DIR/Daily" -maxdepth 1 -type d -not -path "$SESSIONS_DIR/Daily" | sort -r | head -n 5 | xargs -n 1 basename)
+PROJECTS=$(find "$SESSIONS_DIR/Projects" -maxdepth 1 -type d -not -path "$SESSIONS_DIR/Projects" | xargs -n 1 basename)
+
+FULL_LIST=$(echo -e "$OPTIONS
+$RECENT_SESSIONS
+$PROJECTS")
+
+# 2. Show the popup and get the choice
+CHOICE=$(echo -e "$FULL_LIST" | tfuzzel -d)
+
+# 3. Logic for the choice
+case "$CHOICE" in
+    "🏠 Home")
+        TARGET="$HOME"
+        ;;
+    "🆕 New Daily Session")
+        NAME=$(echo "" | tfuzzel -d)
+        if [ -z "$NAME" ]; then exit 1; fi
+        TARGET="$SESSIONS_DIR/Daily/$DATE-$NAME"
+        mkdir -p "$TARGET"
+        echo "# Session: $NAME ($DATE)" > "$TARGET/README.md"
+        ;;
+    "📂 Scratchpad")
+        TARGET="$SESSIONS_DIR/Scratchpad"
+        ;;
+    "----------------")
+        exit 0
+        ;;
+    *)
+        # Search if it's a Project or a Daily session
+        if [ -d "$SESSIONS_DIR/Daily/$CHOICE" ]; then
+            TARGET="$SESSIONS_DIR/Daily/$CHOICE"
+        elif [ -d "$SESSIONS_DIR/Projects/$CHOICE" ]; then
+            TARGET="$SESSIONS_DIR/Projects/$CHOICE"
+        else
+            TARGET="$HOME"
+        fi
+        ;;
+esac
+
+# 4. Launch terminal in that directory
+case "$TERM_APP" in
+    kitty) kitty --directory "$TARGET" ;;
+    *) $TERM_APP -e bash -c "cd '$TARGET' && exec bash" ;;
+esac

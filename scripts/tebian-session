@@ -1,0 +1,22 @@
+#!/bin/bash
+# Tebian session wrapper for greetd
+# Sets up proper environment before launching sway
+
+# Source profile for PATH (~/.local/bin) and other env
+[ -f "$HOME/.profile" ] && . "$HOME/.profile"
+
+# Wayland session environment
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=sway
+export XDG_CURRENT_DESKTOP=sway
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=wayland
+export SDL_VIDEODRIVER=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# Ensure D-Bus session bus
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null; then
+    exec dbus-run-session sway "$@"
+else
+    exec sway "$@"
+fi

@@ -1,0 +1,21 @@
+# Material Theme - Sway Colors (Google Material Palenight)
+# Included by main config
+
+set $base      #292D3E
+set $text      #A6ACCD
+set $surface0  #32374D
+set $surface1  #3A3F5C
+set $overlay0  #464B5F
+set $accent    #82AAFF
+set $blue      #82AAFF
+set $purple    #C792EA
+set $green     #C3E88D
+set $red       #F07178
+set $yellow    #FFCB6B
+set $cyan      #89DDFF
+set $orange    #F78C6C
+
+# Gaps & Visuals
+gaps inner 10
+gaps outer 3
+default_border pixel 2

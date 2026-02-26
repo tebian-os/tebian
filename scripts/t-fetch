@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Tebian High-Performance Fetch (t-fetch)
+# Zero-Fork / Zero-Bloat System Reporter
+
+# Colors (Catppuccin Mocha)
+C='\033[0;35m'  # Mauve
+L='\033[0;34m'  # Lavender
+B='\033[0;30m'  # Base
+G='\033[0;32m'  # Green
+W='\033[0;37m'  # White
+R='\033[0m'     # Reset
+
+# Logic: Get RAM (Built-in)
+while read -r name value _; do
+    case "$name" in
+        MemTotal:) total=$value ;;
+        MemAvailable:) avail=$value ;;
+    esac
+    [[ -n "$total" && -n "$avail" ]] && break
+done < /proc/meminfo
+mem_used=$(( (total - avail) / 1024 ))
+mem_total=$(( total / 1024 ))
+
+# Logic: Get Tebian Status
+ZRAM_STAT=$(lsmod | grep -q zram && echo -e "${G}Active${R}" || echo -e "${R}Inactive${R}")
+if [ -f /etc/ufw/ufw.conf ] && grep -q "ENABLED=yes" /etc/ufw/ufw.conf 2>/dev/null; then
+    UFW_STAT="${G}Hardened${R}"
+else
+    UFW_STAT="Standard"
+fi
+
+# Logic: Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_NAME="${PRETTY_NAME:-Linux}"
+else
+    OS_NAME="Linux"
+fi
+
+# Logic: Detect Host
+HOST_MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || echo "Unknown")
+CPU_CORES=$(nproc 2>/dev/null || echo "?")
+HOST_INFO="${HOST_MODEL} (${CPU_CORES}-Core)"
+
+# Logic: Detect Terminal
+TERM_NAME="${TERM_PROGRAM:-${TERM:-unknown}}"
+case "$TERM_NAME" in
+    *kitty*) TERM_NAME="Kitty" ;;
+    *foot*) TERM_NAME="Foot" ;;
+    *alacritty*) TERM_NAME="Alacritty" ;;
+    xterm-256color) TERM_NAME="${TERM_PROGRAM:-xterm}" ;;
+esac
+
+# Logic: Detect Theme (parses "# Name Theme - Sway Colors" header)
+THEME_NAME="Default"
+if [ -f "$HOME/.config/sway/theme" ]; then
+    THEME_LINE=$(head -1 "$HOME/.config/sway/theme" 2>/dev/null)
+    if [[ "$THEME_LINE" == "# "* && "$THEME_LINE" == *" Theme -"* ]]; then
+        THEME_NAME="${THEME_LINE#\# }"
+        THEME_NAME="${THEME_NAME%% Theme -*}"
+    fi
+fi
+
+# Logic: Dev Pulse (Project Detection)
+PROJECT="None"
+if [ -d .git ]; then
+    PROJECT=$(basename "$(pwd)")
+    LOC=$(git ls-files | xargs wc -l 2>/dev/null | tail -n 1 | awk '{print $1}')
+    PROJECT="$PROJECT ($LOC lines)"
+fi
+
+# The ASCII Logo & Info
+echo -e "
+  ${C}████████╗${R}  ${L}OS:   ${W}${OS_NAME}${R}
+  ${C}╚══██╔══╝${R}  ${L}Host: ${W}${HOST_INFO}${R}
+  ${C}   ██║   ${R}  ${L}UI:   ${W}Sway (${THEME_NAME})${R}
+  ${C}   ██║   ${R}  ${L}Term: ${W}${TERM_NAME}${R}
+  ${C}   ██║   ${R}  ${L}RAM:  ${W}${mem_used}MB / ${mem_total}MB${R}
+  ${C}   ╚═╝   ${R}
+  ${L}TEBIAN OS${R}  ${L}ZRAM: ${ZRAM_STAT}
+  ${L}v$(cat "$HOME/Tebian/VERSION" 2>/dev/null || echo "?")${R}  ${L}SEC:  ${UFW_STAT}
+  ${R}           ${L}DEV:  ${W}${PROJECT}${R}
+
+  ${B}██${C}██${L}██${G}██${W}██${R}
+"

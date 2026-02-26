@@ -1,0 +1,36 @@
+font=JetBrainsMono Nerd Font 11
+
+# Catppuccin Mocha (Solid)
+background-color=#1e1e2e
+text-color=#cdd6f4
+border-color=#89b4fa
+
+# Layout
+border-radius=10
+border-size=2
+default-timeout=5000
+max-visible=4
+anchor=top-right
+margin=10
+padding=10
+width=400
+
+# Icons
+icons=1
+max-icon-size=48
+
+# Show over fullscreen windows
+layer=overlay
+
+# Group duplicate notifications
+group-by=summary
+format=<b>%s</b>\n%b
+
+# Urgent notifications
+[urgency=critical]
+border-color=#f38ba8
+default-timeout=0
+
+[urgency=low]
+border-color=#45475a
+default-timeout=3000

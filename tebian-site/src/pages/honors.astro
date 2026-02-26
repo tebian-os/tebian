@@ -1,0 +1,447 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Honors — Tebian">
+	<main>
+		<section class="debian-shrine">
+			<h2>Debian</h2>
+			<p>30+ years. Universal. Stable. Free.</p>
+			<p class="quote">"We stand on the shoulders of giants."</p>
+			<a href="https://debian.org" target="_blank" class="debian-btn">debian.org</a>
+		</section>
+
+		<section class="survivors">
+			<h2>Honorary Survivors</h2>
+			<p>We don't kill these. They earned their place.</p>
+
+			<div class="survivor-grid">
+				<a href="https://tails.net" target="_blank" class="survivor-card">
+					<span class="survivor-name">Tails</span>
+					<span class="survivor-desc">Amnesic. RAM-only. Zero trace.</span>
+				</a>
+				<a href="https://alpinelinux.org" target="_blank" class="survivor-card survivor-special">
+					<span class="survivor-name">Alpine</span>
+					<span class="survivor-desc">musl. 5MB. Container standard.</span>
+					<span class="survivor-via">Also via: Tebian Menu → Containers</span>
+				</a>
+				<a href="https://www.proxmox.com" target="_blank" class="survivor-card">
+					<span class="survivor-name">Proxmox</span>
+					<span class="survivor-desc">Datacenter hypervisor. VMs, clustering, HA.</span>
+				</a>
+			</div>
+
+			<p class="footnote">Everything else is just noise.</p>
+		</section>
+
+		<section class="kills">
+			<h2>Not So Honorable</h2>
+			<p>Tebian kills these too. On purpose.</p>
+
+			<div class="kill-grid">
+				<div class="kill-card">
+					<span class="kill-name">macOS</span>
+					<span class="kill-desc">Need Xcode? Run it in a VM. No second machine required.</span>
+					<span class="kill-action">→ Tebian Menu → Virtualization → Setup macOS</span>
+				</div>
+				<div class="kill-card">
+					<span class="kill-name">Windows</span>
+					<span class="kill-desc">Anti-cheat games. Proprietary software. Dual-boot when you must.</span>
+					<span class="kill-action">→ Tebian Menu → Virtualization → Setup Windows</span>
+				</div>
+			</div>
+
+			<p class="kill-footnote">Don't switch OS. Make them come to you.</p>
+		</section>
+
+		<section class="killed">
+			<h2>The Killed</h2>
+			<p>Distros we replaced. And why they died.</p>
+
+			<div class="killed-grid">
+				<div class="killed-card">
+					<span class="killed-name">Ubuntu</span>
+					<span class="killed-reason">Debian + Snap + Canonical. We skip the middleman.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Arch</span>
+					<span class="killed-reason">Rolling = breaking. Stability wins. AUR via Distrobox.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Fedora</span>
+					<span class="killed-reason">6-month forced upgrades. Corporate backing. No thanks.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Enterprise Linux</span>
+					<span class="killed-reason">RHEL, Rocky, Alma — sell liability, not technology.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Mint</span>
+					<span class="killed-reason">Ubuntu + theme. We go straight to Debian.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Pop!_OS</span>
+					<span class="killed-reason">Gaming stack + GNOME. Install via Tebian Menu instead.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Manjaro</span>
+					<span class="killed-reason">Arch with training wheels. Still breaks.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">EndeavourOS</span>
+					<span class="killed-reason">Arch installer with a GUI. Still Arch underneath.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Kali</span>
+					<span class="killed-reason">Just tools. apt install nmap metasploit. Done.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Parrot</span>
+					<span class="killed-reason">Kali with a theme. Same tools, more bloat.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">NixOS</span>
+					<span class="killed-reason">Declarative hell. Not FHS compliant.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Guix</span>
+					<span class="killed-reason">Lisp everywhere. Too academic.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Gentoo</span>
+					<span class="killed-reason">Source-based. USE flags. Life's too short to compile.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">openSUSE</span>
+					<span class="killed-reason">YaST, Zypper, BTRFS by default. Different for different's sake.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Void</span>
+					<span class="killed-reason">runit + xbps. Cool, but niche. No ecosystem.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Solus</span>
+					<span class="killed-reason">Independent distro. Tiny team. Uncertain future.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Zorin</span>
+					<span class="killed-reason">Ubuntu + Windows theme. We don't pretend.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">elementary</span>
+					<span class="killed-reason">Ubuntu + macOS theme. Same trick, different skin.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">MX Linux</span>
+					<span class="killed-reason">Debian + XFCE + tools. Just use Debian.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">antiX</span>
+					<span class="killed-reason">MX without systemd. We respect the cause, not the result.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Deepin</span>
+					<span class="killed-reason">Pretty DE. Chinese telemetry concerns. Pass.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Qubes</span>
+					<span class="killed-reason">Security by VM isolation. Overkill for most.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Whonix</span>
+					<span class="killed-reason">Two-VM Tor architecture. Use Tails instead.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Tiny Core</span>
+					<span class="killed-reason">16MB. Extreme minimal. Too minimal.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">Puppy</span>
+					<span class="killed-reason">RAM-based. Old hardware. Old everything.</span>
+				</div>
+				<div class="killed-card">
+					<span class="killed-name">TempleOS</span>
+					<span class="killed-reason">Not Linux. God's temple. Rest in peace, Terry.</span>
+				</div>
+			</div>
+		</section>
+
+		<div class="nav">
+			<a href="/">← Home</a>
+			<span class="nav-divider">|</span>
+			<a href="/source">Source</a>
+			<a href="/manifesto">Manifesto</a>
+			<a href="/reasoning">Reasoning</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	main {
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		padding: 4rem 2rem;
+	}
+
+	.debian-shrine {
+		text-align: center;
+		margin-bottom: 4rem;
+		max-width: 500px;
+	}
+
+	.debian-shrine h2 {
+		font-size: 3rem;
+		color: #d70a53;
+		margin: 0 0 1rem 0;
+	}
+
+	.debian-shrine p {
+		color: #9399b2;
+		font-size: 1.1rem;
+		margin: 0 0 0.5rem 0;
+	}
+
+	.debian-shrine .quote {
+		font-style: italic;
+		color: #bac2de;
+		font-size: 1.25rem;
+		margin: 1.5rem 0;
+	}
+
+	.debian-btn {
+		display: inline-block;
+		padding: 0.75rem 2rem;
+		background: #d70a53;
+		color: #fff;
+		border-radius: 8px;
+		text-decoration: none;
+		font-weight: 700;
+		transition: all 0.2s;
+	}
+
+	.debian-btn:hover {
+		transform: translateY(-2px);
+		box-shadow: 0 6px 20px rgba(215, 10, 83, 0.3);
+	}
+
+	.killed {
+		border-top: 1px solid rgba(255, 255, 255, 0.1);
+		padding-top: 3rem;
+		margin-bottom: 3rem;
+		max-width: 800px;
+		width: 100%;
+		text-align: center;
+	}
+
+	.killed h2 {
+		font-size: 1.5rem;
+		color: #6c7086;
+		margin: 0 0 0.5rem 0;
+	}
+
+	.killed > p {
+		color: #585b70;
+		font-size: 1rem;
+		margin: 0 0 2rem 0;
+	}
+
+	.killed-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 0.75rem;
+	}
+
+	.killed-card {
+		display: flex;
+		flex-direction: column;
+		padding: 1rem;
+		background: rgba(255, 255, 255, 0.02);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+		border-radius: 8px;
+		text-align: left;
+		opacity: 1;
+	}
+
+	.killed-name {
+		font-size: 1rem;
+		font-weight: 600;
+		color: #9399b2;
+		margin-bottom: 0.35rem;
+		text-decoration: line-through;
+	}
+
+	.killed-reason {
+		font-size: 0.8rem;
+		color: #6c7086;
+		line-height: 1.4;
+	}
+
+	.survivors {
+		max-width: 800px;
+		width: 100%;
+		text-align: center;
+	}
+
+	.survivors h2 {
+		font-size: 1.5rem;
+		color: var(--text-color);
+		margin: 0 0 0.5rem 0;
+	}
+
+	.survivors > p {
+		color: #9399b2;
+		font-size: 1.1rem;
+		margin: 0 0 0.5rem 0;
+	}
+
+	.via-menu {
+		color: #6c7086;
+		font-size: 0.95rem;
+		font-style: italic;
+		margin: 0 0 2rem 0;
+	}
+
+	.survivor-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+		gap: 1rem;
+		margin-bottom: 2rem;
+	}
+
+	.survivor-card {
+		display: flex;
+		flex-direction: column;
+		padding: 1.25rem;
+		background: rgba(255, 255, 255, 0.02);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+		border-radius: 10px;
+		text-decoration: none;
+		transition: all 0.2s;
+		text-align: left;
+	}
+
+	.survivor-card:hover {
+		background: rgba(255, 255, 255, 0.05);
+		border-color: var(--accent-color);
+		transform: translateY(-2px);
+	}
+
+	.survivor-name {
+		font-size: 1.1rem;
+		font-weight: 700;
+		color: var(--text-color);
+		margin-bottom: 0.5rem;
+	}
+
+	.survivor-desc {
+		font-size: 0.9rem;
+		color: #6c7086;
+	}
+
+	.survivor-special {
+		border-color: rgba(137, 180, 250, 0.2);
+		background: rgba(137, 180, 250, 0.03);
+	}
+
+	.survivor-via {
+		font-size: 0.8rem;
+		color: #89b4fa;
+		margin-top: 0.5rem;
+		font-family: monospace;
+	}
+
+	.footnote {
+		font-size: 1.2rem;
+		color: #6c7086;
+		font-style: italic;
+		margin: 0;
+	}
+
+	.kills {
+		border-top: 1px solid rgba(255, 255, 255, 0.1);
+		padding-top: 3rem;
+		max-width: 800px;
+		width: 100%;
+		text-align: center;
+	}
+
+	.kills h2 {
+		font-size: 1.5rem;
+		color: #f38ba8;
+		margin: 0 0 0.5rem 0;
+	}
+
+	.kills > p {
+		color: #9399b2;
+		font-size: 1.1rem;
+		margin: 0 0 2rem 0;
+	}
+
+	.kill-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+		gap: 1rem;
+		margin-bottom: 2rem;
+	}
+
+	.kill-card {
+		display: flex;
+		flex-direction: column;
+		padding: 1.5rem;
+		background: rgba(243, 139, 168, 0.05);
+		border: 1px solid rgba(243, 139, 168, 0.15);
+		border-radius: 10px;
+		text-align: left;
+	}
+
+	.kill-name {
+		font-size: 1.25rem;
+		font-weight: 700;
+		color: #f38ba8;
+		margin-bottom: 0.5rem;
+	}
+
+	.kill-desc {
+		font-size: 0.95rem;
+		color: #9399b2;
+		margin-bottom: 0.75rem;
+		line-height: 1.5;
+	}
+
+	.kill-action {
+		font-size: 0.85rem;
+		color: #89b4fa;
+		font-family: monospace;
+	}
+
+	.kill-footnote {
+		font-size: 1.1rem;
+		color: #6c7086;
+		font-style: italic;
+		margin: 0;
+	}
+
+	.nav {
+		margin-top: 3rem;
+		display: flex;
+		gap: 1.5rem;
+		align-items: center;
+	}
+
+	.nav a {
+		color: #6c7086;
+		text-decoration: none;
+		font-size: 1rem;
+		transition: color 0.2s;
+	}
+
+	.nav a:hover {
+		color: var(--accent-color);
+	}
+
+	.nav-divider {
+		color: #313244;
+	}
+</style>

@@ -1,0 +1,145 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Philosophy — Tebian">
+	<main>
+		<h1 class="page-title">Philosophy</h1>
+		<p class="subtitle">Essays on digital ethics, technical debt, and the C-level soul of the OS.</p>
+
+		<div class="journal-hub">
+			<section class="hub-section">
+				<h2>The Foundation</h2>
+				<div class="journal-grid pillar-grid">
+					<a href="/manifesto" class="journal-card pillar-card">
+						<span class="category">Core</span>
+						<h2>The Manifesto</h2>
+						<p>Sovereignty through minimalism. Power through the Fleet. The Law of Zero.</p>
+					</a>
+					<a href="/reasoning" class="journal-card pillar-card">
+						<span class="category">Core</span>
+						<h2>Technical Reasoning</h2>
+						<p>The technical "Why" behind our 3-package C-based foundation.</p>
+					</a>
+					<a href="/honors" class="journal-card pillar-card">
+						<span class="category">Core</span>
+						<h2>The Honors</h2>
+						<p>Respecting the survivors. Why we stand on the shoulders of giants.</p>
+					</a>
+				</div>
+			</section>
+
+			<section class="hub-section">
+				<h2>System & Interface</h2>
+				<div class="journal-grid">
+					<a href="/blog/animation-fallacy" class="journal-card">
+						<span class="category">Interface</span>
+						<h2>Animation Fallacy</h2>
+						<p>Why "Smoothness" is a lie used to hide system latency. Choosing response over aesthetics.</p>
+					</a>
+					<a href="/blog/art-of-the-shell" class="journal-card">
+						<span class="category">Mastery</span>
+						<h2>Art of the Shell</h2>
+						<p>The philosophical defense of the Command Line Interface as the ultimate UI.</p>
+					</a>
+					<a href="/blog/ghost-ui" class="journal-card">
+						<span class="category">Focus</span>
+						<h2>The Ghost UI</h2>
+						<p>Invisible until needed. Reclaiming the pixels for your work.</p>
+					</a>
+					<a href="/blog/shell-vs-ide" class="journal-card">
+						<span class="category">Workflow</span>
+						<h2>The Shell vs. The IDE</h2>
+						<p>Why the terminal is an engine and the IDE is a restrictive framework.</p>
+					</a>
+				</div>
+			</section>
+
+			<section class="hub-section">
+				<h2>Migration & Economics</h2>
+				<div class="journal-grid">
+					<a href="/blog/windows-exodus" class="journal-card">
+						<span class="category">Migration</span>
+						<h2>The Windows Exodus</h2>
+						<p>Why 2026 is the year to leave Redmond. Data-harvesting and legacy debt.</p>
+					</a>
+					<a href="/blog/myth-of-native-speed" class="journal-card">
+						<span class="category">Hardware</span>
+						<h2>Myth of Native Speed</h2>
+						<p>Technical proof: Why Linux is the faster OS for your Mac hardware.</p>
+					</a>
+					<a href="/blog/chromeos-prison" class="journal-card">
+						<span class="category">System</span>
+						<h2>The ChromeOS Prison</h2>
+						<p>Reclaiming the lobotomized machine from Google's verified boot cage.</p>
+					</a>
+					<a href="/blog/snap-trap" class="journal-card">
+						<span class="category">Distribution</span>
+						<h2>The Snap Trap</h2>
+						<p>Why Ubuntu lost its way. The danger of centralized package control.</p>
+					</a>
+				</div>
+			</section>
+
+			<section class="hub-section">
+				<h2>Privacy & Psychology</h2>
+				<div class="journal-grid">
+					<a href="/blog/privacy-performance" class="journal-card">
+						<span class="category">Efficiency</span>
+						<h2>Privacy as Performance</h2>
+						<p>How removing telemetry daemons reclaim CPU cycles and battery life.</p>
+					</a>
+					<a href="/blog/death-of-distro-hop" class="journal-card">
+						<span class="category">Psychology</span>
+						<h2>End of the Distro Hop</h2>
+						<p>How unopinionated infrastructure ends the search for the "perfect" Linux.</p>
+					</a>
+					<a href="/blog/lazarus-engine" class="journal-card">
+						<span class="category">Survival</span>
+						<h2>The Lazarus Engine</h2>
+						<p>The math of 16MB RAM and the battle against planned obsolescence.</p>
+					</a>
+					<a href="/blog/myth-of-security" class="journal-card">
+						<span class="category">Security</span>
+						<h2>The Myth of Security</h2>
+						<p>Why adding security software often makes your computer less safe.</p>
+					</a>
+				</div>
+			</section>
+		</div>
+
+		<div class="nav">
+			<a href="/">← Home</a>
+			<span class="nav-divider">|</span>
+			<a href="/docs">Guides</a>
+			<span class="nav-divider">|</span>
+			<a href="/manifesto">Manifesto</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	main { max-width: 1200px; width: 100%; display: flex; flex-direction: column; align-items: center; padding: 4rem 1.5rem; }
+	.page-title { font-size: clamp(2.5rem, 8vw, 4rem); color: #fff; margin-bottom: 0.5rem; text-align: center; letter-spacing: -0.02em; }
+	.subtitle { font-size: 1.25rem; color: #9399b2; margin-bottom: 4rem; text-align: center; font-style: italic; }
+	
+	.journal-hub { width: 100%; display: flex; flex-direction: column; gap: 5rem; margin-bottom: 6rem; }
+	.hub-section h2 { font-size: 1.5rem; color: #fff; margin-bottom: 2rem; padding-left: 1.25rem; border-left: 3px solid var(--accent); text-transform: uppercase; letter-spacing: 0.1em; }
+
+	.journal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem; }
+	.journal-card { display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 2.5rem; border-radius: 20px; text-decoration: none; transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1); }
+	.journal-card:hover { background: rgba(137, 180, 250, 0.05); border-color: var(--accent); transform: translateY(-8px); box-shadow: 0 20px 40px -20px rgba(137, 180, 250, 0.2); }
+	
+	.pillar-card { border-color: rgba(137, 180, 250, 0.2); background: rgba(137, 180, 250, 0.02); }
+	.pillar-card .category { color: #fff; }
+
+	.category { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); font-weight: 700; margin-bottom: 1.25rem; display: block; }
+	.journal-card h2 { font-size: 1.5rem; color: #fff; margin: 0 0 1rem 0; line-height: 1.2; }
+	.journal-card p { color: #9399b2; font-size: 0.95rem; line-height: 1.6; margin: 0; }
+	
+	.nav { display: flex; gap: 1.5rem; align-items: center; margin-top: 2rem; }
+	.nav a { color: #6c7086; text-decoration: none; font-weight: 500; transition: color 0.2s; }
+	.nav a:hover { color: var(--accent); }
+	.nav-divider { color: #313244; }
+	@media (max-width: 640px) { .journal-grid { grid-template-columns: 1fr; } }
+</style>

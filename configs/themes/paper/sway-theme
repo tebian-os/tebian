@@ -1,0 +1,19 @@
+# Paper Theme - Sway Colors (Light/Clean)
+# Included by main config
+
+# Colors
+set $base      #f5f5f0
+set $text      #2d2d2d
+set $surface0  #e8e8e0
+set $surface1  #d4d4c8
+set $overlay0  #9e9e90
+set $accent    #6366f1
+set $indigo    #6366f1
+set $blue      #2563eb
+set $red       #dc2626
+set $green     #16a34a
+
+# Gaps & Visuals
+gaps inner 8
+gaps outer 4
+default_border pixel 1

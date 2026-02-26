@@ -1,0 +1,10 @@
+{
+  "name": "MySQL",
+  "description": "MySQL database",
+  "image": "mysql:8",
+  "ports": ["3306:3306"],
+  "volumes": ["/opt/data/mysql:/var/lib/mysql"],
+  "env": {
+    "MYSQL_ROOT_PASSWORD": "tebian123"
+  }
+}

@@ -1,0 +1,19 @@
+# Nord Theme - Sway Colors (Arctic, Professional)
+# Included by main config
+
+set $base      #2E3440
+set $text      #ECEFF4
+set $surface0  #3B4252
+set $surface1  #434C5E
+set $overlay0  #4C566A
+set $accent    #88C0D0
+set $frost     #88C0D0
+set $blue      #5E81AC
+set $aurora    #A3BE8C
+set $red       #BF616A
+set $green     #A3BE8C
+
+# Gaps & Visuals
+gaps inner 12
+gaps outer 4
+default_border pixel 2

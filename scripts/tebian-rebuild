@@ -1,0 +1,151 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN REBUILD
+# Reads tebian.conf and applies declared state. Idempotent.
+# Usage: tebian-rebuild
+# ==============================================================================
+
+set -euo pipefail
+
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+CONF="$TEBIAN_DIR/tebian.conf"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[rebuild]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[rebuild]${NC} $1"; }
+log_error() { echo -e "${RED}[rebuild]${NC} $1" >&2; }
+
+if [ ! -f "$CONF" ]; then
+    log_error "Manifest not found: $CONF"
+    echo "Create one with: cp $TEBIAN_DIR/tebian.conf.example $CONF"
+    exit 1
+fi
+
+# Source manifest
+source "$CONF"
+
+echo ""
+echo "  ┌─────────────────────┐"
+echo "  │  TEBIAN  REBUILD    │"
+echo "  └─────────────────────┘"
+echo ""
+
+# --- 1. Extra packages ---
+if [ ${#EXTRA_PACKAGES[@]} -gt 0 ]; then
+    log_info "Installing extra packages: ${EXTRA_PACKAGES[*]}"
+    sudo apt update -qq
+    sudo apt install -y "${EXTRA_PACKAGES[@]}"
+fi
+
+# --- 2. Sync configs from ~/Tebian/configs/ ---
+CONFIG_DIR="$HOME/.config"
+LOCAL_BIN="$HOME/.local/bin"
+
+if [ -d "$TEBIAN_DIR/configs/sway" ]; then
+    mkdir -p "$CONFIG_DIR/sway"
+    cp "$TEBIAN_DIR/configs/sway/config" "$CONFIG_DIR/sway/config"
+    # Preserve config.user (never overwrite user customizations)
+    if [ ! -f "$CONFIG_DIR/sway/config.user" ]; then
+        if [ -f "$TEBIAN_DIR/configs/sway/config.user" ]; then
+            cp "$TEBIAN_DIR/configs/sway/config.user" "$CONFIG_DIR/sway/config.user"
+        else
+            touch "$CONFIG_DIR/sway/config.user"
+        fi
+    fi
+    log_info "Sway config synced"
+fi
+
+# --- 3. Apply theme ---
+THEME="${TEBIAN_THEME:-glass}"
+THEME_DIR="$TEBIAN_DIR/configs/themes/$THEME"
+if [ -d "$THEME_DIR" ]; then
+    if [ -f "$THEME_DIR/sway-theme" ]; then
+        cp "$THEME_DIR/sway-theme" "$CONFIG_DIR/sway/theme"
+    fi
+    if [ -f "$THEME_DIR/kitty.conf" ]; then
+        mkdir -p "$CONFIG_DIR/kitty"
+        cp "$THEME_DIR/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
+    fi
+    if [ -f "$THEME_DIR/fuzzel.ini" ]; then
+        mkdir -p "$CONFIG_DIR/fuzzel"
+        cp "$THEME_DIR/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+    fi
+    if [ -f "$THEME_DIR/mako" ]; then
+        mkdir -p "$CONFIG_DIR/mako"
+        cp "$THEME_DIR/mako" "$CONFIG_DIR/mako/config"
+    fi
+    log_info "Theme applied: $THEME"
+else
+    log_warn "Theme directory not found: $THEME_DIR"
+fi
+
+# --- 4. Sync scripts ---
+if [ -d "$TEBIAN_DIR/scripts" ]; then
+    mkdir -p "$LOCAL_BIN"
+    for script in "$TEBIAN_DIR/scripts/"*; do
+        name=$(basename "$script")
+        case "$name" in
+            desktop.sh|build-iso.sh|uninstall.sh) continue ;;
+            *) cp "$script" "$LOCAL_BIN/" ;;
+        esac
+    done
+    chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
+    log_info "Scripts synced to $LOCAL_BIN"
+fi
+
+# --- 5. Security profile ---
+SECURITY="${SECURITY_PROFILE:-standard}"
+SECURITY_SCRIPT="$TEBIAN_DIR/modules/core/security.sh"
+if [ -f "$SECURITY_SCRIPT" ]; then
+    log_info "Applying security profile: $SECURITY"
+    bash "$SECURITY_SCRIPT" "$SECURITY"
+else
+    log_warn "Security module not found: $SECURITY_SCRIPT"
+fi
+
+# --- 6. Tor toggle ---
+if [ -f "$SECURITY_SCRIPT" ]; then
+    if [[ "${ENABLE_TOR:-no}" == "yes" ]]; then
+        bash "$SECURITY_SCRIPT" tor-on
+    else
+        # Only disable if tor is currently active
+        if systemctl is-active --quiet tor 2>/dev/null; then
+            bash "$SECURITY_SCRIPT" tor-off
+        fi
+    fi
+fi
+
+# --- 7. DNS Privacy toggle ---
+if [ -f "$SECURITY_SCRIPT" ]; then
+    if [[ "${ENABLE_DNS_PRIVACY:-no}" == "yes" ]]; then
+        bash "$SECURITY_SCRIPT" dns-on "${DNS_PROVIDER:-quad9}"
+    else
+        # Only disable if config exists
+        if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
+            bash "$SECURITY_SCRIPT" dns-off
+        fi
+    fi
+fi
+
+# --- 8. Manage services ---
+for svc in "${ENABLE_SERVICES[@]:-}"; do
+    [ -z "$svc" ] && continue
+    sudo systemctl enable --now "$svc" 2>/dev/null && log_info "Enabled service: $svc" || log_warn "Could not enable: $svc"
+done
+
+for svc in "${DISABLE_SERVICES[@]:-}"; do
+    [ -z "$svc" ] && continue
+    sudo systemctl disable --now "$svc" 2>/dev/null && log_info "Disabled service: $svc" || log_warn "Could not disable: $svc"
+done
+
+# --- 9. Reload sway if running ---
+if pgrep -x sway &>/dev/null; then
+    swaymsg reload 2>/dev/null && log_info "Sway reloaded" || true
+fi
+
+echo ""
+log_info "Rebuild complete!"

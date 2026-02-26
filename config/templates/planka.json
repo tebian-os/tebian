@@ -1,0 +1,11 @@
+{
+  "name": "Planka",
+  "description": "Kanban board (Trello alt)",
+  "image": "ghcr.io/plankanban/planka:latest",
+  "ports": ["3000:1337"],
+  "volumes": ["/opt/data/planka:/app/public/user-avatars"],
+  "env": {
+    "BASE_URL": "http://localhost:3000",
+    "SECRET_KEY": "changeme123"
+  }
+}

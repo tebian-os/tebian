@@ -1,0 +1,10 @@
+{
+  "name": "Grafana",
+  "description": "Monitoring dashboards",
+  "image": "grafana/grafana:latest",
+  "ports": ["3000:3000"],
+  "volumes": ["/opt/data/grafana:/var/lib/grafana"],
+  "env": {
+    "GF_SECURITY_ADMIN_PASSWORD": "admin"
+  }
+}

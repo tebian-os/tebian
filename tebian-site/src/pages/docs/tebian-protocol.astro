@@ -1,0 +1,69 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="The Tebian Protocol — Tebian">
+	<main class="resource">
+		<header>
+			<span class="category">Definitive Manual</span>
+			<h1>The Tebian Protocol</h1>
+			<p class="subtitle">A complete technical reference for the World's Greatest OS.</p>
+		</header>
+
+		<article class="content">
+			<section class="overview">
+				<h2>One Manual to Rule the Machine</h2>
+				<p>Tebian is designed to be self-documenting. However, for the professional user who needs a quick reference for our C-level optimizations and custom scripts, we provide the <strong>Tebian Protocol.</strong> This is the definitive cheat sheet for managing your sovereign workstation.</p>
+			</section>
+
+			<section class="keybindings">
+				<h2>1. Keybindings: The Sway Control</h2>
+				<p>Tebian standardizes on the <code>Super</code> (Mod4) key. Here are the essential shortcuts:</p>
+				<ul>
+					<li><strong>[ Super + Enter ]</strong> - Launch Kitty (GPU-accelerated terminal).</li>
+					<li><strong>[ Super + D ]</strong> - Launch Fuzzel (The universal app/settings menu).</li>
+					<li><strong>[ Super + Shift + Q ]</strong> - Kill the focused window.</li>
+					<li><strong>[ Super + Space ]</strong> - Toggle Floating/Tiling mode.</li>
+					<li><strong>[ Super + R ]</strong> - Enter Resize mode (use arrow keys).</li>
+					<li><strong>[ Super + V ]</strong> - Open Clipboard History (Cliphist).</li>
+					<li><strong>[ Print ]</strong> - Snapshot (Regional to clipboard).</li>
+				</ul>
+			</section>
+
+			<section class="scripts">
+				<h2>2. The Tebian Scripts: ~/Tebian/scripts</h2>
+				<p>Our custom logic lives in <code>~/Tebian/scripts/</code>. You can call these from anywhere.</p>
+				<ul>
+					<li><code>update-all</code> - Unifies apt and flatpak updates.</li>
+					<li><code>tebian-settings</code> - Opens the Fuzzel-based Control Center.</li>
+					<li><code>status.sh</code> - The zero-dependency bar script.</li>
+					<li><code>tebian-theme [name]</code> - Hot-swaps the system aesthetics.</li>
+				</ul>
+			</section>
+
+			<section class="conclusion">
+				<h2>Conclusion: Mastery through Reference</h2>
+				<p>The Tebian Protocol is your guide to the metal. By internalizing these commands and locations, you move from a "user" to an "operator." One ISO. One menu. Total command. Welcome to the Protocol.</p>
+			</section>
+		</article>
+
+		<div class="nav">
+			<a href="/docs">← Back to Guides</a>
+			<a href="/blog/manifesto">The Manifesto →</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	.resource { max-width: 1000px; width: 100%; padding: 4rem 1rem; }
+	header { margin-bottom: 4rem; text-align: center; }
+	.category { color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; font-size: 0.8rem; }
+	h1 { font-size: 4rem; color: #fff; margin: 0.5rem 0; line-height: 1.1; font-weight: 800; }
+	.subtitle { color: #9399b2; font-size: 1.25rem; font-style: italic; }
+	h2 { color: var(--accent); font-size: 2.2rem; margin: 4rem 0 1.5rem 0; border-bottom: 1px solid rgba(137, 180, 250, 0.2); padding-bottom: 0.5rem; }
+	h3 { color: #cdd6f4; font-size: 1.6rem; margin: 2rem 0 1rem 0; }
+	p { color: #9399b2; line-height: 1.8; margin-bottom: 2rem; font-size: 1.1rem; }
+	.nav { margin-top: 4rem; padding-top: 2rem; border-top: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; }
+	.nav a { color: #6c7086; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+	.nav a:hover { color: var(--accent); }
+</style>

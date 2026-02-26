@@ -1,0 +1,18 @@
+#!/bin/bash
+# Tebian Fuzzel Wrapper - handles icon toggling and separator filtering
+run_fuzzel() {
+    if [ -f "$HOME/.config/tebian/no_icons" ]; then
+        perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@"
+    else
+        fuzzel "$@"
+    fi
+}
+
+RESULT=$(run_fuzzel "$@")
+
+# Filter out separator lines — treat as no selection
+if [[ "$RESULT" =~ ^─+$ ]]; then
+    exit 1
+fi
+
+echo "$RESULT"

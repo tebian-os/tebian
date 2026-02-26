@@ -1,0 +1,50 @@
+font=JetBrainsMono Nerd Font
+
+# Background
+color=f5f5f0
+
+# Ring colors (Indigo accent)
+ring-color=6366f1
+ring-ver-color=2563eb
+ring-wrong-color=dc2626
+ring-clear-color=ca8a04
+
+# Key highlight
+key-hl-color=16a34a
+bs-hl-color=dc2626
+caps-lock-key-hl-color=ca8a04
+caps-lock-bs-hl-color=dc2626
+
+# Inside colors
+inside-color=f5f5f0
+inside-ver-color=f5f5f0
+inside-wrong-color=f5f5f0
+inside-clear-color=f5f5f0
+
+# Line colors
+line-color=f5f5f0
+line-ver-color=f5f5f0
+line-wrong-color=f5f5f0
+line-clear-color=f5f5f0
+
+# Separator
+separator-color=e8e8e0
+
+# Text colors
+text-color=2d2d2d
+text-ver-color=2563eb
+text-wrong-color=dc2626
+text-clear-color=ca8a04
+text-caps-lock-color=ca8a04
+
+# Indicator
+indicator-radius=90
+indicator-thickness=4
+
+# Behavior
+ignore-empty-password
+show-failed-attempts
+daemonize
+grace=3
+grace-no-mouse
+grace-no-touch

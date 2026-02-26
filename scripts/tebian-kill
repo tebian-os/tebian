@@ -1,0 +1,45 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+# ==============================================================================
+# TEBIAN PROCESS KILLER (V1.0)
+# A minimalist Fuzzel-based process manager.
+# ==============================================================================
+
+# 1. Get processes (user-only, exclude background fluff, sort by CPU)
+PROCS=$(ps -u $USER -o pid,comm,%cpu,%mem --sort=-%cpu | tail -n +2 | awk '{printf "󰆴 %s (CPU: %s%%, MEM: %s%%) | PID: %s
+", $2, $3, $4, $1}')
+
+# 2. Select Process
+CHOICE=$(echo -e "$PROCS" | tfuzzel -d -p " 󰆴 Kill | " --width 50)
+
+if [ -z "$CHOICE" ]; then exit 0; fi
+
+# 3. Extract PID and Kill
+PID=$(echo "$CHOICE" | awk -F'PID: ' '{print $2}')
+NAME=$(echo "$CHOICE" | awk '{print $2}')
+
+if [ -n "$PID" ]; then
+    # Double check choice
+    CONFIRM=$(echo -e "No (Cancel)
+Yes (Kill $NAME)" | tfuzzel -d -p " 󰷦 Confirm Kill? | " --lines 2)
+    
+    if [[ "$CONFIRM" =~ "Yes" ]]; then
+        kill "$PID" 2>/dev/null
+        # Wait briefly, then force kill if still alive
+        sleep 1
+        if kill -0 "$PID" 2>/dev/null; then
+            kill -9 "$PID" 2>/dev/null
+            notify-send "Tebian" "Force killed $NAME ($PID)"
+        else
+            notify-send "Tebian" "Terminated $NAME ($PID)"
+        fi
+    fi
+fi

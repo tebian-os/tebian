@@ -1,0 +1,68 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN UPDATE
+# Downloads latest Tebian and rebuilds. No git required.
+# Usage: tebian-update
+# ==============================================================================
+
+set -euo pipefail
+
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+TEBIAN_TARBALL="https://github.com/tebian-os/tebian/archive/main.tar.gz"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+echo ""
+echo "  ┌─────────────────────┐"
+echo "  │  TEBIAN  UPDATE     │"
+echo "  └─────────────────────┘"
+echo ""
+
+# If it's a git repo, use git pull instead
+if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ]; then
+    echo -e "${GREEN}[update]${NC} Git repo detected, pulling..."
+    git -C "$TEBIAN_DIR" pull --ff-only
+else
+    echo -e "${GREEN}[update]${NC} Downloading latest Tebian..."
+    curl -fsSL "$TEBIAN_TARBALL" | tar xz -C /tmp
+
+    if [ ! -d /tmp/tebian-main ]; then
+        echo -e "${RED}[update]${NC} Download failed"
+        exit 1
+    fi
+
+    # Sync files, preserving user manifest
+    rsync -a --exclude='tebian.conf' /tmp/tebian-main/ "$TEBIAN_DIR/"
+    rm -rf /tmp/tebian-main
+    echo -e "${GREEN}[update]${NC} Files updated"
+fi
+
+# Re-sync scripts to ~/.local/bin
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$LOCAL_BIN"
+for script in "$TEBIAN_DIR/scripts/"*; do
+    name=$(basename "$script")
+    case "$name" in
+        desktop.sh|build-iso.sh|uninstall.sh) continue ;;
+        *) cp "$script" "$LOCAL_BIN/" ;;
+    esac
+done
+chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
+echo -e "${GREEN}[update]${NC} Scripts synced"
+
+# Run rebuild if manifest exists
+if [ -f "$TEBIAN_DIR/tebian.conf" ]; then
+    echo ""
+    bash "$TEBIAN_DIR/scripts/tebian-rebuild"
+else
+    # Reload sway if running
+    if pgrep -x sway &>/dev/null; then
+        swaymsg reload 2>/dev/null && echo -e "${GREEN}[update]${NC} Sway reloaded" || true
+    fi
+fi
+
+echo ""
+echo -e "${GREEN}[update]${NC} Tebian is up to date!"

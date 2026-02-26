@@ -1,0 +1,763 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN INSTALLER (V1.0)
+# Custom whiptail-based installer for Tebian OS
+# Runs from the live session — installs to disk with dual-boot support
+#
+# Features: partitioning, optional LUKS encryption, debootstrap,
+#           user creation, Desktop/Server mode, GRUB + os-prober
+# ==============================================================================
+
+set -euo pipefail
+
+# ── Catppuccin Mocha whiptail theme ──
+export NEWT_COLORS='
+root=white,black
+border=cyan,black
+title=cyan,black
+roottext=white,black
+window=white,black
+textbox=white,black
+button=black,cyan
+actbutton=white,blue
+compactbutton=white,black
+listbox=white,black
+actlistbox=black,cyan
+actsellistbox=black,cyan
+checkbox=white,black
+actcheckbox=black,cyan
+entry=white,black
+disentry=gray,black
+emptyscale=black
+fullscale=cyan
+helpline=white,black
+'
+
+# ── Globals ──
+TEBIAN_SRC="/home/user/Tebian"
+TARGET="/mnt/tebian"
+DISK=""
+PARTITION_ROOT=""
+PARTITION_EFI=""
+PARTITION_SWAP=""
+ENCRYPT=false
+CRYPT_NAME="tebian_crypt"
+USERNAME=""
+USERPASS=""
+HOSTNAME_VAL="tebian"
+MODE="desktop"  # desktop or server
+IS_EFI=false
+DEBIAN_VERSION="trixie"
+DUAL_BOOT=false
+
+# ── UI helpers ──
+WT_HEIGHT=18
+WT_WIDTH=70
+WT_MENU=10
+
+msg() {
+    whiptail --title "  Tebian Installer" --msgbox "$1" $WT_HEIGHT $WT_WIDTH
+}
+
+yesno() {
+    whiptail --title "  Tebian Installer" --yesno "$1" $WT_HEIGHT $WT_WIDTH
+}
+
+input() {
+    whiptail --title "  Tebian Installer" --inputbox "$1" $WT_HEIGHT $WT_WIDTH "$2" 3>&1 1>&2 2>&3
+}
+
+password() {
+    whiptail --title "  Tebian Installer" --passwordbox "$1" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3
+}
+
+progress() {
+    whiptail --title "  Tebian Installer" --gauge "$1" 8 $WT_WIDTH 0
+}
+
+die() {
+    msg "ERROR: $1"
+    exit 1
+}
+
+# ── Step 1: Welcome ──
+welcome() {
+    whiptail --title "  T E B I A N" --msgbox "\
+Welcome to the Tebian Installer.
+
+This will install Tebian OS to your hard drive.
+
+  • Dual-boot with Windows supported
+  • Optional disk encryption (LUKS)
+  • Desktop or Server mode
+
+Press OK to begin." $WT_HEIGHT $WT_WIDTH
+}
+
+# ── Step 2: Detect boot mode ──
+detect_efi() {
+    if [ -d /sys/firmware/efi ]; then
+        IS_EFI=true
+    fi
+}
+
+# ── Step 3: Disk selection ──
+select_disk() {
+    local disks=()
+    while IFS= read -r line; do
+        local dev size model
+        dev=$(echo "$line" | awk '{print $1}')
+        size=$(echo "$line" | awk '{print $2}')
+        model=$(echo "$line" | awk '{$1=$2=""; print}' | xargs)
+        [ -z "$model" ] && model="Disk"
+        disks+=("$dev" "$size  $model")
+    done < <(lsblk -dpno NAME,SIZE,MODEL 2>/dev/null | grep -E '^/dev/(sd|nvme|vd|mmcblk)')
+
+    if [ ${#disks[@]} -eq 0 ]; then
+        die "No disks found."
+    fi
+
+    DISK=$(whiptail --title "  Select Disk" --menu "\
+Choose the disk to install Tebian on.
+
+WARNING: Data on the selected disk may be erased." \
+        $WT_HEIGHT $WT_WIDTH $WT_MENU "${disks[@]}" 3>&1 1>&2 2>&3) || exit 1
+}
+
+# ── Step 4: Partition strategy ──
+select_partition_mode() {
+    # Check for existing OS installations
+    local has_windows=false
+    local has_linux=false
+    local existing_os=""
+
+    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9] 2>/dev/null; do
+        [ -b "$part" ] || continue
+        local fstype
+        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
+        if [ "$fstype" = "ntfs" ]; then
+            local label
+            label=$(blkid -o value -s LABEL "$part" 2>/dev/null || true)
+            if echo "$label" | grep -qiE "windows|system|recovery"; then
+                has_windows=true
+            fi
+            # Also check for large NTFS that's likely Windows C:
+            local size_bytes
+            size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
+            if [ "$size_bytes" -gt 20000000000 ]; then
+                has_windows=true
+            fi
+        fi
+        if [ "$fstype" = "ext4" ] || [ "$fstype" = "btrfs" ] || [ "$fstype" = "xfs" ]; then
+            has_linux=true
+        fi
+    done
+
+    local options=()
+
+    if $has_windows; then
+        existing_os="Windows detected on this disk."
+        options+=("alongside" "Install alongside Windows (dual-boot)")
+    elif $has_linux; then
+        existing_os="Linux detected on this disk."
+        options+=("alongside" "Install alongside existing Linux")
+    fi
+
+    options+=("erase" "Erase entire disk and install Tebian")
+    options+=("manual" "Manual partitioning (advanced)")
+
+    local choice
+    choice=$(whiptail --title "  Partition Disk" --menu "\
+${existing_os}
+How would you like to partition ${DISK}?" \
+        $WT_HEIGHT $WT_WIDTH $WT_MENU "${options[@]}" 3>&1 1>&2 2>&3) || exit 1
+
+    case "$choice" in
+        alongside) partition_alongside ;;
+        erase)     partition_erase ;;
+        manual)    partition_manual ;;
+    esac
+}
+
+# ── Partition: erase entire disk ──
+partition_erase() {
+    yesno "This will ERASE ALL DATA on ${DISK}.\n\nAre you sure?" || exit 1
+
+    (
+        echo 10; echo "# Wiping partition table..."
+        wipefs -a "$DISK" >/dev/null 2>&1
+
+        if $IS_EFI; then
+            echo 30; echo "# Creating GPT partition table..."
+            parted -s "$DISK" mklabel gpt
+            parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
+            parted -s "$DISK" set 1 esp on
+            parted -s "$DISK" mkpart primary linux-swap 513MiB 2561MiB
+            parted -s "$DISK" mkpart primary ext4 2561MiB 100%
+
+            sleep 1
+            partprobe "$DISK" 2>/dev/null || true
+            sleep 1
+
+            # Detect partition names (handle nvme vs sd naming)
+            if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
+                PARTITION_EFI="${DISK}p1"
+                PARTITION_SWAP="${DISK}p2"
+                PARTITION_ROOT="${DISK}p3"
+            else
+                PARTITION_EFI="${DISK}1"
+                PARTITION_SWAP="${DISK}2"
+                PARTITION_ROOT="${DISK}3"
+            fi
+
+            echo 60; echo "# Formatting EFI partition..."
+            mkfs.fat -F32 "$PARTITION_EFI" >/dev/null 2>&1
+        else
+            echo 30; echo "# Creating MBR partition table..."
+            parted -s "$DISK" mklabel msdos
+            parted -s "$DISK" mkpart primary linux-swap 1MiB 2049MiB
+            parted -s "$DISK" mkpart primary ext4 2049MiB 100%
+            parted -s "$DISK" set 2 boot on
+
+            sleep 1
+            partprobe "$DISK" 2>/dev/null || true
+            sleep 1
+
+            if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
+                PARTITION_SWAP="${DISK}p1"
+                PARTITION_ROOT="${DISK}p2"
+            else
+                PARTITION_SWAP="${DISK}1"
+                PARTITION_ROOT="${DISK}2"
+            fi
+        fi
+
+        echo 70; echo "# Formatting swap..."
+        mkswap "$PARTITION_SWAP" >/dev/null 2>&1
+
+        echo 80; echo "# Formatting root partition..."
+        mkfs.ext4 -F "$PARTITION_ROOT" >/dev/null 2>&1
+
+        echo 100; echo "# Partitioning complete"
+    ) | progress "Partitioning ${DISK}..."
+}
+
+# ── Partition: install alongside (shrink existing) ──
+partition_alongside() {
+    DUAL_BOOT=true
+
+    # Find the largest partition to shrink
+    local largest_part=""
+    local largest_size=0
+
+    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9] 2>/dev/null; do
+        [ -b "$part" ] || continue
+        local size_bytes
+        size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
+        if [ "$size_bytes" -gt "$largest_size" ]; then
+            largest_size=$size_bytes
+            largest_part=$part
+        fi
+    done
+
+    if [ -z "$largest_part" ]; then
+        die "Could not find a partition to shrink."
+    fi
+
+    local largest_gb=$((largest_size / 1073741824))
+    local suggest_gb=$((largest_gb / 2))
+    [ "$suggest_gb" -lt 20 ] && suggest_gb=20
+    [ "$suggest_gb" -gt "$((largest_gb - 20))" ] && suggest_gb=$((largest_gb - 20))
+
+    local tebian_gb
+    tebian_gb=$(input "Found ${largest_part} (${largest_gb}GB).\n\nHow many GB for Tebian? (minimum 20)" "$suggest_gb") || exit 1
+
+    # Validate
+    if [ "$tebian_gb" -lt 20 ] 2>/dev/null; then
+        die "Tebian needs at least 20GB."
+    fi
+    if [ "$tebian_gb" -ge "$largest_gb" ] 2>/dev/null; then
+        die "Not enough space. Maximum is $((largest_gb - 20))GB."
+    fi
+
+    local shrink_to_gb=$((largest_gb - tebian_gb))
+
+    yesno "This will:\n\n• Shrink ${largest_part} to ${shrink_to_gb}GB\n• Create ${tebian_gb}GB for Tebian\n\nContinue?" || exit 1
+
+    local fstype
+    fstype=$(blkid -o value -s TYPE "$largest_part" 2>/dev/null || true)
+
+    (
+        echo 10; echo "# Preparing to resize..."
+
+        # Shrink the existing partition
+        if [ "$fstype" = "ntfs" ]; then
+            echo 20; echo "# Resizing NTFS filesystem (this may take a while)..."
+            ntfsresize -f -s "${shrink_to_gb}G" "$largest_part" </dev/null >/dev/null 2>&1 || true
+        elif [ "$fstype" = "ext4" ]; then
+            echo 20; echo "# Checking filesystem..."
+            e2fsck -f -y "$largest_part" >/dev/null 2>&1 || true
+            echo 30; echo "# Resizing ext4 filesystem..."
+            resize2fs "$largest_part" "${shrink_to_gb}G" >/dev/null 2>&1 || true
+        fi
+
+        echo 40; echo "# Resizing partition..."
+        local part_num
+        part_num=$(echo "$largest_part" | grep -o '[0-9]*$')
+        parted -s "$DISK" resizepart "$part_num" "${shrink_to_gb}GB" 2>/dev/null || true
+
+        echo 50; echo "# Creating Tebian partitions in free space..."
+        local free_start="${shrink_to_gb}GB"
+
+        if $IS_EFI; then
+            # EFI: create swap + root in free space (EFI partition already exists)
+            parted -s "$DISK" mkpart primary linux-swap "$free_start" "$((shrink_to_gb + 2))GB"
+            parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GB" 100%
+
+            sleep 1
+            partprobe "$DISK" 2>/dev/null || true
+            sleep 1
+
+            # Find our new partitions (last two)
+            local parts
+            parts=($(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$" | tail -2))
+            PARTITION_SWAP="${parts[0]}"
+            PARTITION_ROOT="${parts[1]}"
+
+            # Find existing EFI partition
+            PARTITION_EFI=$(blkid -t TYPE=vfat -o device "$DISK"* 2>/dev/null | head -1)
+        else
+            # BIOS: create swap + root in free space
+            parted -s "$DISK" mkpart primary linux-swap "$free_start" "$((shrink_to_gb + 2))GB"
+            parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GB" 100%
+
+            sleep 1
+            partprobe "$DISK" 2>/dev/null || true
+            sleep 1
+
+            local parts
+            parts=($(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$" | tail -2))
+            PARTITION_SWAP="${parts[0]}"
+            PARTITION_ROOT="${parts[1]}"
+        fi
+
+        echo 70; echo "# Formatting swap..."
+        mkswap "$PARTITION_SWAP" >/dev/null 2>&1
+
+        echo 80; echo "# Formatting root partition..."
+        mkfs.ext4 -F "$PARTITION_ROOT" >/dev/null 2>&1
+
+        echo 100; echo "# Partitioning complete"
+    ) | progress "Partitioning for dual-boot..."
+}
+
+# ── Partition: manual ──
+partition_manual() {
+    msg "Opening cfdisk for manual partitioning.\n\nCreate at least:\n  • A root partition (20GB+, type Linux)\n  • A swap partition (optional)\n  • An EFI partition (512MB, type EFI) if using UEFI\n\nPress OK to continue."
+
+    cfdisk "$DISK"
+    partprobe "$DISK" 2>/dev/null || true
+    sleep 1
+
+    # Ask user to identify partitions
+    local parts=()
+    while IFS= read -r line; do
+        local dev size fstype
+        dev=$(echo "$line" | awk '{print $1}')
+        size=$(echo "$line" | awk '{print $2}')
+        fstype=$(echo "$line" | awk '{print $3}')
+        parts+=("$dev" "$size  $fstype")
+    done < <(lsblk -lnpo NAME,SIZE,FSTYPE "$DISK" | grep -v "^${DISK} ")
+
+    PARTITION_ROOT=$(whiptail --title "  Select Root Partition" --menu \
+        "Which partition for / (root)?" \
+        $WT_HEIGHT $WT_WIDTH $WT_MENU "${parts[@]}" 3>&1 1>&2 2>&3) || exit 1
+
+    if yesno "Format ${PARTITION_ROOT} as ext4?\n\n(Select No if already formatted)"; then
+        mkfs.ext4 -F "$PARTITION_ROOT"
+    fi
+
+    if $IS_EFI; then
+        PARTITION_EFI=$(whiptail --title "  Select EFI Partition" --menu \
+            "Which partition is EFI?" \
+            $WT_HEIGHT $WT_WIDTH $WT_MENU "${parts[@]}" 3>&1 1>&2 2>&3) || exit 1
+    fi
+}
+
+# ── Step 5: Encryption ──
+setup_encryption() {
+    if ! yesno "Enable disk encryption (LUKS)?\n\nThis encrypts your root partition. You'll enter a\npassword each boot. Recommended for laptops."; then
+        return
+    fi
+
+    ENCRYPT=true
+
+    local pass1 pass2
+    while true; do
+        pass1=$(password "Enter encryption passphrase:") || exit 1
+        pass2=$(password "Confirm encryption passphrase:") || exit 1
+
+        if [ "$pass1" = "$pass2" ] && [ -n "$pass1" ]; then
+            break
+        fi
+        msg "Passphrases don't match or are empty. Try again."
+    done
+
+    (
+        echo 10; echo "# Setting up LUKS encryption..."
+        echo -n "$pass1" | cryptsetup luksFormat --batch-mode "$PARTITION_ROOT" -
+
+        echo 40; echo "# Opening encrypted volume..."
+        echo -n "$pass1" | cryptsetup open "$PARTITION_ROOT" "$CRYPT_NAME" -
+
+        echo 60; echo "# Formatting encrypted volume..."
+        mkfs.ext4 -F "/dev/mapper/$CRYPT_NAME" >/dev/null 2>&1
+
+        echo 100; echo "# Encryption configured"
+    ) | progress "Setting up encryption..."
+
+    # Update root to point to the decrypted device
+    PARTITION_ROOT="/dev/mapper/$CRYPT_NAME"
+}
+
+# ── Step 6: User creation ──
+setup_user() {
+    while true; do
+        USERNAME=$(input "Enter your username:" "") || exit 1
+        # Validate username
+        if [[ "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]] && [ ${#USERNAME} -le 32 ]; then
+            break
+        fi
+        msg "Invalid username. Use lowercase letters, numbers, hyphens.\nMust start with a letter."
+    done
+
+    while true; do
+        local pass1 pass2
+        pass1=$(password "Enter password for ${USERNAME}:") || exit 1
+        pass2=$(password "Confirm password:") || exit 1
+
+        if [ "$pass1" = "$pass2" ] && [ -n "$pass1" ]; then
+            USERPASS="$pass1"
+            break
+        fi
+        msg "Passwords don't match or are empty. Try again."
+    done
+
+    HOSTNAME_VAL=$(input "Enter hostname:" "tebian") || exit 1
+}
+
+# ── Step 7: Mode selection ──
+select_mode() {
+    MODE=$(whiptail --title "  System Mode" --menu "\
+Choose what to install:\n" \
+        $WT_HEIGHT $WT_WIDTH $WT_MENU \
+        "desktop" "Tebian Desktop (Sway, audio, apps menu)" \
+        "server"  "Tebian Server (headless)" \
+        3>&1 1>&2 2>&3) || exit 1
+
+    if [ "$MODE" = "server" ]; then
+        MODE=$(whiptail --title "  Server Mode" --menu "\
+Choose server configuration:\n" \
+            $WT_HEIGHT $WT_WIDTH $WT_MENU \
+            "server-bare"   "Bare Server (SSH + pure Debian)" \
+            "server-secure" "Secure Server (SSH + firewall + monitoring)" \
+            3>&1 1>&2 2>&3) || exit 1
+    fi
+}
+
+# ── Step 8: Confirmation ──
+confirm() {
+    local encrypt_str="No"
+    $ENCRYPT && encrypt_str="Yes (LUKS)"
+
+    local efi_str="BIOS (MBR)"
+    $IS_EFI && efi_str="UEFI (GPT)"
+
+    local mode_str="Desktop"
+    [ "$MODE" = "server-secure" ] && mode_str="Server (SSH + Firewall)"
+    [ "$MODE" = "server-bare" ] && mode_str="Server (Bare)"
+
+    whiptail --title "  Confirm Installation" --yesno "\
+Ready to install Tebian.
+
+  Disk:        ${DISK}
+  Root:        ${PARTITION_ROOT}
+  Boot mode:   ${efi_str}
+  Encryption:  ${encrypt_str}
+  Username:    ${USERNAME}
+  Hostname:    ${HOSTNAME_VAL}
+  Mode:        ${mode_str}
+
+This is your last chance to cancel.
+Proceed with installation?" $WT_HEIGHT $WT_WIDTH || exit 1
+}
+
+# ── Step 9: Install base system ──
+install_base() {
+    mkdir -p "$TARGET"
+    mount "$PARTITION_ROOT" "$TARGET"
+
+    if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
+        mkdir -p "$TARGET/boot/efi"
+        mount "$PARTITION_EFI" "$TARGET/boot/efi"
+    fi
+
+    (
+        echo 5; echo "# Installing base system (this takes a few minutes)..."
+        debootstrap --arch=amd64 "$DEBIAN_VERSION" "$TARGET" http://deb.debian.org/debian >/dev/null 2>&1
+
+        echo 40; echo "# Configuring system..."
+
+        # fstab
+        local root_uuid
+        if $ENCRYPT; then
+            root_uuid=$(blkid -o value -s UUID "/dev/mapper/$CRYPT_NAME")
+        else
+            root_uuid=$(blkid -o value -s UUID "$PARTITION_ROOT")
+        fi
+
+        echo "UUID=$root_uuid / ext4 errors=remount-ro 0 1" > "$TARGET/etc/fstab"
+
+        if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
+            local efi_uuid
+            efi_uuid=$(blkid -o value -s UUID "$PARTITION_EFI")
+            echo "UUID=$efi_uuid /boot/efi vfat umask=0077 0 1" >> "$TARGET/etc/fstab"
+        fi
+
+        if [ -n "$PARTITION_SWAP" ]; then
+            local swap_uuid
+            swap_uuid=$(blkid -o value -s UUID "$PARTITION_SWAP")
+            echo "UUID=$swap_uuid none swap sw 0 0" >> "$TARGET/etc/fstab"
+        fi
+
+        # crypttab
+        if $ENCRYPT; then
+            local luks_part_uuid
+            # Get the UUID of the raw LUKS partition (not the decrypted mapper)
+            for p in $(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$"); do
+                if cryptsetup isLuks "$p" 2>/dev/null; then
+                    luks_part_uuid=$(blkid -o value -s UUID "$p")
+                    break
+                fi
+            done
+            echo "$CRYPT_NAME UUID=$luks_part_uuid none luks" > "$TARGET/etc/crypttab"
+        fi
+
+        # Hostname
+        echo "$HOSTNAME_VAL" > "$TARGET/etc/hostname"
+        cat > "$TARGET/etc/hosts" << HOSTS
+127.0.0.1   localhost
+127.0.1.1   $HOSTNAME_VAL
+
+::1         localhost ip6-localhost ip6-loopback
+HOSTS
+
+        # APT sources with non-free-firmware
+        cat > "$TARGET/etc/apt/sources.list" << APT
+deb http://deb.debian.org/debian $DEBIAN_VERSION main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian $DEBIAN_VERSION-updates main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security $DEBIAN_VERSION-security main contrib non-free non-free-firmware
+APT
+
+        echo 50; echo "# Mounting virtual filesystems..."
+        mount --bind /dev "$TARGET/dev"
+        mount --bind /dev/pts "$TARGET/dev/pts"
+        mount -t proc proc "$TARGET/proc"
+        mount -t sysfs sys "$TARGET/sys"
+
+        # Copy resolv.conf for internet in chroot
+        cp /etc/resolv.conf "$TARGET/etc/resolv.conf"
+
+        echo 55; echo "# Installing kernel and firmware..."
+        chroot "$TARGET" apt-get update >/dev/null 2>&1
+        chroot "$TARGET" apt-get install -y --no-install-recommends \
+            linux-image-amd64 firmware-linux firmware-iwlwifi firmware-misc-nonfree \
+            sudo bash-completion curl git nano \
+            locales console-setup \
+            >/dev/null 2>&1
+
+        # Locale
+        echo "en_US.UTF-8 UTF-8" > "$TARGET/etc/locale.gen"
+        chroot "$TARGET" locale-gen >/dev/null 2>&1
+        echo 'LANG=en_US.UTF-8' > "$TARGET/etc/default/locale"
+
+        echo 65; echo "# Installing bootloader..."
+        if $IS_EFI; then
+            chroot "$TARGET" apt-get install -y --no-install-recommends \
+                grub-efi-amd64 os-prober efibootmgr >/dev/null 2>&1
+            chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=tebian >/dev/null 2>&1
+        else
+            chroot "$TARGET" apt-get install -y --no-install-recommends \
+                grub-pc os-prober >/dev/null 2>&1
+            chroot "$TARGET" grub-install "$DISK" >/dev/null 2>&1
+        fi
+
+        # Enable os-prober for dual-boot detection
+        echo "GRUB_DISABLE_OS_PROBER=false" >> "$TARGET/etc/default/grub"
+
+        if $ENCRYPT; then
+            chroot "$TARGET" apt-get install -y --no-install-recommends \
+                cryptsetup-initramfs >/dev/null 2>&1
+            chroot "$TARGET" update-initramfs -u >/dev/null 2>&1
+        fi
+
+        chroot "$TARGET" update-grub >/dev/null 2>&1
+
+        echo 75; echo "# Creating user ${USERNAME}..."
+        chroot "$TARGET" useradd -m -s /bin/bash -G sudo,audio,video,input,render,netdev "$USERNAME"
+        echo "${USERNAME}:${USERPASS}" | chroot "$TARGET" chpasswd
+
+        # Passwordless sudo (user can lock it down later via tebian-settings)
+        echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "$TARGET/etc/sudoers.d/$USERNAME"
+        chmod 440 "$TARGET/etc/sudoers.d/$USERNAME"
+
+        # Network
+        echo 80; echo "# Configuring network..."
+        chroot "$TARGET" apt-get install -y --no-install-recommends \
+            network-manager >/dev/null 2>&1
+        chroot "$TARGET" systemctl enable NetworkManager >/dev/null 2>&1
+
+        echo 85; echo "# Copying Tebian files..."
+        # Copy Tebian repo
+        local user_home="$TARGET/home/$USERNAME"
+        cp -r "$TEBIAN_SRC" "$user_home/Tebian"
+        chown -R 1000:1000 "$user_home/Tebian"
+
+        # Install tebian-bootstrap system-wide
+        cp "$TEBIAN_SRC/bootstrap.sh" "$TARGET/usr/local/bin/tebian-bootstrap"
+        chmod +x "$TARGET/usr/local/bin/tebian-bootstrap"
+
+        # tebian-session system-wide
+        if [ -f "$TEBIAN_SRC/scripts/tebian-session" ]; then
+            cp "$TEBIAN_SRC/scripts/tebian-session" "$TARGET/usr/local/bin/tebian-session"
+            chmod +x "$TARGET/usr/local/bin/tebian-session"
+        fi
+
+        if [ "$MODE" = "desktop" ]; then
+            echo 90; echo "# Installing Tebian Desktop base..."
+            chroot "$TARGET" apt-get install -y --no-install-recommends \
+                sway swaybg fuzzel kitty \
+                pipewire wireplumber pipewire-pulse \
+                fonts-noto fonts-jetbrains-mono \
+                greetd gtkgreet cage libnotify-bin \
+                >/dev/null 2>&1
+
+            # nwg-hello (optional)
+            chroot "$TARGET" apt-get install -y nwg-hello >/dev/null 2>&1 || true
+
+            # Nerd font
+            chroot "$TARGET" bash -c "
+                apt-get install -y --no-install-recommends xz-utils >/dev/null 2>&1
+                mkdir -p /usr/local/share/fonts
+                curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz -o /tmp/nf.tar.xz && \
+                    tar -xf /tmp/nf.tar.xz -C /usr/local/share/fonts && \
+                    fc-cache -f /usr/local/share/fonts && \
+                    rm -f /tmp/nf.tar.xz
+            " >/dev/null 2>&1 || true
+
+            # Set up greeter
+            chroot "$TARGET" bash -c "
+                useradd -r -m -s /bin/bash greeter 2>/dev/null || true
+                usermod -aG video,input,render greeter
+            " >/dev/null 2>&1 || true
+
+            # Copy greetd configs
+            mkdir -p "$TARGET/etc/greetd"
+            cp "$TEBIAN_SRC/configs/greetd/config.toml" "$TARGET/etc/greetd/"
+            cp "$TEBIAN_SRC/configs/greetd/style.css" "$TARGET/etc/greetd/"
+            cp "$TEBIAN_SRC/configs/greetd/environments" "$TARGET/etc/greetd/"
+
+            # Copy nwg-hello configs
+            mkdir -p "$TARGET/etc/nwg-hello"
+            cp "$TEBIAN_SRC/configs/nwg-hello/nwg-hello.json" "$TARGET/etc/nwg-hello/" 2>/dev/null || true
+            cp "$TEBIAN_SRC/configs/nwg-hello/nwg-hello.css" "$TARGET/etc/nwg-hello/" 2>/dev/null || true
+
+            # System wallpaper
+            mkdir -p "$TARGET/usr/share/backgrounds/tebian"
+            cp "$TEBIAN_SRC/assets/wallpapers/glass.jpg" "$TARGET/usr/share/backgrounds/tebian/default.jpg" 2>/dev/null || true
+
+            chroot "$TARGET" systemctl enable greetd >/dev/null 2>&1
+
+            # Auto-run desktop.sh on first login to complete setup
+            cat >> "$user_home/.bashrc" << 'BASHRC'
+if [ ! -f ~/.config/sway/config ]; then
+    tebian-bootstrap
+fi
+BASHRC
+        elif [ "$MODE" = "server-secure" ] || [ "$MODE" = "server-bare" ]; then
+            echo 88; echo "# Installing server essentials..."
+            chroot "$TARGET" apt-get install -y --no-install-recommends \
+                openssh-server ca-certificates less wget \
+                man-db manpages file lsof pciutils bzip2 \
+                bind9-dnsutils traceroute \
+                >/dev/null 2>&1
+            chroot "$TARGET" systemctl enable ssh >/dev/null 2>&1
+
+            if [ "$MODE" = "server-secure" ]; then
+                echo 92; echo "# Installing security hardening..."
+                chroot "$TARGET" apt-get install -y --no-install-recommends \
+                    ufw fail2ban htop btop unzip \
+                    >/dev/null 2>&1
+
+                chroot "$TARGET" bash -c "
+                    ufw default deny incoming
+                    ufw allow ssh
+                    ufw --force enable
+                    systemctl enable fail2ban
+                " >/dev/null 2>&1
+            fi
+        fi
+
+        echo 95; echo "# Final cleanup..."
+        chroot "$TARGET" apt-get clean >/dev/null 2>&1
+
+        echo 100; echo "# Installation complete!"
+    ) | progress "Installing Tebian..."
+}
+
+# ── Cleanup ──
+cleanup() {
+    umount -R "$TARGET" 2>/dev/null || true
+    [ "$ENCRYPT" = true ] && cryptsetup close "$CRYPT_NAME" 2>/dev/null || true
+}
+
+# ── Main ──
+main() {
+    trap cleanup EXIT
+
+    # Must be root
+    if [ "$(id -u)" -ne 0 ]; then
+        die "The installer must be run as root.\n\nRun: sudo tebian-installer"
+    fi
+
+    welcome
+    detect_efi
+    select_disk
+    select_partition_mode
+    setup_encryption
+    setup_user
+    select_mode
+    confirm
+    install_base
+
+    whiptail --title "  Installation Complete" --msgbox "\
+Tebian has been installed successfully!
+
+$(if [ "$MODE" = "desktop" ]; then
+    echo "On first login, you'll be asked to choose"
+    echo "Base (minimal tiling) or Desktop (familiar) mode."
+elif [ "$MODE" = "server-secure" ]; then
+    echo "SSH and firewall are enabled."
+    echo "Connect via: ssh ${USERNAME}@<ip-address>"
+else
+    echo "SSH is enabled. Pure Debian otherwise."
+    echo "Connect via: ssh ${USERNAME}@<ip-address>"
+fi)
+
+Remove the installation media and press OK to reboot." $WT_HEIGHT $WT_WIDTH
+
+    cleanup
+    reboot
+}
+
+main "$@"

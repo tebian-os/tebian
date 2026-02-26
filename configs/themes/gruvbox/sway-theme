@@ -1,0 +1,20 @@
+# Gruvbox Theme - Sway Colors (Warm Retro)
+# Included by main config
+
+set $base      #282828
+set $text      #EBDBB2
+set $surface0  #3C3836
+set $surface1  #504945
+set $overlay0  #665C54
+set $accent    #FE8019
+set $orange    #FE8019
+set $yellow    #FABD2F
+set $green     #B8BB26
+set $blue      #83A598
+set $red       #FB4934
+set $purple    #D3869B
+
+# Gaps & Visuals
+gaps inner 10
+gaps outer 4
+default_border pixel 2

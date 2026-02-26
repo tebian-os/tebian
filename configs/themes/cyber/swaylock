@@ -1,0 +1,50 @@
+font=JetBrainsMono Nerd Font
+
+# Background
+color=0d0d0d
+
+# Ring colors (Neon Purple)
+ring-color=a855f7
+ring-ver-color=06b6d4
+ring-wrong-color=ff0040
+ring-clear-color=fbbf24
+
+# Key highlight
+key-hl-color=00ff88
+bs-hl-color=ff0040
+caps-lock-key-hl-color=fbbf24
+caps-lock-bs-hl-color=ff0040
+
+# Inside colors
+inside-color=0d0d0d
+inside-ver-color=0d0d0d
+inside-wrong-color=0d0d0d
+inside-clear-color=0d0d0d
+
+# Line colors
+line-color=0d0d0d
+line-ver-color=0d0d0d
+line-wrong-color=0d0d0d
+line-clear-color=0d0d0d
+
+# Separator
+separator-color=0d0d0d
+
+# Text colors
+text-color=e0e0e0
+text-ver-color=06b6d4
+text-wrong-color=ff0040
+text-clear-color=fbbf24
+text-caps-lock-color=fbbf24
+
+# Indicator
+indicator-radius=120
+indicator-thickness=6
+
+# Behavior
+ignore-empty-password
+show-failed-attempts
+daemonize
+grace=3
+grace-no-mouse
+grace-no-touch

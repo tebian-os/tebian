@@ -1,0 +1,196 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="The Gaming Manual — Tebian">
+	<main class="resource">
+		<header>
+			<span class="category">Resources</span>
+			<h1>The Gaming Manual</h1>
+			<p class="subtitle">Ultimate Performance: From ISO to 4K 144Hz Gaming.</p>
+		</header>
+
+		<article class="content">
+			<section class="overview">
+				<h2>The Strategy</h2>
+				<p>Most gamers avoid Linux because they believe it's "hard." We've simplified it. Tebian's "Gaming Mode" handles the entire driver stack (NVIDIA/AMD) and provides a "Safe Escape" to Windows for anti-cheat games.</p>
+				
+				<p>We don't use emulation. We use <strong>Direct Kernel Access</strong> and <strong>Vulkan</strong> to give you native-level speed on every title.</p>
+			</section>
+
+			<div class="resource-grid">
+				<div class="resource-box">
+					<h3>1. The GPU Stack</h3>
+					<p>Tebian's "Hardware Detect" menu is built to identify your GPU and install the non-free firmware automatically. Whether it's the NVIDIA proprietary driver or the open-source AMD Mesa stack, it's one click away.</p>
+					<ul>
+						<li><strong>NVIDIA:</strong> Proprietary drivers + Wayland support.</li>
+						<li><strong>AMD:</strong> Native kernel support + Mesa Vulkan.</li>
+						<li><strong>Intel:</strong> Hardware acceleration for mobile gaming.</li>
+					</ul>
+				</div>
+
+				<div class="resource-box">
+					<h3>2. The Software Arsenal</h3>
+					<p>Tebian comes with pre-configured setups for the four horsemen of Linux gaming:</p>
+					<ul>
+						<li><strong>Steam:</strong> Full Proton support for Windows games.</li>
+						<li><strong>Heroic:</strong> The open-source launcher for Epic and GOG.</li>
+						<li><strong>Lutris:</strong> The universal manager for all game sources.</li>
+						<li><strong>GameMode:</strong> Feral Interactive's performance daemon.</li>
+					</ul>
+				</div>
+
+				<div class="resource-box">
+					<h3>3. Performance Monitoring</h3>
+					<p>Tebian's "Performance" menu includes <strong>MangoHud</strong> and <strong>Glow</strong> (the CLI system monitor). We provide a unified way to see your FPS, GPU temps, and frame-times in every game.</p>
+					<ul>
+						<li><strong>Halt Mode:</strong> Suspends background tasks during gaming.</li>
+						<li><strong>ZRAM:</strong> Optimized memory compression for low-RAM machines.</li>
+						<li><strong>CPU Microcode:</strong> Security patches that don't hurt FPS.</li>
+					</ul>
+				</div>
+
+				<div class="resource-box warning">
+					<h3>4. The Anti-Cheat Escape</h3>
+					<p>Some games (Valorant, Destiny 2, etc.) use kernel-level anti-cheat that only works on Windows. We don't fight it—we bypass it. Tebian provides a guided "Safe Dual-boot" setup so you can have native Windows for those specific games and Tebian for everything else.</p>
+					<ul>
+						<li><strong>Safe Partitioning:</strong> Shrink your Windows drive without data loss.</li>
+						<li><strong>GRUB Magic:</strong> One menu at boot to pick your OS.</li>
+						<li><strong>Shared Storage:</strong> Access your game files across both operating systems.</li>
+					</ul>
+				</div>
+			</div>
+
+			<section class="deep-dive">
+				<h2>Why Tebian Beats Windows for Gaming</h2>
+				<p>Windows uses 2-3GB of RAM just to sit at the desktop. Tebian uses 16-32MB. That's 2-3GB of RAM you get back for your games. In the world of high-performance gaming, those megabytes matter.</p>
+				
+				<p>With <strong>Zero Background Processes</strong>, you don't have to worry about a Windows Update starting in the middle of a match. You are the root. You own the CPU.</p>
+			</section>
+		</article>
+
+		<div class="nav">
+			<a href="/rigs">← Back to Rigs</a>
+			<a href="/blog/gaming">The Gaming Blog →</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	.resource {
+		max-width: 1000px;
+		width: 100%;
+		padding: 4rem 1rem;
+	}
+
+	header {
+		margin-bottom: 4rem;
+		text-align: center;
+	}
+
+	.category {
+		color: var(--accent);
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		font-weight: 700;
+		font-size: 0.8rem;
+	}
+
+	h1 {
+		font-size: 4rem;
+		color: #fff;
+		margin: 0.5rem 0;
+		line-height: 1.1;
+		font-weight: 800;
+	}
+
+	.subtitle {
+		color: #9399b2;
+		font-size: 1.25rem;
+		font-style: italic;
+	}
+
+	h2 {
+		color: var(--accent);
+		font-size: 2rem;
+		margin: 3rem 0 1.5rem 0;
+	}
+
+	p {
+		color: #9399b2;
+		line-height: 1.8;
+		margin-bottom: 2rem;
+		font-size: 1.1rem;
+	}
+
+	.resource-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+		gap: 2rem;
+		margin-bottom: 4rem;
+	}
+
+	.resource-box {
+		background: rgba(255, 255, 255, 0.02);
+		padding: 2.5rem;
+		border-radius: 20px;
+		border: 1px solid rgba(255, 255, 255, 0.05);
+	}
+
+	.resource-box.warning {
+		border-color: rgba(243, 139, 168, 0.3);
+		background: rgba(243, 139, 168, 0.05);
+	}
+
+	.resource-box h3 {
+		font-size: 1.5rem;
+		color: #cdd6f4;
+		margin-bottom: 1rem;
+	}
+
+	.resource-box ul {
+		list-style: none;
+		padding: 0;
+		margin-top: 1.5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.resource-box li {
+		color: #9399b2;
+		padding-left: 1.5rem;
+		position: relative;
+		font-size: 0.95rem;
+	}
+
+	.resource-box li::before {
+		content: "◈";
+		color: var(--accent);
+		position: absolute;
+		left: 0;
+	}
+
+	.nav {
+		margin-top: 4rem;
+		padding-top: 2rem;
+		border-top: 1px solid rgba(255, 255, 255, 0.05);
+		display: flex;
+		justify-content: space-between;
+	}
+
+	.nav a {
+		color: #6c7086;
+		text-decoration: none;
+		font-size: 0.9rem;
+		transition: color 0.2s;
+	}
+
+	.nav a:hover {
+		color: var(--accent);
+	}
+
+	@media (max-width: 640px) {
+		.resource-grid { grid-template-columns: 1fr; }
+	}
+</style>

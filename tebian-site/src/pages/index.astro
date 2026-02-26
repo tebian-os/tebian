@@ -1,0 +1,187 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Tebian — High-Performance Debian" hideNav={true}>
+	<main>
+		<div class="banner">
+			<span>v0.1 — Early Release</span>
+			<button class="theme-toggle" id="theme-toggle" title="Toggle theme">
+				<span class="theme-icon" id="theme-icon">☀</span>
+			</button>
+		</div>
+
+		<div class="content-wrapper">
+		<h1 class="logo">TEBIAN</h1>
+
+		<div class="download-section">
+			<div class="dl-wrapper">
+				<a href="/iso/tebian-pc.iso" class="dl-main" id="dl-btn">
+					<span class="dl-text">Download ISO</span>
+					<span class="dl-arch">x86_64 ~800MB</span>
+				</a>
+			</div>
+		</div>
+
+		<p class="install-hint">Flash → Boot → Install</p>
+
+		<div class="features">
+			<span class="feature">Desktop / Server</span>
+			<span class="feature-sep">·</span>
+			<span class="feature">Dual-Boot Windows</span>
+			<span class="feature-sep">·</span>
+			<span class="feature">LUKS Encryption</span>
+			<span class="feature-sep">·</span>
+			<span class="feature">UEFI + BIOS</span>
+		</div>
+
+		<div class="arm-section">
+			<p class="arm-label">Raspberry Pi / ARM Board / Apple Silicon VM?</p>
+			<p class="arm-hint">Install <a href="https://www.raspberrypi.com/software/operating-systems/" target="_blank">Pi OS Lite</a>, <a href="https://www.armbian.com/download/" target="_blank">Armbian</a>, or <a href="https://www.debian.org/distrib/netinst" target="_blank">Debian ARM64</a>, then run:</p>
+			<code class="arm-cmd">curl -sL tebian.org/install | bash</code>
+		</div>
+
+		<div class="screenshot">
+			<img src="/screenshot.png" alt="Tebian Desktop" />
+		</div>
+		</div>
+
+		<div class="page-footer">
+			<a href="/source" class="footer-link">Source</a>
+			<p class="quote">"Perfection is achieved not when there is nothing more to add, but when there is nothing left to take away."</p>
+			<p class="quote-cite">— Saint-Exupéry, <em>Wind, Sand and Stars</em> (1939)</p>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	main { min-height: 100vh; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; overflow: hidden; width: 100%; }
+	.banner { position: absolute; top: 0; left: 0; right: 0; background: rgba(137, 180, 250, 0.1); border-bottom: 1px solid rgba(137, 180, 250, 0.2); padding: 0.6rem 1rem; text-align: center; font-size: 0.85rem; color: #89b4fa; backdrop-filter: blur(8px); z-index: 100; display: flex; justify-content: center; align-items: center; }
+	.theme-toggle { position: absolute; right: 1rem; background: none; border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 6px; padding: 0.25rem 0.5rem; cursor: pointer; color: #89b4fa; font-size: 0.85rem; transition: all 0.2s; }
+	.theme-toggle:hover { background: rgba(137, 180, 250, 0.1); border-color: rgba(137, 180, 250, 0.4); }
+	.content-wrapper { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; padding-top: 3.5rem; width: 100%; gap: 2rem; }
+	.logo {
+		font-size: clamp(3rem, 10vw, 5rem);
+		font-weight: 300;
+		letter-spacing: 0.4em;
+		color: #cdd6f4;
+		margin: 0;
+	}
+
+	.download-section { display: flex; justify-content: center; }
+	.dl-wrapper { position: relative; }
+	.dl-main {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 1rem 1.75rem;
+		background: rgba(137, 180, 250, 0.08);
+		border: 1px solid rgba(137, 180, 250, 0.2);
+		border-radius: 8px;
+		color: #fff;
+		font-family: inherit;
+		font-size: 0.9rem;
+		font-weight: 600;
+		cursor: pointer;
+		transition: all 0.2s;
+		text-decoration: none;
+	}
+	.dl-main:hover { background: rgba(137, 180, 250, 0.15); border-color: rgba(137, 180, 250, 0.4); }
+	.dl-text { color: #fff; }
+	.dl-arch { color: #89b4fa; }
+
+	.arm-section { text-align: center; margin-top: 0.5rem; }
+	.arm-label { color: #9399b2; font-size: 1.05rem; margin: 0 0 0.4rem 0; font-weight: 600; }
+	.arm-hint { color: #6c7086; font-size: 0.95rem; margin: 0 0 0.75rem 0; }
+	.arm-hint a { color: #89b4fa; text-decoration: none; }
+	.arm-hint a:hover { text-decoration: underline; }
+	.arm-cmd { display: inline-block; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 0.75rem 1.5rem; font-size: 1.05rem; color: #a6e3a1; letter-spacing: 0.01em; }
+
+	.install-hint { color: #9399b2; font-size: 1.1rem; margin: 0; }
+	.screenshot { max-width: 1000px; width: 90%; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 16px; padding: 0.75rem; }
+	.screenshot img { width: 100%; border-radius: 10px; display: block; }
+	.features { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; align-items: center; }
+	.feature { color: #6c7086; font-size: 0.85rem; }
+	.feature-sep { color: #313244; font-size: 0.7rem; }
+	.page-footer { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 2rem; width: 100%; }
+	.footer-link { color: #6c7086; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+	.footer-link:hover { color: var(--accent); }
+	.quote { color: #45475a; font-size: 0.85rem; font-style: italic; margin: 0; max-width: 420px; line-height: 1.5; text-align: center; }
+	.quote-cite { color: #313244; font-size: 0.75rem; margin: 0; }
+	.quote-cite em { font-style: italic; }
+	@media (max-width: 640px) { .content-wrapper { padding-top: 4rem; } }
+
+	/* Light theme */
+	:global(html[data-theme="light"]) .logo { color: #4c4f69; }
+	:global(html[data-theme="light"]) .banner { background: rgba(30, 102, 245, 0.08); border-color: rgba(30, 102, 245, 0.15); color: #1e66f5; }
+	:global(html[data-theme="light"]) .theme-toggle { color: #1e66f5; border-color: rgba(30, 102, 245, 0.2); }
+	:global(html[data-theme="light"]) .theme-toggle:hover { background: rgba(30, 102, 245, 0.08); }
+	:global(html[data-theme="light"]) .dl-main { background: rgba(30, 102, 245, 0.08); border-color: rgba(30, 102, 245, 0.25); color: #4c4f69; }
+	:global(html[data-theme="light"]) .dl-main:hover { background: rgba(30, 102, 245, 0.15); border-color: rgba(30, 102, 245, 0.4); }
+	:global(html[data-theme="light"]) .dl-text { color: #4c4f69; }
+	:global(html[data-theme="light"]) .dl-arch { color: #1e66f5; }
+	:global(html[data-theme="light"]) .install-hint { color: #6c6f85; }
+	:global(html[data-theme="light"]) .feature { color: #6c6f85; }
+	:global(html[data-theme="light"]) .feature-sep { color: #bcc0cc; }
+	:global(html[data-theme="light"]) .arm-label { color: #5c5f77; }
+	:global(html[data-theme="light"]) .arm-hint { color: #6c6f85; }
+	:global(html[data-theme="light"]) .arm-hint a { color: #1e66f5; }
+	:global(html[data-theme="light"]) .arm-cmd { background: rgba(0, 0, 0, 0.04); border-color: rgba(0, 0, 0, 0.1); color: #40a02b; }
+	:global(html[data-theme="light"]) .screenshot { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.08); }
+	:global(html[data-theme="light"]) .footer-link { color: #6c6f85; }
+	:global(html[data-theme="light"]) .quote { color: #8c8fa1; }
+	:global(html[data-theme="light"]) .quote-cite { color: #9ca0b0; }
+
+	/* Frappe theme */
+	:global(html[data-theme="frappe"]) .logo { color: #c6d0f5; }
+	:global(html[data-theme="frappe"]) .banner { background: rgba(140, 170, 238, 0.1); border-color: rgba(140, 170, 238, 0.2); color: #8caaee; }
+	:global(html[data-theme="frappe"]) .theme-toggle { color: #8caaee; border-color: rgba(140, 170, 238, 0.2); }
+	:global(html[data-theme="frappe"]) .theme-toggle:hover { background: rgba(140, 170, 238, 0.1); }
+	:global(html[data-theme="frappe"]) .dl-main { background: rgba(140, 170, 238, 0.08); border-color: rgba(140, 170, 238, 0.2); }
+	:global(html[data-theme="frappe"]) .dl-main:hover { background: rgba(140, 170, 238, 0.15); border-color: rgba(140, 170, 238, 0.4); }
+	:global(html[data-theme="frappe"]) .dl-text { color: #c6d0f5; }
+	:global(html[data-theme="frappe"]) .dl-arch { color: #8caaee; }
+	:global(html[data-theme="frappe"]) .install-hint { color: #a5adce; }
+	:global(html[data-theme="frappe"]) .feature { color: #838ba7; }
+	:global(html[data-theme="frappe"]) .feature-sep { color: #51576d; }
+	:global(html[data-theme="frappe"]) .arm-label { color: #a5adce; }
+	:global(html[data-theme="frappe"]) .arm-hint { color: #838ba7; }
+	:global(html[data-theme="frappe"]) .arm-hint a { color: #8caaee; }
+	:global(html[data-theme="frappe"]) .arm-cmd { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.08); color: #a6d189; }
+	:global(html[data-theme="frappe"]) .screenshot { background: rgba(255, 255, 255, 0.03); border-color: rgba(255, 255, 255, 0.06); }
+	:global(html[data-theme="frappe"]) .footer-link { color: #838ba7; }
+	:global(html[data-theme="frappe"]) .quote { color: #626880; }
+	:global(html[data-theme="frappe"]) .quote-cite { color: #51576d; }
+</style>
+
+<script is:inline>
+	const API = 'http://localhost:3001';
+
+	document.getElementById('dl-btn').addEventListener('click', async function() {
+		try {
+			await fetch(API + '/api/downloads/pc', { method: 'POST' });
+		} catch (e) {}
+	});
+
+	// Theme toggle — cycles: dark (Mocha) → frappe → light (Latte)
+	const toggle = document.getElementById('theme-toggle');
+	const icon = document.getElementById('theme-icon');
+	const html = document.documentElement;
+	const themes = ['dark', 'frappe', 'light'];
+	const icons = { dark: '☀', frappe: '◐', light: '☾' };
+
+	function setTheme(theme) {
+		html.setAttribute('data-theme', theme);
+		icon.textContent = icons[theme];
+		localStorage.setItem('tebian-theme', theme);
+	}
+
+	const saved = localStorage.getItem('tebian-theme') || 'frappe';
+	setTheme(saved);
+
+	toggle.addEventListener('click', () => {
+		const current = html.getAttribute('data-theme');
+		const next = themes[(themes.indexOf(current) + 1) % themes.length];
+		setTheme(next);
+	});
+</script>

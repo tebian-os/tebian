@@ -1,0 +1,20 @@
+# Dracula Theme - Sway Colors (Classic Dark Purple)
+# Included by main config
+
+set $base      #282A36
+set $text      #F8F8F2
+set $surface0  #44475A
+set $surface1  #414550
+set $overlay0  #6272A4
+set $accent    #BD93F9
+set $purple    #BD93F9
+set $green     #50FA7B
+set $pink      #FF79C6
+set $cyan      #8BE9FD
+set $red       #FF5555
+set $orange    #FFB86C
+
+# Gaps & Visuals
+gaps inner 12
+gaps outer 4
+default_border pixel 2

@@ -1,0 +1,57 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN APP DRAWER
+# Browse all installed applications with icons
+# ==============================================================================
+
+source ~/.local/bin/tebian-common 2>/dev/null
+
+DESKTOP_DIRS="/usr/share/applications $HOME/.local/share/applications /var/lib/flatpak/exports/share/applications $HOME/.local/share/flatpak/exports/share/applications"
+
+# Collect visible apps
+declare -A SEEN
+MENU=""
+
+for dir in $DESKTOP_DIRS; do
+    [ -d "$dir" ] || continue
+    for desktop in "$dir"/*.desktop; do
+        [ -f "$desktop" ] || continue
+
+        grep -q "^NoDisplay=true" "$desktop" 2>/dev/null && continue
+        grep -q "^Hidden=true" "$desktop" 2>/dev/null && continue
+        # Skip if TryExec binary doesn't exist
+        tryexec=$(grep -m1 "^TryExec=" "$desktop" | cut -d= -f2-)
+        [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && continue
+
+        name=$(grep -m1 "^Name=" "$desktop" | cut -d= -f2-)
+        [ -z "$name" ] && continue
+        [ -n "${SEEN[$name]}" ] && continue
+        SEEN[$name]=1
+
+        icon=$(grep -m1 "^Icon=" "$desktop" | cut -d= -f2-)
+
+        if [ -n "$icon" ]; then
+            MENU+="$name\0icon\x1f$icon\n"
+        else
+            MENU+="$name\n"
+        fi
+    done
+done
+
+# Sort and show
+CHOICE=$(echo -e "$MENU" | sort | tfuzzel -d -p " Apps | " --width 40)
+
+[ -z "$CHOICE" ] && exit 0
+
+# Find and launch the selected app
+for dir in $DESKTOP_DIRS; do
+    [ -d "$dir" ] || continue
+    for desktop in "$dir"/*.desktop; do
+        [ -f "$desktop" ] || continue
+        if grep -q "^Name=$CHOICE$" "$desktop" 2>/dev/null; then
+            exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
+            swaymsg exec -- "$exec_cmd"
+            exit 0
+        fi
+    done
+done

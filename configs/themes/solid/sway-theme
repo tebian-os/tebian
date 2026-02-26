@@ -1,0 +1,19 @@
+# Solid Theme - Sway Colors (Catppuccin Mocha, no transparency)
+# Included by main config
+
+# Colors
+set $base      #1e1e2e
+set $text      #cdd6f4
+set $surface0  #313244
+set $surface1  #45475a
+set $overlay0  #6c7086
+set $accent    #89b4fa
+set $blue      #89b4fa
+set $mauve     #cba6f7
+set $red       #f38ba8
+set $green     #a6e3a1
+
+# Gaps & Visuals
+gaps inner 10
+gaps outer 5
+default_border pixel 2

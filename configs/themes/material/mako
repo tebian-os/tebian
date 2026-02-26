@@ -1,0 +1,9 @@
+# Material Theme - Mako Notifications
+font=JetBrainsMono Nerd Font 11
+background-color=#292D3E
+text-color=#A6ACCD
+border-color=#82AAFF
+border-size=2
+padding=12
+margin=8
+default-timeout=5000

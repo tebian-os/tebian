@@ -1,0 +1,47 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="The Death of the Distro Hop — Tebian">
+	<main class="post">
+		<header>
+			<span class="category">User Psychology</span>
+			<h1>The Death of the Distro Hop: Searching for the One</h1>
+			<p class="meta">February 20, 2026 • 15 min read</p>
+		</header>
+
+		<article class="content">
+			<p class="lead">Every Linux user knows the cycle: You install a distro, you love it for a week, you find a flaw, and you go searching for the "Perfect" alternative. This is Distro Hopping. It is a symptom of a fragmented ecosystem. Tebian is the cure. We are the **Last Distro You Will Ever Install.**</p>
+
+			<h2>1. Why We Hop</h2>
+			<p>We hop because most distros are "Opinionated Cages." They pick a desktop environment, a package manager, and a theme, and they force you to live in it. If you want to change something fundamental, you have to fight the OS. You eventually give up and hop to a distro that already has that <em>one thing</em> you want.</p>
+			
+			<p>Tebian is <strong>Unopinionated Infrastructure.</strong> We don't provide a "Desktop Experience"; we provide a <strong>C-Based Foundation.</strong> If you want it to look like macOS, you can. If you want it to look like a terminal, you can. Because we are pure Debian underneath, you have access to the world's largest software repository. There is nowhere else to go.</p>
+
+			<h2>2. The Distrobox Solution</h2>
+			<p>The most common reason for hopping is software availability. "I want the AUR from Arch." "I want the PPA from Ubuntu." "I want the stability of Debian." Tebian gives you all three. Through <strong>Distrobox Mastery</strong>, we allow you to run any other distro inside a container on Tebian. You don't have to "Hop" to Arch to use an AUR package; you just open an Arch container. You stay home; the software comes to you.</p>
+
+			<h2>Conclusion: Stability is the End of the Search</h2>
+			<p>Distro hopping is an exhausting search for stability. By choosing Tebian, you are choosing to stop searching. You are building your life on the Rock of Debian. One ISO. One menu. The search is over. Welcome to the end of the hop.</p>
+		</article>
+
+		<div class="nav">
+			<a href="/blog">← All Journal Entries</a>
+			<a href="/docs/hardware-offloading">Next: Hardware Offloading Manual →</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	.post { max-width: 850px; width: 100%; padding: 4rem 1rem; }
+	header { margin-bottom: 3rem; text-align: center; }
+	.category { color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; font-size: 0.8rem; }
+	h1 { font-size: 3rem; color: #fff; margin: 0.5rem 0; line-height: 1.1; font-weight: 800; }
+	.meta { color: #585b70; font-size: 0.9rem; }
+	.lead { font-size: 1.25rem; color: #cdd6f4; line-height: 1.6; margin-bottom: 2rem; border-left: 3px solid var(--accent); padding-left: 1.5rem; }
+	h2 { color: var(--accent); font-size: 2rem; margin: 3rem 0 1.5rem 0; border-bottom: 1px solid rgba(137, 180, 250, 0.2); padding-bottom: 0.5rem; }
+	p { color: #9399b2; line-height: 1.8; margin-bottom: 1.5rem; font-size: 1.1rem; }
+	.nav { margin-top: 4rem; padding-top: 2rem; border-top: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; }
+	.nav a { color: #6c7086; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+	.nav a:hover { color: var(--accent); }
+</style>

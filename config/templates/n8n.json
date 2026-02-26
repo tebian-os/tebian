@@ -1,0 +1,11 @@
+{
+  "name": "n8n",
+  "description": "Workflow automation",
+  "image": "n8nio/n8n:latest",
+  "ports": ["5678:5678"],
+  "volumes": ["/opt/data/n8n:/home/node/.n8n"],
+  "env": {
+    "N8N_HOST": "localhost",
+    "N8N_PORT": "5678"
+  }
+}

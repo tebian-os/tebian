@@ -1,0 +1,154 @@
+# Sway 2026 Config - Tebian
+# Theme-agnostic base config. Colors loaded from ~/.config/sway/theme
+
+set $mod Mod4
+set $term kitty
+
+font pango:JetBrainsMono Nerd Font 11
+
+# Load theme colors (must come before they're used)
+include ~/.config/sway/theme
+
+# Window Colors: <border> <bg> <text> <indicator> <child_border>
+client.focused          $accent $base $text $accent $accent
+client.focused_inactive $surface1 $base $text $surface1 $surface1
+client.unfocused        $base $base $text $base $base
+client.urgent           $red $base $text $red $red
+
+# Gaps & Visuals (can be overridden in theme)
+smart_borders on
+floating_modifier $mod normal
+mouse_warping none
+focus_follows_mouse no
+workspace_layout default
+
+# First boot onboarding (runs once)
+exec ~/.local/bin/tebian-onboard
+
+# Wallpaper
+exec swaybg -i ~/.local/share/backgrounds/tebian/default.jpg -m fill
+
+# Optional: Smart Autotiling (only if installed)
+exec_always bash -c 'pkill -x autotiling; command -v autotiling && autotiling'
+
+# Optional: Notification daemon (only if installed)
+exec_always bash -c 'pkill -x mako; command -v mako && mako'
+
+# Optional: Polkit authentication agent (only if installed)
+exec_always bash -c 'pkill -x lxpolkit; command -v lxpolkit && lxpolkit'
+
+# Optional: Clipboard history (only if installed)
+exec_always bash -c 'pkill -f "wl-paste --watch cliphist"; command -v wl-paste && command -v cliphist && wl-paste --watch cliphist store'
+
+# Optional: Screen lock & idle (only if installed)
+exec bash -c 'command -v swayidle && swayidle -w timeout 300 "gtklock -d" timeout 600 "swaymsg output * power off" resume "swaymsg output * power on" before-sleep "gtklock -d"'
+
+# Keybindings
+bindsym $mod+Return exec $term
+bindsym $mod+Shift+q kill
+bindsym $mod+d exec ~/.local/bin/tebian-menu
+bindsym $mod+a exec ~/.local/bin/tebian-drawer
+bindsym $mod+f fullscreen toggle
+bindsym $mod+Shift+slash exec tebian-keys
+bindsym $mod+s exec tebian-settings
+bindsym $mod+Shift+e exec swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit"
+
+# WOB (Wayland Overlay Bar) Setup - optional
+set $wob_sock $XDG_RUNTIME_DIR/wob.sock
+set $wob_vol ~/.local/bin/wob-vol
+exec_always bash -c 'command -v wob && rm -f $XDG_RUNTIME_DIR/wob.sock && mkfifo $XDG_RUNTIME_DIR/wob.sock && tail -f $XDG_RUNTIME_DIR/wob.sock 2>/dev/null | wob &'
+
+# Media Keys with WOB Feedback (using awk for proper decimal handling)
+bindsym XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+ && sh -c 'command -v wob && wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk "{print int(\$2*100)}" > $wob_sock'
+bindsym XF86AudioLowerVolume exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- && sh -c 'command -v wob && wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk "{print int(\$2*100)}" > $wob_sock'
+bindsym XF86AudioMicMute exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle && sh -c 'command -v wob && wpctl get-volume @DEFAULT_AUDIO_SOURCE@ | grep -q MUTED && echo 0 > $wob_sock || echo 100 > $wob_sock'
+bindsym XF86AudioMute exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle && sh -c 'command -v wob && wpctl get-volume @DEFAULT_AUDIO_SINK@ | grep -q MUTED && echo 0 > $wob_sock || wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk "{print int(\$2*100)}" > $wob_sock'
+bindsym XF86MonBrightnessUp exec brightnessctl set +5% && sh -c 'command -v wob && brightnessctl -m | awk -F, "{print \$4}" | tr -d % > $wob_sock'
+bindsym XF86MonBrightnessDown exec brightnessctl set 5%- && sh -c 'command -v wob && brightnessctl -m | awk -F, "{print \$4}" | tr -d % > $wob_sock'
+
+# Clipboard history - optional
+bindsym $mod+v exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null; command -v cliphist && cliphist list | tfuzzel -d -p "Clipboard | " | cliphist decode | wl-copy'
+
+# Screenshots
+bindsym Print exec bash -c 'grim -g "$(slurp)" - | wl-copy && notify-send "Screenshot" "Region copied to clipboard"'
+bindsym Shift+Print exec bash -c 'mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png && notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"'
+
+# Navigation
+bindsym $mod+Left focus left
+bindsym $mod+Right focus right
+bindsym $mod+Up focus up
+bindsym $mod+Down focus down
+
+# Workspaces
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+
+# Tiling & Floating
+bindsym $mod+space floating toggle
+bindsym $mod+Shift+space focus mode_toggle
+
+# Move Windows
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Right move right
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Down move down
+
+# Resize Mode
+mode "resize" {
+    bindsym Left resize shrink width 10px
+    bindsym Right resize grow width 10px
+    bindsym Up resize shrink height 10px
+    bindsym Down resize grow height 10px
+    
+    bindsym Return mode default
+    bindsym Escape mode default
+}
+bindsym $mod+r mode resize
+
+# Status Bar (visible by default, toggle via UI menu)
+bar {
+    position top
+    status_command ~/.local/bin/status.sh
+    mode dock
+    
+    bindsym button1 exec tebian-menu
+    
+    colors {
+        background $base
+        statusline $text
+        separator  $surface0
+
+        focused_workspace  $accent $surface0 $text
+        active_workspace   $surface0 $surface0 $text
+        inactive_workspace $surface1 $surface1 $text
+        urgent_workspace   $red $base $text
+    }
+}
+
+# Touchpad (works on any laptop)
+input type:touchpad {
+    natural_scroll enabled
+    tap enabled
+    dwt enabled
+    middle_emulation enabled
+}
+
+# --- User Customizations ---
+include ~/.config/sway/config.user

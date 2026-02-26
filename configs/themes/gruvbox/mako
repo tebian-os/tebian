@@ -1,0 +1,9 @@
+# Gruvbox Theme - Mako Notifications
+font=JetBrainsMono Nerd Font 11
+background-color=#282828
+text-color=#EBDBB2
+border-color=#FE8019
+border-size=2
+padding=12
+margin=8
+default-timeout=5000

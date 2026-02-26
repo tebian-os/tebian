@@ -1,0 +1,107 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+get_term() {
+    if command -v kitty &>/dev/null; then echo "kitty -e"
+    elif command -v foot &>/dev/null; then echo "foot -e"
+    elif command -v alacritty &>/dev/null; then echo "alacritty -e"
+    elif command -v gnome-terminal &>/dev/null; then echo "gnome-terminal --"
+    elif command -v xterm &>/dev/null; then echo "xterm -e"
+    else echo "kitty -e"
+    fi
+}
+
+TERM_CMD=$(get_term)
+
+# Ensure only one instance runs at a time
+LOCK_FILE="/tmp/tebian-settings.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    notify-send "Settings" "Already running" 2>/dev/null
+    exit 0
+fi
+
+# Transaction log — records installs, config changes, toggles
+TEBIAN_LOG="$HOME/.local/share/tebian-settings.log"
+mkdir -p "$HOME/.local/share"
+tlog() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$TEBIAN_LOG"
+}
+# Wrapper: notify + log in one call
+tnotify() {
+    local title="$1" msg="$2"
+    notify-send "$title" "$msg" 2>/dev/null
+    tlog "$title: $msg"
+}
+
+# Source modular function files
+SETTINGS_DIR="${SCRIPT_DIR:-$HOME/.local/bin}/tebian-settings.d"
+for _mod in "$SETTINGS_DIR"/*.sh; do
+    [ -f "$_mod" ] && source "$_mod"
+done
+unset _mod
+
+# Tebian Control Center - V2.0 (Modular)
+
+show_main_menu() {
+    while true; do
+        OPTIONS="󰖩 WiFi\0icon\x1fnetwork-wireless
+󰂯 Bluetooth\0icon\x1fbluetooth
+󰔡 Audio\0icon\x1faudio-speakers
+󰌢 Screen (Print: screenshot)\0icon\x1fvideo-display
+󰏘 Themes\0icon\x1fpreferences-desktop-theme
+󰚰 System Update\0icon\x1fsystem-software-update
+󰐥 Power\0icon\x1fsystem-shutdown
+─────────────────────────────────
+󰇄 More\0icon\x1fapplications-system
+─────────────────────────────────
+󰌍 Back (Mod+D: app launcher)"
+
+        CHOICE=$(echo -e "$OPTIONS" | tfuzzel -d -p " 󰀻 Settings | ")
+
+        if [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]]; then
+            tebian-menu &
+            return
+        fi
+
+        if [[ "$CHOICE" =~ "WiFi" ]]; then
+            wifi_menu
+        elif [[ "$CHOICE" =~ "Bluetooth" ]]; then
+            bluetooth_menu
+        elif [[ "$CHOICE" =~ "Audio" ]]; then
+            audio_menu
+        elif [[ "$CHOICE" =~ "Screen" ]]; then
+            screen_all_menu
+        elif [[ "$CHOICE" =~ "Themes" ]]; then
+            theme_menu
+        elif [[ "$CHOICE" =~ "System Update" ]]; then
+            $TERM_CMD update-all
+        elif [[ "$CHOICE" =~ "Power" ]]; then
+            power_menu
+        elif [[ "$CHOICE" =~ "More" ]]; then
+            more_menu
+        fi
+    done
+}
+
+# --- Flag Handling ---
+if [[ "$1" == "--power" ]]; then
+    power_menu
+elif [[ "$1" == "--ui" ]]; then
+    ui_menu
+elif [[ "$1" == "--lock" ]]; then
+    lock_menu
+elif [[ "$1" == "--feel" ]]; then
+    feel_menu
+elif [[ "$1" == "--packages" ]]; then
+    package_browser
+else
+    show_main_menu
+fi

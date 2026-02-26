@@ -1,0 +1,8 @@
+{
+  "name": "Gitea",
+  "description": "Lightweight Git server",
+  "image": "gitea/gitea:latest",
+  "ports": ["3000:3000", "2222:22"],
+  "volumes": ["/opt/data/gitea:/data"],
+  "env": {}
+}

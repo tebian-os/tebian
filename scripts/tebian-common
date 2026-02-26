@@ -1,0 +1,288 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN COMMON LIBRARY (V2.0)
+# Shared functions for error handling, logging, and utilities
+# ==============================================================================
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Logging
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+log_debug() { [ "${TEBIAN_DEBUG:-0}" = "1" ] && echo -e "${BLUE}[DEBUG]${NC} $1"; }
+
+# Error handling
+tebian_error() {
+    local exit_code=$?
+    log_error "Script failed at line $1 (exit code: $exit_code)"
+    if [ "${TEBIAN_DEBUG:-0}" = "1" ]; then
+        log_error "Command: $(sed -n "${1}p" "$0")"
+    fi
+    exit $exit_code
+}
+
+# Error handling (Optional - Call explicitly)
+trap_error() {
+    set -e
+    trap 'tebian_error $LINENO' ERR
+}
+
+# Check if running in Wayland
+is_wayland() {
+    [ -n "$WAYLAND_DISPLAY" ]
+}
+
+# Check if running in X11
+is_x11() {
+    [ -n "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]
+}
+
+# Check if command exists
+has_cmd() {
+    command -v "$1" &> /dev/null
+}
+
+# Require command or exit
+require_cmd() {
+    if ! has_cmd "$1"; then
+        log_error "Required command not found: $1"
+        log_info "Install with: sudo apt install $2"
+        exit 1
+    fi
+}
+
+# Require root/sudo
+require_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This command requires root. Run with sudo."
+        exit 1
+    fi
+}
+
+# Check Tebian installation
+check_tebian() {
+    local tebian_dir="${TEBIAN_DIR:-$HOME/Tebian}"
+    if [ ! -d "$tebian_dir" ]; then
+        log_error "Tebian not found at $tebian_dir"
+        log_info "Set TEBIAN_DIR environment variable if installed elsewhere"
+        exit 1
+    fi
+    export TEBIAN_DIR
+}
+
+# Safe copy with backup
+safe_copy() {
+    local src="$1"
+    local dst="$2"
+    
+    if [ ! -f "$src" ]; then
+        log_error "Source file not found: $src"
+        return 1
+    fi
+    
+    if [ -f "$dst" ]; then
+        cp "$dst" "$dst.bak.$(date +%s)"
+        log_debug "Backed up: $dst"
+    fi
+    
+    cp "$src" "$dst"
+    log_debug "Copied: $src -> $dst"
+}
+
+# Confirm action
+confirm() {
+    local prompt="${1:-Continue?}"
+    local default="${2:-n}"
+    
+    if [ "$default" = "y" ]; then
+        read -p "$prompt [Y/n] " choice
+        [[ -z "$choice" || "$choice" =~ ^[Yy] ]]
+    else
+        read -p "$prompt [y/N] " choice
+        [[ "$choice" =~ ^[Yy] ]]
+    fi
+}
+
+# Fuzzel Wrapper (Handles Icon Toggling)
+tfuzzel() {
+    if [ -f "$HOME/.config/tebian/no_icons" ]; then
+        # Text Mode: Strip Nerd Fonts (PUA: E000-F8FF, F0000-FFFFD) and Emoji (1F300-1FAFF)
+        perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@"
+    else
+        # Icon Mode (Default): Pass through
+        fuzzel "$@"
+    fi
+}
+
+# ==============================================================================
+# HARDWARE DETECTION
+# Sets: GPU_TYPE, CPU_TYPE, IS_LAPTOP, IS_HIDPI, HAS_NVIDIA, HAS_AMD_GPU, HAS_INTEL_GPU
+# ==============================================================================
+detect_hardware() {
+    local quiet="${1:-false}"
+    _hw_msg() { [ "$quiet" != "true" ] && echo "  $1"; }
+
+    # GPU
+    HAS_NVIDIA=$(lspci 2>/dev/null | grep -i nvidia | head -1)
+    HAS_AMD_GPU=$(lspci 2>/dev/null | grep -i "AMD.*VGA\|AMD.*3D\|AMD.*Display" | head -1)
+    HAS_INTEL_GPU=$(lspci 2>/dev/null | grep -i "Intel.*VGA\|Intel.*Display" | head -1)
+
+    if [ -n "$HAS_NVIDIA" ]; then
+        GPU_TYPE="NVIDIA"
+        _hw_msg "GPU: NVIDIA detected"
+    elif [ -n "$HAS_AMD_GPU" ]; then
+        GPU_TYPE="AMD"
+        _hw_msg "GPU: AMD detected"
+    elif [ -n "$HAS_INTEL_GPU" ]; then
+        GPU_TYPE="Intel"
+        _hw_msg "GPU: Intel detected"
+    else
+        GPU_TYPE="Unknown"
+        _hw_msg "GPU: Unknown/VM"
+    fi
+
+    # CPU (with lscpu fallback)
+    CPU_VENDOR=$(grep -m1 "vendor_id" /proc/cpuinfo 2>/dev/null | awk '{print $3}')
+    if [ -z "$CPU_VENDOR" ]; then
+        CPU_VENDOR=$(lscpu 2>/dev/null | grep "Vendor ID" | awk '{print $3}')
+    fi
+
+    if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
+        CPU_TYPE="Intel"
+        _hw_msg "CPU: Intel detected"
+    elif [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
+        CPU_TYPE="AMD"
+        _hw_msg "CPU: AMD detected"
+    else
+        CPU_TYPE="Unknown"
+        _hw_msg "CPU: Unknown"
+    fi
+
+    # Laptop (battery check)
+    HAS_BATTERY=$(ls /sys/class/power_supply/ 2>/dev/null | grep -i bat | head -1)
+    if [ -n "$HAS_BATTERY" ]; then
+        IS_LAPTOP=true
+        _hw_msg "Device: Laptop (battery detected)"
+    else
+        IS_LAPTOP=false
+        _hw_msg "Device: Desktop (no battery)"
+    fi
+
+    # HiDPI (Wayland-native via swaymsg)
+    local detect_res
+    detect_res=$(swaymsg -t get_outputs 2>/dev/null | grep -oP '"width":\s*\K[0-9]+' | head -1)
+    if [[ -n "$detect_res" && "$detect_res" -ge 3000 ]] 2>/dev/null; then
+        IS_HIDPI=true
+        _hw_msg "Display: HiDPI detected (${detect_res} width)"
+    else
+        IS_HIDPI=false
+        _hw_msg "Display: Standard resolution"
+    fi
+}
+
+# ==============================================================================
+# FLOATING MODE SETUP
+# Writes floating window rules + edge snap bindings to config.user
+# ==============================================================================
+setup_floating_mode() {
+    local config_user="$HOME/.config/sway/config.user"
+    mkdir -p "$HOME/.config/sway"
+
+    # Remove existing floating mode lines first (idempotent)
+    sed -i '/# tebian-floating-mode/d' "$config_user"
+
+    cat >> "$config_user" << 'EOF'
+for_window [app_id=".*"] floating enable # tebian-floating-mode
+for_window [class=".*"] floating enable # tebian-floating-mode
+bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center # tebian-floating-mode
+exec_always bash -c 'pkill -f tebian-edge-snap; sleep 0.2; tebian-edge-snap &' # tebian-floating-mode
+EOF
+}
+
+# Remove floating mode from config.user
+remove_floating_mode() {
+    local config_user="$HOME/.config/sway/config.user"
+    sed -i '/# tebian-floating-mode/d' "$config_user"
+    pkill -f tebian-edge-snap 2>/dev/null
+}
+
+# ==============================================================================
+# SAFE SED HELPERS
+# ==============================================================================
+
+# Append a line to a file only if it doesn't already exist
+idempotent_append() {
+    local line="$1"
+    local file="$2"
+    grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
+}
+
+# Sed replace scoped to within a block (e.g. only within bar { ... })
+# Usage: safe_sed_replace "bar {" "}" "s/old/new/" file
+safe_sed_replace() {
+    local block_start="$1"
+    local block_end="$2"
+    local sed_expr="$3"
+    local file="$4"
+
+    awk -v start="$block_start" -v end_pat="$block_end" -v expr="$sed_expr" '
+    BEGIN { in_block=0 }
+    $0 ~ start { in_block=1 }
+    in_block && $0 ~ end_pat { in_block=0 }
+    in_block {
+        cmd = "echo " sq($0) " | sed -E " sq(expr)
+        cmd | getline result
+        close(cmd)
+        print result
+        next
+    }
+    { print }
+    function sq(s) { gsub(/'\''/, "'\''\\'\'''\''", s); return "'\''" s "'\''" }
+    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+# Sources.list-aware sed: replaces codename without corrupting hyphenated variants
+# Usage: safe_sources_sed "trixie" "testing" /etc/apt/sources.list
+safe_sources_sed() {
+    local old="$1"
+    local new="$2"
+    local file="$3"
+    # Use word boundaries to avoid trixie-security → testing-security
+    sudo sed -i "s/\b${old}\b/${new}/g" "$file"
+}
+
+# Idempotent sources.list component addition (non-free, contrib, etc.)
+# Usage: safe_sources_add_components /etc/apt/sources.list "contrib non-free non-free-firmware"
+safe_sources_add_components() {
+    local file="$1"
+    local components="$2"
+    local tmpfile
+    tmpfile=$(mktemp)
+
+    while IFS= read -r line; do
+        # Only modify deb/deb-src lines that have "main"
+        if [[ "$line" =~ ^deb[[:space:]] || "$line" =~ ^deb-src[[:space:]] ]] && [[ "$line" == *"main"* ]]; then
+            local new_line="$line"
+            for comp in $components; do
+                if [[ "$new_line" != *"$comp"* ]]; then
+                    new_line="$new_line $comp"
+                fi
+            done
+            echo "$new_line"
+        else
+            echo "$line"
+        fi
+    done < "$file" > "$tmpfile"
+
+    sudo cp "$tmpfile" "$file"
+    rm -f "$tmpfile"
+}

@@ -1,0 +1,21 @@
+# Rose Pine Theme - Sway Colors (Soft Dark, Muted Pinks)
+# Included by main config
+
+set $base      #191724
+set $text      #E0DEF4
+set $surface0  #1F1D2E
+set $surface1  #26233A
+set $overlay0  #403D52
+set $accent    #EB6F92
+set $pink      #EB6F92
+set $muted     #908CAA
+set $purple    #C4A7E7
+set $green     #9CCFD8
+set $red       #EB6F92
+set $yellow    #F6C177
+set $blue      #31748F
+
+# Gaps & Visuals
+gaps inner 12
+gaps outer 4
+default_border pixel 2

@@ -1,0 +1,56 @@
+# Power button opens Tebian power menu
+bindsym XF86PowerOff exec tebian-settings --power
+
+# Workspace manager (Mod+W)
+bindsym $mod+w exec tebian-workspace
+
+# ==============================================================================
+# USER CUSTOMIZATIONS - Add your own below
+# ==============================================================================
+
+# --- Example: Custom Keybindings ---
+# bindsym $mod+b exec firefox
+# bindsym $mod+Shift+s exec ~/.local/bin/screenshot.sh
+
+# --- Example: Window Rules ---
+# for_window [app_id="pavucontrol"] floating enable
+# for_window [title="File Transfer*"] floating enable
+# for_window [app_id="zenity"] floating enable
+
+# --- Example: Startup Apps ---
+# exec discord
+# exec thunderbird
+# exec nextcloud
+
+# --- Example: Workspace Names ---
+# set $ws1 "1: Term"
+# set $ws2 "2: Web"
+# set $ws3 "3: Code"
+# bindsym $mod+1 workspace $ws1
+# bindsym $mod+2 workspace $ws2
+# bindsym $mod+3 workspace $ws3
+
+# --- Example: Assign Apps to Workspaces ---
+# assign [app_id="firefox"] $ws2
+# assign [app_id="code"] $ws3
+
+# --- Example: External Monitor Setup ---
+# output HDMI-A-1 pos 1920 0 res 1920x1080
+# output HDMI-A-1 scale 1.25
+
+# --- Example: Change Wallpaper ---
+# exec swaybg -i ~/Pictures/my-wallpaper.jpg -m fill
+
+# Workspace back-and-forth (press same workspace key to toggle back)
+workspace_auto_back_and_forth yes
+bindsym $mod+Tab workspace back_and_forth
+bindsym $mod+l exec gtklock -d
+for_window [app_id=".*"] floating enable # tebian-floating-mode
+for_window [class=".*"] floating enable # tebian-floating-mode
+bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
+bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center # tebian-floating-mode
+exec_always bash -c 'pkill -f tebian-edge-snap; sleep 0.2; tebian-edge-snap &' # tebian-floating-mode
+default_border normal 2 # tebian-titlebars
+default_floating_border normal 2 # tebian-titlebars

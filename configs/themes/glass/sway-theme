@@ -1,0 +1,19 @@
+# Glass Theme - Sway Colors (Catppuccin Mocha)
+# Included by main config
+
+# Colors
+set $base      #1e1e2e
+set $text      #cdd6f4
+set $surface0  #313244
+set $surface1  #45475a
+set $overlay0  #6c7086
+set $accent    #b4befe
+set $lavender  #b4befe
+set $mauve     #cba6f7
+set $red       #f38ba8
+set $green     #a6e3a1
+
+# Gaps & Visuals
+gaps inner 15
+gaps outer 0
+default_border pixel 3

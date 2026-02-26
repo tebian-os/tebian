@@ -1,0 +1,58 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN VERSION CHECK (V1.0)
+# Returns current Tebian version and checks for script updates
+# ==============================================================================
+
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+VERSION_FILE="$TEBIAN_DIR/VERSION"
+
+get_version() {
+    if [ -f "$VERSION_FILE" ]; then
+        cat "$VERSION_FILE"
+    else
+        echo "unknown"
+    fi
+}
+
+check_scripts() {
+    local outdated=0
+    local scripts=("bootstrap.sh" "desktop.sh" "uninstall.sh" "build-iso.sh")
+    local local_scripts=("tebian-menu" "tebian-settings" "tebian-theme" "tebian-welcome" "status.sh" "update-all")
+    
+    echo "Checking for script updates..."
+    
+    for script in "${local_scripts[@]}"; do
+        local_file="$HOME/.local/bin/$script"
+        source_file="$TEBIAN_DIR/scripts/$script"
+        
+        if [ -f "$source_file" ] && [ -f "$local_file" ]; then
+            if ! diff -q "$source_file" "$local_file" > /dev/null 2>&1; then
+                echo "  ⚠️  $script is outdated"
+                outdated=1
+            fi
+        fi
+    done
+    
+    if [ $outdated -eq 1 ]; then
+        echo ""
+        echo "Run: cp $TEBIAN_DIR/scripts/* ~/.local/bin/"
+        return 1
+    else
+        echo "  ✅ All scripts up to date"
+        return 0
+    fi
+}
+
+case "${1:-}" in
+    --check|-c)
+        check_scripts
+        ;;
+    --json)
+        echo "{\"version\": \"$(get_version)\", \"path\": \"$TEBIAN_DIR\"}"
+        ;;
+    *)
+        echo "Tebian $(get_version)"
+        echo "Path: $TEBIAN_DIR"
+        ;;
+esac

@@ -1,0 +1,10 @@
+{
+  "name": "PostgreSQL",
+  "description": "PostgreSQL database",
+  "image": "postgres:16",
+  "ports": ["5432:5432"],
+  "volumes": ["/opt/data/postgres:/var/lib/postgresql/data"],
+  "env": {
+    "POSTGRES_PASSWORD": "tebian123"
+  }
+}

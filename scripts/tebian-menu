@@ -1,0 +1,78 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN MASTER MENU (V1.0)
+# The unified entry point for Apps, Settings, and Power.
+# ==============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+# 1. Build menu dynamically based on what's installed
+APPS=""
+
+# Detect browsers
+if command -v firefox &>/dev/null; then
+    APPS+="󰈹 Firefox\0icon\x1fbrowser\n"
+elif command -v firefox-esr &>/dev/null; then
+    APPS+="󰈹 Firefox ESR\0icon\x1fbrowser\n"
+elif [ -f "$HOME/Applications/Zen.AppImage" ]; then
+    APPS+="󰈹 Zen Browser\0icon\x1fbrowser\n"
+elif command -v chromium &>/dev/null; then
+    APPS+="󰈹 Chromium\0icon\x1fbrowser\n"
+fi
+
+# Core apps (always present)
+APPS+="󰆍 Terminal\0icon\x1fterminal\n"
+APPS+="󰝰 File Manager\0icon\x1fsystem-file-manager\n"
+
+# Detect optional apps
+command -v code &>/dev/null && APPS+="󰨞 VS Code\0icon\x1fvisual-studio-code\n"
+command -v parsec &>/dev/null && APPS+="󰒓 Parsec\0icon\x1fvideo-display\n"
+
+# System entries (always present)
+APPS+="󰚰 System Settings\0icon\x1fpreferences-system\n"
+APPS+="󰐥 Power Options\0icon\x1fsystem-shutdown"
+
+# 2. Launch the Menu
+CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰀻 Tebian | " --width 30)
+
+if [ -z "$CHOICE" ]; then exit 0; fi
+
+# 3. Logic Hub
+case "$CHOICE" in
+    *"Firefox ESR"*)
+        firefox-esr &
+        ;;
+    *"Firefox"*)
+        firefox &
+        ;;
+    *"Zen Browser"*)
+        ~/Applications/Zen.AppImage &
+        ;;
+    *"Chromium"*)
+        chromium &
+        ;;
+    *"Terminal"*)
+        swaymsg exec \$term &
+        ;;
+    *"File Manager"*)
+        pcmanfm &
+        ;;
+    *"VS Code"*)
+        code &
+        ;;
+    *"Parsec"*)
+        parsec &
+        ;;
+    *"System Settings"*)
+        tebian-settings
+        ;;
+    *"Power Options"*)
+        tebian-settings --power
+        ;;
+esac

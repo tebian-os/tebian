@@ -1,0 +1,20 @@
+# Everforest Theme - Sway Colors (Nature/Forest)
+# Included by main config
+
+set $base      #2D353B
+set $text      #D3C6AA
+set $surface0  #343F44
+set $surface1  #3D484D
+set $overlay0  #475258
+set $accent    #A7C080
+set $green     #A7C080
+set $blue      #7FBBB3
+set $yellow    #DBBC7F
+set $red       #E67E80
+set $purple    #D699B6
+set $orange    #E69875
+
+# Gaps & Visuals
+gaps inner 12
+gaps outer 4
+default_border pixel 2

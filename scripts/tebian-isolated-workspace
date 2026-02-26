@@ -1,0 +1,347 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN ISOLATED WORKSPACE
+# Whonix-style gateway + workstation VMs via libvirt/QEMU
+# Gateway VM runs Tor, workstation can ONLY reach internet through gateway.
+# Usage: tebian-isolated-workspace [setup|start|stop|destroy|status]
+# ==============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[workspace]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[workspace]${NC} $1"; }
+log_error() { echo -e "${RED}[workspace]${NC} $1" >&2; }
+
+ACTION="${1:-status}"
+WORKSPACE_DIR="$HOME/.local/share/tebian-workspace"
+GW_NAME="tebian-gateway"
+WS_NAME="tebian-workstation"
+NET_NAME="tebian-isolated"
+GW_IP="10.66.0.1"
+WS_IP="10.66.0.2"
+
+ensure_kvm() {
+    if ! command -v virsh &>/dev/null; then
+        log_info "Installing KVM/QEMU/libvirt..."
+        sudo apt update
+        sudo apt install -y qemu-system-x86 qemu-utils libvirt-daemon-system virtinst bridge-utils
+        sudo adduser "$USER" libvirt 2>/dev/null || true
+        sudo adduser "$USER" kvm 2>/dev/null || true
+        sudo systemctl enable --now libvirtd
+    fi
+    if ! command -v virt-install &>/dev/null; then
+        sudo apt install -y virtinst
+    fi
+}
+
+create_isolated_network() {
+    if virsh net-info "$NET_NAME" &>/dev/null; then
+        log_info "Isolated network already exists"
+        return
+    fi
+
+    log_info "Creating isolated network ($NET_NAME)..."
+    cat <<EOF > "$WORKSPACE_DIR/isolated-net.xml"
+<network>
+  <name>$NET_NAME</name>
+  <bridge name="virbr-tebian" stp="on" delay="0"/>
+  <ip address="$GW_IP" netmask="255.255.255.0">
+    <dhcp>
+      <range start="10.66.0.100" end="10.66.0.200"/>
+    </dhcp>
+  </ip>
+</network>
+EOF
+    virsh net-define "$WORKSPACE_DIR/isolated-net.xml"
+    virsh net-start "$NET_NAME"
+    virsh net-autostart "$NET_NAME"
+    log_info "Isolated network created"
+}
+
+build_gateway_image() {
+    local img="$WORKSPACE_DIR/gateway.qcow2"
+    if [ -f "$img" ]; then
+        log_info "Gateway image already exists"
+        return
+    fi
+
+    log_info "Building gateway VM image..."
+    qemu-img create -f qcow2 "$img" 4G
+
+    # Create gateway setup script (runs on first boot inside the VM)
+    cat <<'GWSCRIPT' > "$WORKSPACE_DIR/gateway-setup.sh"
+#!/bin/bash
+# Gateway VM setup — runs inside the VM
+apt-get update
+apt-get install -y tor iptables
+
+# Configure Tor as transparent proxy
+cat >> /etc/tor/torrc <<TORCONF
+
+# Tebian gateway transparent proxy
+VirtualAddrNetworkIPv4 10.192.0.0/10
+AutomapHostsOnResolve 1
+TransPort 0.0.0.0:9040
+DNSPort 0.0.0.0:5353
+TORCONF
+
+systemctl enable tor
+systemctl start tor
+
+# Enable IP forwarding
+echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-gateway.conf
+sysctl -p /etc/sysctl.d/99-gateway.conf
+
+# iptables: redirect all workstation traffic through Tor
+TOR_UID=$(id -u debian-tor)
+iptables -t nat -A PREROUTING -i enp1s0 -p tcp --syn -j REDIRECT --to-ports 9040
+iptables -t nat -A PREROUTING -i enp1s0 -p udp --dport 53 -j REDIRECT --to-ports 5353
+iptables -A FORWARD -i enp1s0 -j ACCEPT
+iptables -A FORWARD -o enp1s0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+# Save iptables
+apt-get install -y iptables-persistent
+netfilter-persistent save
+GWSCRIPT
+    chmod +x "$WORKSPACE_DIR/gateway-setup.sh"
+    log_info "Gateway image created (4GB)"
+}
+
+build_workstation_image() {
+    local img="$WORKSPACE_DIR/workstation.qcow2"
+    if [ -f "$img" ]; then
+        log_info "Workstation image already exists"
+        return
+    fi
+
+    log_info "Building workstation VM image..."
+    qemu-img create -f qcow2 "$img" 20G
+    log_info "Workstation image created (20GB)"
+}
+
+setup_workspace() {
+    log_info "Setting up Tebian Isolated Workspace..."
+    echo ""
+    log_warn "This creates two VMs:"
+    echo "  Gateway    — Minimal Debian, runs Tor, routes traffic"
+    echo "  Workstation — Your workspace, can ONLY reach internet through Gateway"
+    echo ""
+    log_warn "Requirements: ~25GB disk, ~2GB RAM"
+    echo ""
+
+    ensure_kvm
+    mkdir -p "$WORKSPACE_DIR"
+
+    # Check for Debian ISO
+    local iso="$WORKSPACE_DIR/debian-netinst.iso"
+    if [ ! -f "$iso" ]; then
+        log_info "Downloading Debian netinst ISO..."
+        local arch
+        arch=$(dpkg --print-architecture)
+        curl -fSL "https://cdimage.debian.org/debian-cd/current/${arch}/iso-cd/debian-13.2.0-${arch}-netinst.iso" \
+            -o "$iso" || {
+            log_error "Failed to download Debian ISO."
+            echo "Download manually and place at: $iso"
+            return 1
+        }
+    fi
+
+    # Create network and disk images
+    create_isolated_network
+    build_gateway_image
+    build_workstation_image
+
+    # Define Gateway VM
+    if ! virsh dominfo "$GW_NAME" &>/dev/null; then
+        log_info "Defining gateway VM..."
+        virt-install \
+            --name "$GW_NAME" \
+            --ram 512 \
+            --vcpus 1 \
+            --disk path="$WORKSPACE_DIR/gateway.qcow2",format=qcow2 \
+            --cdrom "$iso" \
+            --os-variant debian12 \
+            --network network=default \
+            --network network="$NET_NAME" \
+            --graphics spice \
+            --noautoconsole \
+            --print-xml > "$WORKSPACE_DIR/gateway-vm.xml"
+        virsh define "$WORKSPACE_DIR/gateway-vm.xml"
+        log_info "Gateway VM defined"
+    fi
+
+    # Define Workstation VM
+    if ! virsh dominfo "$WS_NAME" &>/dev/null; then
+        log_info "Defining workstation VM..."
+        virt-install \
+            --name "$WS_NAME" \
+            --ram 2048 \
+            --vcpus 2 \
+            --disk path="$WORKSPACE_DIR/workstation.qcow2",format=qcow2 \
+            --cdrom "$iso" \
+            --os-variant debian12 \
+            --network network="$NET_NAME" \
+            --graphics spice \
+            --noautoconsole \
+            --print-xml > "$WORKSPACE_DIR/workstation-vm.xml"
+        virsh define "$WORKSPACE_DIR/workstation-vm.xml"
+        log_info "Workstation VM defined"
+    fi
+
+    echo ""
+    log_info "Setup complete!"
+    echo ""
+    echo "  Next steps:"
+    echo "  1. Start Gateway:     tebian-isolated-workspace start"
+    echo "  2. Install Debian on Gateway VM (minimal, no desktop)"
+    echo "  3. Run gateway-setup.sh inside Gateway VM"
+    echo "  4. Install Debian on Workstation VM (with desktop)"
+    echo "  5. Workstation traffic automatically routes through Tor"
+    echo ""
+    echo "  Gateway setup script: $WORKSPACE_DIR/gateway-setup.sh"
+    echo "  Copy it into the Gateway VM after Debian install."
+    echo ""
+    echo "  Architecture:"
+    echo "  ┌──────────────┐     ┌──────────────┐     ┌─────────┐"
+    echo "  │ Workstation  │────▶│   Gateway     │────▶│   Tor   │──▶ Internet"
+    echo "  │ (your work)  │     │ (Tor proxy)   │     │ Network │"
+    echo "  └──────────────┘     └──────────────┘     └─────────┘"
+    echo "    10.66.0.x            10.66.0.1"
+    echo "    isolated net only    isolated + default net"
+    echo ""
+}
+
+start_workspace() {
+    log_info "Starting Isolated Workspace..."
+
+    # Start network
+    virsh net-start "$NET_NAME" 2>/dev/null || true
+
+    # Start gateway first
+    if virsh dominfo "$GW_NAME" &>/dev/null; then
+        virsh start "$GW_NAME" 2>/dev/null && log_info "Gateway started" || log_info "Gateway already running"
+    else
+        log_error "Gateway VM not found. Run: tebian-isolated-workspace setup"
+        return 1
+    fi
+
+    # Wait for gateway to boot
+    log_info "Waiting for gateway to initialize..."
+    sleep 5
+
+    # Start workstation
+    if virsh dominfo "$WS_NAME" &>/dev/null; then
+        virsh start "$WS_NAME" 2>/dev/null && log_info "Workstation started" || log_info "Workstation already running"
+    else
+        log_error "Workstation VM not found. Run: tebian-isolated-workspace setup"
+        return 1
+    fi
+
+    echo ""
+    log_info "Workspace running!"
+    echo "  Open virt-manager to access the VMs"
+    echo "  Or: virt-viewer $WS_NAME"
+}
+
+stop_workspace() {
+    log_info "Stopping Isolated Workspace..."
+
+    if virsh dominfo "$WS_NAME" &>/dev/null; then
+        virsh shutdown "$WS_NAME" 2>/dev/null && log_info "Workstation shutting down" || true
+    fi
+
+    if virsh dominfo "$GW_NAME" &>/dev/null; then
+        virsh shutdown "$GW_NAME" 2>/dev/null && log_info "Gateway shutting down" || true
+    fi
+
+    log_info "Workspace stopped"
+}
+
+destroy_workspace() {
+    log_warn "This will DELETE both VMs and all data inside them."
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        return
+    fi
+
+    log_info "Destroying Isolated Workspace..."
+
+    # Stop VMs
+    virsh destroy "$WS_NAME" 2>/dev/null || true
+    virsh destroy "$GW_NAME" 2>/dev/null || true
+
+    # Undefine VMs
+    virsh undefine "$WS_NAME" --remove-all-storage 2>/dev/null || true
+    virsh undefine "$GW_NAME" --remove-all-storage 2>/dev/null || true
+
+    # Remove network
+    virsh net-destroy "$NET_NAME" 2>/dev/null || true
+    virsh net-undefine "$NET_NAME" 2>/dev/null || true
+
+    # Clean up files
+    rm -rf "$WORKSPACE_DIR"
+
+    log_info "Workspace destroyed — all traces removed"
+}
+
+show_status() {
+    echo ""
+    echo "  ┌─────────────────────────────┐"
+    echo "  │  ISOLATED WORKSPACE STATUS  │"
+    echo "  └─────────────────────────────┘"
+    echo ""
+
+    if [ ! -d "$WORKSPACE_DIR" ]; then
+        echo "  Not set up. Run: tebian-isolated-workspace setup"
+        return
+    fi
+
+    # Network
+    if virsh net-info "$NET_NAME" &>/dev/null; then
+        local net_state
+        net_state=$(virsh net-info "$NET_NAME" 2>/dev/null | grep "Active:" | awk '{print $2}')
+        echo "  Network:     $NET_NAME ($net_state)"
+    else
+        echo "  Network:     not defined"
+    fi
+
+    # Gateway
+    if virsh dominfo "$GW_NAME" &>/dev/null; then
+        local gw_state
+        gw_state=$(virsh domstate "$GW_NAME" 2>/dev/null)
+        echo "  Gateway:     $GW_NAME ($gw_state)"
+    else
+        echo "  Gateway:     not defined"
+    fi
+
+    # Workstation
+    if virsh dominfo "$WS_NAME" &>/dev/null; then
+        local ws_state
+        ws_state=$(virsh domstate "$WS_NAME" 2>/dev/null)
+        echo "  Workstation: $WS_NAME ($ws_state)"
+    else
+        echo "  Workstation: not defined"
+    fi
+
+    echo ""
+    echo "  Disk usage:  $(du -sh "$WORKSPACE_DIR" 2>/dev/null | cut -f1)"
+    echo ""
+}
+
+case "$ACTION" in
+    setup)   setup_workspace ;;
+    start)   start_workspace ;;
+    stop)    stop_workspace ;;
+    destroy) destroy_workspace ;;
+    status)  show_status ;;
+    *)
+        echo "Usage: tebian-isolated-workspace [setup|start|stop|destroy|status]"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,127 @@
+window {
+    background-image: url("/usr/share/backgrounds/tebian/default.jpg");
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#form-wrapper {
+    background-color: transparent;
+    border: none;
+    padding: 50px;
+}
+
+entry {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #eceff4;
+    border: 1px solid rgba(136, 192, 208, 0.3);
+    border-radius: 24px;
+    padding: 12px 20px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 18px;
+    caret-color: #88c0d0;
+}
+
+entry:focus {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(136, 192, 208, 0.6);
+}
+
+#password-entry {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #eceff4;
+    border: 1px solid rgba(136, 192, 208, 0.3);
+    border-radius: 24px;
+    padding: 12px 20px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 18px;
+    caret-color: #88c0d0;
+}
+
+button {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(236, 239, 244, 0.6);
+    border: 1px solid rgba(136, 192, 208, 0.3);
+    border-radius: 20px;
+    padding: 10px 40px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 14px;
+    font-weight: bold;
+}
+
+button:hover {
+    background-color: rgba(136, 192, 208, 0.2);
+    color: #eceff4;
+    border-color: rgba(136, 192, 208, 0.6);
+}
+
+#login-button {
+    font-size: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
+    border: none;
+    background: none;
+}
+
+label {
+    color: #eceff4;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 16px;
+}
+
+#welcome-label {
+    font-size: 0px;
+    min-height: 0px;
+    opacity: 0;
+}
+
+#clock-label {
+    color: #eceff4;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 120px;
+    font-weight: bold;
+}
+
+#date-label {
+    color: #d8dee9;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 32px;
+    font-weight: bold;
+}
+
+/* Hide user/session dropdowns — auto-selects last used.
+   To restore: remove the opacity/size overrides below */
+#form-combo {
+    font-size: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
+    border: none;
+    background: none;
+}
+
+#form-label {
+    font-size: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
+}
+
+#power-button {
+    background: none;
+    border: none;
+    color: rgba(236, 239, 244, 0.4);
+}
+
+#power-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #eceff4;
+    border-radius: 12px;
+}

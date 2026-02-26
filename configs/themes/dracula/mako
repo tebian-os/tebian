@@ -1,0 +1,9 @@
+# Dracula Theme - Mako Notifications
+font=JetBrainsMono Nerd Font 11
+background-color=#282A36
+text-color=#F8F8F2
+border-color=#BD93F9
+border-size=2
+padding=12
+margin=8
+default-timeout=5000

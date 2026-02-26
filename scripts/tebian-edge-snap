@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Tebian Edge Snap - poll-based edge snapping for Sway floating mode"""
+import i3ipc
+import time
+import signal
+import sys
+
+THRESHOLD = 80
+POLL_INTERVAL = 0.10
+
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+
+i3 = i3ipc.Connection()
+
+# Track state to avoid re-snapping
+last_snapped_id = None
+last_snapped_pos = None
+prev_positions = {}
+
+def get_focused_floating():
+    tree = i3.get_tree()
+    focused = tree.find_focused()
+    if focused and focused.type == 'floating_con':
+        return focused
+    return None
+
+def get_output_for(x, y, w, h):
+    cx, cy = x + w // 2, y + h // 2
+    for out in i3.get_outputs():
+        r = out.rect
+        if r.x <= cx < r.x + r.width and r.y <= cy < r.y + r.height:
+            return r
+    return None
+
+while True:
+    time.sleep(POLL_INTERVAL)
+
+    try:
+        win = get_focused_floating()
+        if not win:
+            prev_positions.clear()
+            continue
+
+        r = win.rect
+        x, y, w, h = r.x, r.y, r.width, r.height
+        cid = win.id
+        pos = (x, y, w, h)
+
+        # Only act when position just changed (drag ended)
+        prev = prev_positions.get(cid)
+        prev_positions[cid] = pos
+
+        if prev is None or prev == pos:
+            continue
+
+        # Position changed — if this was a snapped window being dragged away, clear it
+        if cid == last_snapped_id and pos != last_snapped_pos:
+            last_snapped_id = None
+            last_snapped_pos = None
+
+        out = get_output_for(x, y, w, h)
+        if not out:
+            continue
+
+        ox, oy, ow, oh = out.x, out.y, out.width, out.height
+        half = ow // 2
+        rel_x = x - ox
+        rel_y = y - oy
+        right_gap = (ox + ow) - (x + w)
+        bottom_gap = (oy + oh) - (y + h)
+
+        # Skip if already at snap dimensions
+        if cid == last_snapped_id:
+            continue
+
+        cmd = None
+
+        # Corner snaps (top)
+        if rel_x <= THRESHOLD and rel_y <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {half} {oh // 2}'
+        elif right_gap <= THRESHOLD and rel_y <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy}; [con_id={cid}] resize set {half} {oh // 2}'
+        # Corner snaps (bottom)
+        elif rel_x <= THRESHOLD and bottom_gap <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox} {oy + oh // 2}; [con_id={cid}] resize set {half} {oh // 2}'
+        elif right_gap <= THRESHOLD and bottom_gap <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy + oh // 2}; [con_id={cid}] resize set {half} {oh // 2}'
+        # Edge snaps
+        elif rel_x <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {half} {oh}'
+        elif right_gap <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy}; [con_id={cid}] resize set {half} {oh}'
+        elif rel_y <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {ow} {oh}'
+        elif bottom_gap <= THRESHOLD:
+            cmd = f'[con_id={cid}] move absolute position {ox} {oy + oh // 2}; [con_id={cid}] resize set {ow} {oh // 2}'
+
+        if cmd:
+            i3.command(cmd)
+            # Track what we snapped to avoid loop
+            tree2 = i3.get_tree()
+            w2 = tree2.find_by_id(cid)
+            if w2:
+                r2 = w2.rect
+                last_snapped_id = cid
+                last_snapped_pos = (r2.x, r2.y, r2.width, r2.height)
+                prev_positions[cid] = last_snapped_pos
+
+    except Exception:
+        pass

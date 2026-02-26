@@ -1,0 +1,53 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+KEYBINDS="󰘔 Super+Enter → Terminal
+󰀻 Super+D → App Menu
+󰍉 Super+A → App Drawer
+󰅍 Super+V → Clipboard
+󰘋 Super+Q → Kill Window
+󰘕 Super+F → Fullscreen
+󰘖 Super+Space → Float Toggle
+󰘒 Super+R → Resize Mode
+󰚰 Super+S → Settings
+󰎤 Super+1-9 → Workspace
+󰎤 Super+Shift+1-9 → Move to Workspace"
+
+if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
+    KEYBINDS+="
+󰌾 Super+L → Lock Screen"
+fi
+
+KEYBINDS+="
+󰁮 Super+Arrows → Focus
+󰁮 Super+Shift+Arrows → Move
+󰄀 Print → Screenshot Region
+󰄀 Shift+Print → Screenshot Save
+󰐥 Super+Shift+E → Exit Sway"
+
+CHOICE=$(echo -e "$KEYBINDS" | tfuzzel -d -p " 󰌌 Keys | " --width 35)
+
+[ -z "$CHOICE" ] && exit 0
+
+case "$CHOICE" in
+    *"Terminal"*) swaymsg exec \$term ;;
+    *"App Menu"*) tebian-menu & ;;
+    *"App Drawer"*) tebian-drawer & ;;
+    *"Clipboard"*) cliphist list | tfuzzel -d | cliphist decode | wl-copy ;;
+    *"Kill Window"*) swaymsg kill ;;
+    *"Fullscreen"*) swaymsg fullscreen toggle ;;
+    *"Float Toggle"*) swaymsg floating toggle ;;
+    *"Resize Mode"*) swaymsg mode resize ;;
+    *"Settings"*) tebian-settings & ;;
+    *"Lock Screen"*) gtklock -d ;;
+    *"Screenshot Region"*) grim -g "$(slurp)" - | wl-copy && notify-send "Screenshot" "Copied" ;;
+    *"Screenshot Save"*) mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/$(date +%Y%m%d_%H%M%S).png && notify-send "Screenshot" "Saved" ;;
+    *"Exit Sway"*) swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit" ;;
+esac

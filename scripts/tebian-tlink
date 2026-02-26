@@ -1,0 +1,815 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+get_term() {
+    if command -v kitty &>/dev/null; then echo "kitty -e"
+    elif command -v foot &>/dev/null; then echo "foot -e"
+    elif command -v alacritty &>/dev/null; then echo "alacritty -e"
+    elif command -v xterm &>/dev/null; then echo "xterm -e"
+    else echo "kitty -e"
+    fi
+}
+TERM_CMD=$(get_term)
+
+CONFIG_DIR="$HOME/.config/tebian"
+SERVERS_FILE="$CONFIG_DIR/servers.conf"
+TEMPLATES_DIR="$CONFIG_DIR/templates"
+
+mkdir -p "$CONFIG_DIR"
+mkdir -p "$TEMPLATES_DIR"
+
+tlink_menu() {
+    if [ ! -f "$SERVERS_FILE" ]; then
+        echo "# Tebian Servers Config" > "$SERVERS_FILE"
+        echo "# Format: name=ip" >> "$SERVERS_FILE"
+    fi
+
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+
+    MENU="󰌍 Back
+─────────────────────────────────
+󰌄 SERVERS"
+
+    if [ -z "$SERVERS" ]; then
+        MENU+="
+  No servers - Add one below"
+    else
+        for server in $SERVERS; do
+            IP=$(grep "^$server=" "$SERVERS_FILE" | cut -d= -f2)
+            if ping -c 1 -W 1 "$IP" &>/dev/null; then
+                STATUS="●"
+            else
+                STATUS="○"
+            fi
+            MENU+="
+  $STATUS $server"
+        done
+    fi
+
+    MENU+="
+─────────────────────────────────
+󰆓 Add Server
+󰚰 Setup Fresh Server
+─────────────────────────────────
+󰆲 Deploy App
+󰆲 Zero-Downtime Deploy
+󰆲 One-Click Apps
+─────────────────────────────────
+󰋜 Quick Actions
+  Shell Into Server
+  View All Containers
+  View Resource Usage
+  Update All Servers"
+
+    CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 󰌄 T-Link | " --width 45 --lines 25)
+
+    if [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]]; then
+        tebian-settings
+        exit 0
+    fi
+
+    if [[ "$CHOICE" =~ "Add Server" ]]; then
+        add_server
+    elif [[ "$CHOICE" =~ "Setup Fresh" ]]; then
+        setup_server
+    elif [[ "$CHOICE" =~ "Deploy App" ]] && ! [[ "$CHOICE" =~ "Zero" ]] && ! [[ "$CHOICE" =~ "One-Click" ]]; then
+        deploy_menu
+    elif [[ "$CHOICE" =~ "Zero-Downtime" ]]; then
+        zero_downtime_deploy
+    elif [[ "$CHOICE" =~ "One-Click" ]]; then
+        one_click_apps
+    elif [[ "$CHOICE" =~ "Shell Into" ]]; then
+        shell_server
+    elif [[ "$CHOICE" =~ "View All Containers" ]]; then
+        view_all_containers
+    elif [[ "$CHOICE" =~ "Resource Usage" ]]; then
+        resource_usage
+    elif [[ "$CHOICE" =~ "Update All" ]]; then
+        update_all_servers
+    elif [[ "$CHOICE" =~ "SERVERS" ]]; then
+        tlink_menu
+    elif [[ "$CHOICE" =~ "●" ]] || [[ "$CHOICE" =~ "○" ]]; then
+        server_detail "$CHOICE"
+    fi
+}
+
+add_server() {
+    NAME=$(echo "" | tfuzzel -d -p " Server Name: " --width 30)
+    [ -z "$NAME" ] && { tlink_menu; return; }
+
+    IP=$(echo "" | tfuzzel -d -p " IP Address: " --width 30)
+    [ -z "$IP" ] && { tlink_menu; return; }
+
+    echo "$NAME=$IP" >> "$SERVERS_FILE"
+    notify-send "T-Link" "Server $NAME added"
+    tlink_menu
+}
+
+setup_server() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+
+    CHOICE=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Setup Server | ")
+    
+    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+
+    IP=$(grep "^$CHOICE=" "$SERVERS_FILE" | cut -d= -f2)
+    
+    DISTRO=$(echo -e "󰌍 Back\nDebian/Ubuntu\nAlpine" | tfuzzel -d -p " Distro | ")
+    
+    [ -z "$DISTRO" ] || [[ "$DISTRO" =~ "Back" ]] && { tlink_menu; return; }
+
+    if [[ "$DISTRO" =~ "Alpine" ]]; then
+        setup_alpine "$CHOICE" "$IP"
+    else
+        setup_debian "$CHOICE" "$IP"
+    fi
+    tlink_menu
+}
+
+setup_debian() {
+    SERVER="$1"
+    IP="$2"
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  T-LINK SERVER SETUP (Debian)'
+        echo '  Server: $SERVER ($IP)'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        echo 'Testing SSH connection...'
+        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes root@$IP 'echo ok' 2>/dev/null; then
+            echo ''
+            echo 'Cannot connect. Make sure:'
+            echo '  1. Server is reachable'
+            echo '  2. SSH key is authorized'
+            echo '     Run: ssh-copy-id root@$IP'
+            echo ''
+            read -p 'Press Enter...'
+            exit 1
+        fi
+        echo '✓ SSH connected'
+        echo ''
+        
+        echo '[1/6] Installing Docker...'
+        ssh root@$IP 'apt update && apt install -y docker.io docker-compose' && echo '✓ Docker installed'
+        echo ''
+        
+        echo '[2/6] Setting up firewall (UFW)...'
+        ssh root@$IP 'ufw allow ssh && ufw allow http && ufw allow https && echo y | ufw enable' && echo '✓ UFW configured'
+        echo ''
+        
+        echo '[3/6] Installing fail2ban...'
+        ssh root@$IP 'apt install -y fail2ban && systemctl enable --now fail2ban' && echo '✓ fail2ban running'
+        echo ''
+        
+        echo '[4/6] Creating folder structure...'
+        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' && echo '✓ Folders created'
+        echo ''
+        
+        echo '[5/6] Enabling auto-updates...'
+        ssh root@$IP 'apt install -y unattended-upgrades && dpkg-reconfigure -f noninteractive unattended-upgrades' && echo '✓ Auto-updates enabled'
+        echo ''
+        
+        echo '[6/6] Installing helpful tools...'
+        ssh root@$IP 'apt install -y htop iotop ncdu' && echo '✓ Tools installed'
+        echo ''
+        
+        echo '════════════════════════════════════════'
+        echo '  ✓ SERVER READY'
+        echo '════════════════════════════════════════'
+        echo ''
+        echo '$SERVER is ready for deployments!'
+        echo ''
+        read -p 'Press Enter...'
+    "
+}
+
+setup_alpine() {
+    SERVER="$1"
+    IP="$2"
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  T-LINK SERVER SETUP (Alpine)'
+        echo '  Server: $SERVER ($IP)'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        echo 'Testing SSH connection...'
+        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes root@$IP 'echo ok' 2>/dev/null; then
+            echo ''
+            echo 'Cannot connect. Make sure:'
+            echo '  1. Server is reachable'
+            echo '  2. SSH key is authorized'
+            echo '     Run: ssh-copy-id root@$IP'
+            echo ''
+            read -p 'Press Enter...'
+            exit 1
+        fi
+        echo '✓ SSH connected'
+        echo ''
+        
+        echo '[1/5] Installing Docker...'
+        ssh root@$IP 'apk add docker docker-cli-compose && rc-update add docker boot && service docker start' && echo '✓ Docker installed'
+        echo ''
+        
+        echo '[2/5] Setting up firewall...'
+        ssh root@$IP 'apk add iptables iptables-openrc && rc-update add iptables boot && service iptables start && iptables -P INPUT DROP && iptables -A INPUT -i lo -j ACCEPT && iptables -A INPUT -p tcp --dport 22 -j ACCEPT && iptables -A INPUT -p tcp --dport 80 -j ACCEPT && iptables -A INPUT -p tcp --dport 443 -j ACCEPT && iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT && /etc/init.d/iptables save' && echo '✓ Firewall configured'
+        echo ''
+        
+        echo '[3/5] Creating folder structure...'
+        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' && echo '✓ Folders created'
+        echo ''
+        
+        echo '[4/5] Installing helpful tools...'
+        ssh root@$IP 'apk add htop ncdu bash' && echo '✓ Tools installed'
+        echo ''
+        
+        echo '[5/5] Enabling auto-updates...'
+        ssh root@$IP 'apk add apk-autoupdate && rc-update add apk-autoupdate boot' && echo '✓ Auto-updates enabled'
+        echo ''
+        
+        echo '════════════════════════════════════════'
+        echo '  ✓ SERVER READY'
+        echo '════════════════════════════════════════'
+        echo ''
+        echo '$SERVER (Alpine) is ready for deployments!'
+        echo ''
+        read -p 'Press Enter...'
+    "
+}
+
+server_detail() {
+    SERVER_LINE="$1"
+    SERVER=$(echo "$SERVER_LINE" | grep -oP '\w+\s*$' | tr -d ' ')
+    IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
+    
+    # Get containers
+    CONTAINERS=$(ssh root@$IP "docker ps --format '{{.Names}}'" 2>/dev/null)
+    CONTAINER_COUNT=$(echo "$CONTAINERS" | wc -w)
+    
+    MENU="󰌍 Back
+─────────────────────────────────
+󰌄 $SERVER ($IP)
+  $CONTAINER_COUNT containers running
+─────────────────────────────────
+󰋜 Shell In
+󰋜 View Logs
+󰋜 View Resource Usage
+󰚰 Update System
+─────────────────────────────────
+󰆲 Deploy App Here
+󰆲 Install One-Click App
+󰆲 Setup SSL (Caddy)
+─────────────────────────────────
+󰘓 Restart Server
+󰌌 Remove Server"
+
+    CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " $SERVER | " --width 45 --lines 20)
+    
+    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+
+    if [[ "$CHOICE" =~ "Shell In" ]]; then
+        $TERM_CMD ssh root@$IP
+    elif [[ "$CHOICE" =~ "View Logs" ]]; then
+        container_logs "$IP"
+    elif [[ "$CHOICE" =~ "Resource Usage" ]]; then
+        $TERM_CMD ssh root@$IP "htop"
+    elif [[ "$CHOICE" =~ "Update System" ]]; then
+        $TERM_CMD ssh root@$IP "apt update && apt upgrade -y && read -p 'Done. Press Enter...'"
+    elif [[ "$CHOICE" =~ "Deploy App Here" ]]; then
+        deploy_to_server "$IP" "$SERVER"
+    elif [[ "$CHOICE" =~ "One-Click" ]]; then
+        one_click_to_server "$IP" "$SERVER"
+    elif [[ "$CHOICE" =~ "Setup SSL" ]]; then
+        setup_caddy "$IP" "$SERVER"
+    elif [[ "$CHOICE" =~ "Restart" ]]; then
+        ssh root@$IP "reboot"
+        notify-send "T-Link" "$SERVER rebooting"
+    elif [[ "$CHOICE" =~ "Remove" ]]; then
+        sed -i "/^$SERVER=/d" "$SERVERS_FILE"
+        notify-send "T-Link" "$SERVER removed"
+    fi
+    server_detail "$SERVER_LINE"
+}
+
+container_logs() {
+    IP="$1"
+    CONTAINERS=$(ssh root@$IP "docker ps --format '{{.Names}}'" 2>/dev/null)
+    
+    if [ -z "$CONTAINERS" ]; then
+        notify-send "T-Link" "No containers running"
+        return
+    fi
+    
+    CONTAINER=$(echo -e "󰌍 Back\n$CONTAINERS" | tfuzzel -d -p " Container | ")
+    
+    [ -z "$CONTAINER" ] || [[ "$CONTAINER" =~ "Back" ]] && return
+    
+    $TERM_CMD ssh root@$IP "docker logs -f --tail 100 $CONTAINER"
+}
+
+deploy_menu() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Deploy to | ")
+    
+    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    
+    IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
+    deploy_to_server "$IP" "$SERVER"
+}
+
+deploy_to_server() {
+    IP="$1"
+    SERVER="$2"
+    
+    # Ask for project source
+    SOURCE_TYPE=$(echo -e "󰌍 Back\nLocal Folder\nGit Repository" | tfuzzel -d -p " Source | ")
+    
+    [ -z "$SOURCE_TYPE" ] || [[ "$SOURCE_TYPE" =~ "Back" ]] && return
+    
+    if [[ "$SOURCE_TYPE" =~ "Local" ]]; then
+        FOLDER=$(echo -e "󰌍 Cancel\n$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)" | tfuzzel -d -p " Folder | " --width 50)
+        [ -z "$FOLDER" ] || [[ "$FOLDER" =~ "Cancel" ]] && return
+        
+        APP_NAME=$(basename "$FOLDER")
+        
+    elif [[ "$SOURCE_TYPE" =~ "Git" ]]; then
+        REPO=$(echo "" | tfuzzel -d -p " Git URL: " --width 50)
+        [ -z "$REPO" ] && return
+        
+        APP_NAME=$(basename "$REPO" | sed 's/.git$//')
+        FOLDER="/tmp/tlink-$APP_NAME"
+        
+        rm -rf "$FOLDER"
+        git clone "$REPO" "$FOLDER" || { notify-send "T-Link" "Git clone failed"; return; }
+    fi
+    
+    # Check for Dockerfile
+    if [ ! -f "$FOLDER/Dockerfile" ]; then
+        $TERM_CMD bash -c "
+            echo 'No Dockerfile found in $FOLDER'
+            echo ''
+            echo 'Create a Dockerfile to deploy this project.'
+            echo ''
+            echo 'Example Dockerfile:'
+            echo '  FROM node:20'
+            echo '  WORKDIR /app'
+            echo '  COPY . .'
+            echo '  RUN npm install'
+            echo '  CMD [\"npm\", \"start\"]'
+            echo ''
+            read -p 'Press Enter...'
+        "
+        return
+    fi
+    
+    # Ask for port
+    PORT=$(echo -e "3000\n8080\n8000\n5000" | tfuzzel -d -p " Port | ")
+    [ -z "$PORT" ] && PORT=3000
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  DEPLOYING $APP_NAME'
+        echo '  Server: $SERVER ($IP)'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        echo '[1/4] Building Docker image...'
+        cd '$FOLDER'
+        docker build -t $APP_NAME:latest . || { echo 'Build failed!'; read -p 'Press Enter...'; exit 1; }
+        echo '✓ Image built'
+        echo ''
+        
+        echo '[2/4] Saving & uploading...'
+        docker save $APP_NAME:latest | gzip > /tmp/$APP_NAME.tar.gz
+        scp /tmp/$APP_NAME.tar.gz root@$IP:/tmp/
+        echo '✓ Uploaded'
+        echo ''
+        
+        echo '[3/4] Loading on server...'
+        ssh root@$IP 'docker load < /tmp/$APP_NAME.tar.gz && rm /tmp/$APP_NAME.tar.gz'
+        echo '✓ Loaded'
+        echo ''
+        
+        echo '[4/4] Starting container...'
+        ssh root@$IP 'docker stop $APP_NAME 2>/dev/null; docker rm $APP_NAME 2>/dev/null'
+        ssh root@$IP 'docker run -d --name $APP_NAME --restart unless-stopped -p $PORT:$PORT $APP_NAME:latest'
+        echo '✓ Running'
+        echo ''
+        
+        echo '════════════════════════════════════════'
+        echo '  ✓ DEPLOYED'
+        echo '════════════════════════════════════════'
+        echo ''
+        echo 'App running at: http://$IP:$PORT'
+        echo ''
+        read -p 'Press Enter...'
+    "
+}
+
+zero_downtime_deploy() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Deploy to | ")
+    
+    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    
+    IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
+    
+    # Get running apps
+    APPS=$(ssh root@$IP "docker ps --format '{{.Names}}'" 2>/dev/null)
+    
+    if [ -z "$APPS" ]; then
+        notify-send "T-Link" "No apps running on $SERVER"
+        tlink_menu
+        return
+    fi
+    
+    APP=$(echo -e "󰌍 Back\n$APPS" | tfuzzel -d -p " Update App | ")
+    
+    [ -z "$APP" ] || [[ "$APP" =~ "Back" ]] && { tlink_menu; return; }
+    
+    # Get source
+    SOURCE_TYPE=$(echo -e "󰌍 Back\nLocal Folder\nGit Repository" | tfuzzel -d -p " Source | ")
+    
+    [ -z "$SOURCE_TYPE" ] || [[ "$SOURCE_TYPE" =~ "Back" ]] && return
+    
+    if [[ "$SOURCE_TYPE" =~ "Local" ]]; then
+        FOLDER=$(echo -e "󰌍 Cancel\n$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)" | tfuzzel -d -p " Folder | " --width 50)
+        [ -z "$FOLDER" ] || [[ "$FOLDER" =~ "Cancel" ]] && return
+    elif [[ "$SOURCE_TYPE" =~ "Git" ]]; then
+        REPO=$(echo "" | tfuzzel -d -p " Git URL: " --width 50)
+        [ -z "$REPO" ] && return
+        FOLDER="/tmp/tlink-$APP"
+        rm -rf "$FOLDER"
+        git clone "$REPO" "$FOLDER" || { notify-send "T-Link" "Git clone failed"; return; }
+    fi
+    
+    if [ ! -f "$FOLDER/Dockerfile" ]; then
+        notify-send "T-Link" "No Dockerfile found"
+        return
+    fi
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  ZERO-DOWNTIME DEPLOY: $APP'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        # Get current port
+        CURRENT_PORT=\$(ssh root@$IP 'docker inspect --format=\"{{.HostPort}}\" \$1' $APP 2>/dev/null | head -1)
+        if [ -z \"\$CURRENT_PORT\" ]; then
+            CURRENT_PORT=3000
+        fi
+        NEW_PORT=\$((CURRENT_PORT == 3000 ? 3001 : 3000))
+        
+        echo \"Current port: \$CURRENT_PORT\"
+        echo \"New port: \$NEW_PORT\"
+        echo ''
+        
+        echo '[1/5] Building new image...'
+        cd '$FOLDER'
+        docker build -t $APP:latest . || { echo 'Build failed!'; read -p 'Press Enter...'; exit 1; }
+        echo '✓ Built'
+        echo ''
+        
+        echo '[2/5] Uploading...'
+        docker save $APP:latest | gzip > /tmp/$APP.tar.gz
+        scp /tmp/$APP.tar.gz root@$IP:/tmp/
+        ssh root@$IP 'docker load < /tmp/$APP.tar.gz && rm /tmp/$APP.tar.gz'
+        echo '✓ Uploaded'
+        echo ''
+        
+        echo '[3/5] Starting new version...'
+        ssh root@$IP \"docker run -d --name $APP-v2 --restart unless-stopped -p \$NEW_PORT:\$CURRENT_PORT $APP:latest\"
+        echo '✓ New version running'
+        echo ''
+        
+        echo '[4/5] Health check (3s)...'
+        sleep 3
+        if ssh root@$IP \"docker ps | grep -q $APP-v2\"; then
+            echo '✓ New version healthy'
+        else
+            echo '✗ New version failed, keeping old'
+            ssh root@$IP \"docker rm -f $APP-v2 2>/dev/null\"
+            read -p 'Press Enter...'
+            exit 1
+        fi
+        echo ''
+        
+        echo '[5/5] Switching traffic...'
+        ssh root@$IP \"docker stop $APP && docker rm $APP && docker rename $APP-v2 $APP\"
+        echo '✓ Swapped'
+        echo ''
+        
+        echo '════════════════════════════════════════'
+        echo '  ✓ ZERO-DOWNTIME DEPLOY COMPLETE'
+        echo '════════════════════════════════════════'
+        echo ''
+        read -p 'Press Enter...'
+    "
+    tlink_menu
+}
+
+one_click_apps() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Install on | ")
+    
+    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    
+    IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
+    one_click_to_server "$IP" "$SERVER"
+}
+
+one_click_to_server() {
+    IP="$1"
+    SERVER="$2"
+    
+    # List available templates
+    TEMPLATES=$(ls "$TEMPLATES_DIR"/*.json 2>/dev/null | xargs -I{} basename {} .json)
+    
+    if [ -z "$TEMPLATES" ]; then
+        notify-send "T-Link" "No templates found"
+        return
+    fi
+    
+    MENU="󰌍 Back
+─────────────────────────────────
+Available Apps:"
+
+    for t in $TEMPLATES; do
+        DESC=$(cat "$TEMPLATES_DIR/$t.json" 2>/dev/null | grep -oP '"description":\s*"\K[^"]+' | head -1)
+        MENU+="
+  $t - $DESC"
+    done
+    
+    CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " Install | " --width 50 --lines 15)
+    
+    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && return
+    
+    # Extract app name
+    APP=$(echo "$CHOICE" | cut -d'-' -f1 | tr -d ' ')
+    TEMPLATE="$TEMPLATES_DIR/$APP.json"
+    
+    if [ ! -f "$TEMPLATE" ]; then
+        notify-send "T-Link" "Template not found"
+        return
+    fi
+    
+    # Parse template
+    IMAGE=$(cat "$TEMPLATE" | grep -oP '"image":\s*"\K[^"]+')
+    PORTS=$(cat "$TEMPLATE" | grep -oP '"ports":\s*\[\K[^\]]+' | tr -d '"' | tr ',' ' ')
+    VOLUMES=$(cat "$TEMPLATE" | grep -oP '"volumes":\s*\[\K[^\]]+' | tr -d '"' | tr ',' ' ')
+    
+    # Build docker run command
+    PORT_ARGS=""
+    for p in $PORTS; do
+        PORT_ARGS="$PORT_ARGS -p $p"
+    done
+    
+    VOL_ARGS=""
+    for v in $VOLUMES; do
+        VOL_ARGS="$VOL_ARGS -v $v"
+    done
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  INSTALLING $APP'
+        echo '  Server: $SERVER ($IP)'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        echo 'Pulling image...'
+        ssh root@$IP 'docker pull $IMAGE'
+        echo ''
+        
+        echo 'Starting container...'
+        ssh root@$IP 'docker stop $APP 2>/dev/null; docker rm $APP 2>/dev/null'
+        ssh root@$IP 'docker run -d --name $APP --restart unless-stopped $PORT_ARGS $VOL_ARGS $IMAGE'
+        echo ''
+        
+        if ssh root@$IP 'docker ps | grep -q $APP'; then
+            echo '════════════════════════════════════════'
+            echo '  ✓ INSTALLED'
+            echo '════════════════════════════════════════'
+            echo ''
+            echo '$APP is running!'
+            echo ''
+            echo 'Access: http://$IP:${PORTS%%:*}'
+        else
+            echo '✗ Failed to start'
+            echo 'Check logs: ssh root@$IP docker logs $APP'
+        fi
+        echo ''
+        read -p 'Press Enter...'
+    "
+}
+
+setup_caddy() {
+    IP="$1"
+    SERVER="$2"
+    
+    DOMAIN=$(echo "" | tfuzzel -d -p " Domain (e.g., app.example.com): " --width 40)
+    [ -z "$DOMAIN" ] && return
+    
+    BACKEND_PORT=$(echo -e "3000\n8080\n8000" | tfuzzel -d -p " Backend Port | ")
+    [ -z "$BACKEND_PORT" ] && BACKEND_PORT=3000
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  SETTING UP CADDY (Auto SSL)'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        echo 'Installing Caddy...'
+        ssh root@$IP 'docker pull caddy:2'
+        echo ''
+        
+        echo 'Creating Caddyfile...'
+        ssh root@$IP 'mkdir -p /opt/config/caddy'
+        ssh root@$IP 'cat > /opt/config/caddy/Caddyfile << EOF
+$DOMAIN {
+    reverse_proxy localhost:$BACKEND_PORT
+}
+EOF'
+        echo ''
+        
+        echo 'Starting Caddy...'
+        ssh root@$IP 'docker stop caddy 2>/dev/null; docker rm caddy 2>/dev/null'
+        ssh root@$IP 'docker run -d --name caddy --restart unless-stopped \
+            -p 80:80 -p 443:443 \
+            -v /opt/config/caddy:/etc/caddy \
+            -v /opt/data/caddy:/data \
+            caddy:2'
+        echo ''
+        
+        if ssh root@$IP 'docker ps | grep -q caddy'; then
+            echo '════════════════════════════════════════'
+            echo '  ✓ CADDY RUNNING'
+            echo '════════════════════════════════════════'
+            echo ''
+            echo 'Your app is now accessible at:'
+            echo '  https://$DOMAIN'
+            echo ''
+            echo 'SSL certificate will be auto-provisioned.'
+            echo ''
+            echo 'Make sure DNS points to $IP'
+        else
+            echo '✗ Failed to start Caddy'
+        fi
+        echo ''
+        read -p 'Press Enter...'
+    "
+}
+
+shell_server() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    CHOICE=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Shell | ")
+    
+    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+    
+    IP=$(grep "^$CHOICE=" "$SERVERS_FILE" | cut -d= -f2)
+    $TERM_CMD ssh root@$IP
+    tlink_menu
+}
+
+view_all_containers() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  CONTAINER STATUS - ALL SERVERS'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        for server in $SERVERS; do
+            IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+            echo \"── \$server (\$IP) ──\"
+            ssh root@\$IP 'docker ps --format \"table {{.Names}}\t{{.Status}}\t{{.Ports}}\"' 2>/dev/null || echo '  (unreachable)'
+            echo ''
+        done
+        
+        read -p 'Press Enter...'
+    "
+    tlink_menu
+}
+
+resource_usage() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    SERVER=$(echo -e "󰌍 Back\nAll Servers\n$SERVERS" | tfuzzel -d -p " Resources | ")
+    
+    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    
+    if [[ "$SERVER" =~ "All" ]]; then
+        $TERM_CMD bash -c "
+            echo '════════════════════════════════════════'
+            echo '  RESOURCE USAGE - ALL SERVERS'
+            echo '════════════════════════════════════════'
+            echo ''
+            
+            for server in $SERVERS; do
+                IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+                echo \"── \$server (\$IP) ──\"
+                ssh root@\$IP 'echo \"CPU: \$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\")%\"
+                               echo \"RAM: \$(free -m | awk \"/Mem:/ {printf \\\"%s/%s MB (%.1f%%)\\\", \\\$3, \\\$2, \\\$3*100/\\\$2}\")\"
+                               echo \"Disk: \$(df -h / | awk \"NR==2 {printf \\\"%s/%s (%s)\\\", \\\$3, \\\$2, \\\$5}\")\"
+                               docker ps -q | wc -l | xargs -I{} echo \"Containers: {}\"' 2>/dev/null || echo '  (unreachable)'
+                echo ''
+            done
+            
+            read -p 'Press Enter...'
+        "
+    else
+        IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
+        $TERM_CMD ssh root@$IP "htop"
+    fi
+    tlink_menu
+}
+
+update_all_servers() {
+    SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
+    
+    if [ -z "$SERVERS" ]; then
+        notify-send "T-Link" "No servers configured"
+        tlink_menu
+        return
+    fi
+    
+    $TERM_CMD bash -c "
+        echo '════════════════════════════════════════'
+        echo '  UPDATING ALL SERVERS'
+        echo '════════════════════════════════════════'
+        echo ''
+        
+        for server in $SERVERS; do
+            IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+            echo \"Updating \$server (\$IP)...\"
+            ssh root@\$IP 'apt update && apt upgrade -y' 2>/dev/null && echo \"✓ \$server updated\" || echo \"✗ \$server failed\"
+            echo ''
+        done
+        
+        echo '════════════════════════════════════════'
+        echo '  ✓ ALL SERVERS UPDATED'
+        echo '════════════════════════════════════════'
+        read -p 'Press Enter...'
+    "
+    tlink_menu
+}
+
+# Start
+tlink_menu

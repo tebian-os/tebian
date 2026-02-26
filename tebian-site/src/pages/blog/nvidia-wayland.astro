@@ -1,0 +1,112 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="NVIDIA on Wayland — Tebian">
+	<main class="post">
+		<header>
+			<span class="category">Hardware</span>
+			<h1>NVIDIA on Wayland: Taming the Beast</h1>
+			<p class="meta">February 20, 2026 • 18 min read</p>
+		</header>
+
+		<article class="content">
+			<p class="lead">For years, the phrase "NVIDIA on Linux" was a warning. It meant screen tearing, flickering, and endless configuration files. On Wayland, it was considered a disaster. But in 2026, on Tebian, NVIDIA is a <strong>Performance King.</strong></p>
+
+			<h2>The Proprietary Driver Paradox</h2>
+			<p>Most Linux purists argue for open-source drivers. We agree in principle, but for NVIDIA, the <strong>Proprietary Driver</strong> is the only way to get full performance and support for features like DLSS, Ray Tracing, and NVENC. However, installing these drivers on a standard distro often leads to "Dependency Hell."</p>
+			
+			<p>Tebian's "Hardware Detect" system is built on a fundamental C-level logic: it identifies your GPU model (via <code>lspci</code>), checks the version against the NVIDIA 555+ driver series (the one that fixed Wayland), and installs it directly from the <strong>non-free-firmware</strong> repository.</p>
+
+			<h2>The Wayland Fix (GBM vs EGLStreams)</h2>
+			<p>Wayland used to fail on NVIDIA because NVIDIA insisted on its own "EGLStreams" protocol while everyone else (Intel/AMD) used "GBM." In 2026, NVIDIA has finally embraced GBM. This means Wayland is now as stable on NVIDIA as it is on AMD.</p>
+			
+			<p>However, you still need the right <strong>Kernel Parameters</strong>. Tebian handles these automatically during the "NVIDIA Setup" menu: it sets <code>nvidia-drm.modeset=1</code>, configures the <code>WLR_NO_HARDWARE_CURSORS=1</code> environment variable, and ensures your kernel modules are loaded correctly.</p>
+
+			<h2>The Performance Advantage</h2>
+			<p>Why use NVIDIA on Tebian? Because our compositor, <strong>Sway</strong>, is written in C and is hyper-efficient. It doesn't have the "Composition Overlays" that slow down GNOME or the "Elastic Animations" that flicker on NVIDIA in Hyprland. You get a solid, 144Hz+ experience without the visual artifacts.</p>
+
+			<h2>Gaming & Beyond</h2>
+			<p>With NVIDIA's proprietary driver, Tebian becomes a powerhouse for <strong>Gamer Rig</strong> and <strong>Creative Rig</strong> configurations. You get native-speed Vulkan for Steam games and full hardware acceleration for video editing in Kdenlive or 3D rendering in Blender.</p>
+			
+			<p>We've tamed the beast. One ISO. One menu. All the GPU power you paid for.</p>
+		</article>
+
+		<div class="nav">
+			<a href="/blog/myth-of-security">← Previous: The Myth of Security</a>
+			<a href="/blog/privacy-of-silence">Next: The Privacy of Silence →</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	.post {
+		max-width: 800px;
+		width: 100%;
+		padding: 4rem 1rem;
+	}
+
+	header {
+		margin-bottom: 3rem;
+		text-align: center;
+	}
+
+	.category {
+		color: var(--accent);
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		font-weight: 700;
+		font-size: 0.8rem;
+	}
+
+	h1 {
+		font-size: 3rem;
+		color: #fff;
+		margin: 0.5rem 0;
+		line-height: 1.1;
+	}
+
+	.meta {
+		color: #585b70;
+		font-size: 0.9rem;
+	}
+
+	.lead {
+		font-size: 1.25rem;
+		color: #cdd6f4;
+		line-height: 1.6;
+		margin-bottom: 2rem;
+	}
+
+	h2 {
+		color: var(--accent);
+		font-size: 1.8rem;
+		margin: 3rem 0 1rem 0;
+	}
+
+	p {
+		color: #9399b2;
+		line-height: 1.8;
+		margin-bottom: 1.5rem;
+		font-size: 1.1rem;
+	}
+
+	.nav {
+		margin-top: 4rem;
+		padding-top: 2rem;
+		border-top: 1px solid rgba(255, 255, 255, 0.05);
+		display: flex;
+		justify-content: space-between;
+	}
+
+	.nav a {
+		color: #6c7086;
+		text-decoration: none;
+		font-size: 0.9rem;
+		transition: color 0.2s;
+	}
+
+	.nav a:hover {
+		color: var(--accent);
+	}
+</style>

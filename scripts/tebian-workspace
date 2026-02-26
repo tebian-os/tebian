@@ -1,0 +1,37 @@
+#!/bin/bash
+# Tebian Dynamic Workspace Manager
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+# Get current workspaces (sorted by number)
+WS_LIST=$(swaymsg -t get_workspaces 2>/dev/null | jq -r '.[].name' | sort -t: -k1 -n 2>/dev/null || swaymsg -t get_workspaces 2>/dev/null | jq -r '.[].name')
+
+# Build menu
+if [ -n "$WS_LIST" ]; then
+    MENU="New Workspace
+─────────────────────────────────
+$WS_LIST"
+else
+    MENU="New Workspace
+─────────────────────────────────
+(no workspaces)"
+fi
+
+CHOICE=$(echo "$MENU" | tfuzzel -d -p " Workspace | ")
+
+[ -z "$CHOICE" ] && exit 0
+
+if [[ "$CHOICE" == "New Workspace" ]]; then
+    WS_NAME=$(echo "" | tfuzzel -d -p " Name (e.g. 5:game) | ")
+    if [ -n "$WS_NAME" ]; then
+        swaymsg workspace "$WS_NAME"
+        notify-send "Tebian" "Created workspace: $WS_NAME"
+    fi
+elif [[ "$CHOICE" != "─────────"* ]] && [[ "$CHOICE" != "(no workspaces)" ]]; then
+    swaymsg workspace "$CHOICE"
+fi

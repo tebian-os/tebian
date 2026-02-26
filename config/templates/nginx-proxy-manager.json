@@ -1,0 +1,8 @@
+{
+  "name": "Nginx Proxy Manager",
+  "description": "Proxy manager with UI",
+  "image": "jc21/nginx-proxy-manager:latest",
+  "ports": ["80:80", "443:443", "81:81"],
+  "volumes": ["/opt/data/npm:/data", "/opt/data/npm/letsencrypt:/etc/letsencrypt"],
+  "env": {}
+}

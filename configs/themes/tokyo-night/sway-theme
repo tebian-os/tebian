@@ -1,0 +1,20 @@
+# Tokyo Night Theme - Sway Colors (Japanese Night City)
+# Included by main config
+
+set $base      #1A1B26
+set $text      #C0CAF5
+set $surface0  #24283B
+set $surface1  #292E42
+set $overlay0  #414868
+set $accent    #7AA2F7
+set $blue      #7AA2F7
+set $purple    #BB9AF7
+set $cyan      #7DCFFF
+set $green     #9ECE6A
+set $red       #F7768E
+set $yellow    #E0AF68
+
+# Gaps & Visuals
+gaps inner 10
+gaps outer 3
+default_border pixel 2

@@ -1,0 +1,58 @@
+---
+interface Props {
+	title: string;
+	hideNav?: boolean;
+}
+
+const { title, hideNav = false } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="description" content="Tebian — The Universal Usability Layer. Stable. Modular. Sovereign." />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>" />
+		<meta name="generator" content={Astro.generator} />
+		<title>{title}</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+	</head>
+	<body>
+		<slot />
+	</body>
+</html>
+
+<style is:global>
+	:root {
+		--bg: #303446;
+		--text: #c6d0f5;
+		--accent: #89b4fa;
+	}
+
+	html, body {
+		margin: 0;
+		padding: 0;
+		min-height: 100%;
+		background: var(--bg);
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text);
+		overflow-x: hidden;
+	}
+
+	* { box-sizing: border-box; }
+
+	/* Dark theme (Mocha) */
+	html[data-theme="dark"] body,
+	html[data-theme="dark"] { background: #1e1e2e; color: #cdd6f4; }
+
+	/* Light theme (Latte) */
+	html[data-theme="light"] body,
+	html[data-theme="light"] { background: #eff1f5; color: #4c4f69; }
+
+	/* Frappe theme */
+	html[data-theme="frappe"] body,
+	html[data-theme="frappe"] { background: #303446; color: #c6d0f5; }
+</style>

@@ -1,0 +1,9 @@
+# Tokyo Night Theme - Mako Notifications
+font=JetBrainsMono Nerd Font 11
+background-color=#1A1B26
+text-color=#C0CAF5
+border-color=#7AA2F7
+border-size=2
+padding=12
+margin=8
+default-timeout=5000

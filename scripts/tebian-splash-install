@@ -1,0 +1,71 @@
+#!/bin/bash
+# Tebian Splash Screen Installer (v1.0)
+# Creates a minimal Nord-themed Plymouth splash screen
+
+set -e
+
+THEME_DIR="/usr/share/plymouth/themes/tebian"
+PLYMOUTH_BIN=$(command -v plymouth-set-default-theme || echo "/usr/sbin/plymouth-set-default-theme")
+
+echo "Creating Tebian Splash Theme..."
+
+# 1. Create directory
+sudo mkdir -p "$THEME_DIR"
+
+# 2. Create Background Image (Solid Nord Dark)
+# We use convert (imagemagick) if available, else a simple fill
+if command -v convert >/dev/null; then
+    sudo convert -size 1920x1080 xc:"#2E3440" "$THEME_DIR/background.png"
+    # Create Logo (Text)
+    sudo convert -size 400x100 xc:transparent -font DejaVu-Sans-Bold -pointsize 48 -fill "#88C0D0" -gravity center -annotate +0+0 "TEBIAN" "$THEME_DIR/logo.png"
+else
+    # Fallback: Download placeholder or use simple color if imagemagick missing
+    # For now, we'll just use a solid color script approach below
+    echo "ImageMagick not found. Using script-only theme."
+fi
+
+# 3. Create Theme File (.plymouth)
+cat <<EOF | sudo tee "$THEME_DIR/tebian.plymouth"
+[Plymouth Theme]
+Name=Tebian
+Description=A minimal Nord-themed splash for Tebian OS
+ModuleName=script
+
+[script]
+ImageDir=$THEME_DIR
+ScriptFile=$THEME_DIR/tebian.script
+EOF
+
+# 4. Create Script File (.script)
+# A simple script that displays centered text/logo on a dark background
+cat <<EOF | sudo tee "$THEME_DIR/tebian.script"
+# Tebian Plymouth Script
+
+# Colors
+bg_color = Window.SetBackgroundTopColor(0.18, 0.20, 0.25); # Nord #2E3440
+Window.SetBackgroundBottomColor(0.18, 0.20, 0.25);
+
+# Screen Dimensions
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+# Center Point
+center_x = screen_width / 2;
+center_y = screen_height / 2;
+
+# Message Function
+fun message_callback (text) {
+    # Placeholder for text messages (fsck, etc)
+}
+
+Plymouth.SetMessageFunction(message_callback);
+EOF
+
+# 5. Install & Apply
+echo "Registering theme..."
+if [ -x "$PLYMOUTH_BIN" ]; then
+    sudo "$PLYMOUTH_BIN" -R tebian
+    echo "✅ Tebian Splash applied! (initramfs updated)"
+else
+    echo "⚠️  Could not find plymouth-set-default-theme. Install manually."
+fi

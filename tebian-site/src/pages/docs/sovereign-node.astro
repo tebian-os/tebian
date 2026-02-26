@@ -1,0 +1,75 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="The Sovereign Node Manual — Tebian">
+	<main class="resource">
+		<header>
+			<span class="category">Definitive Manual</span>
+			<h1>The Sovereign Node Manual</h1>
+			<p class="subtitle">Your Hardware, Your Bank: Running Full Bitcoin and Monero Nodes on Tebian.</p>
+		</header>
+
+		<article class="content">
+			<section class="overview">
+				<h2>The Financial Fortress</h2>
+				<p>If you don't run your own node, you are using someone else's bank. Digital sovereignty is impossible without financial sovereignty. Tebian's "Mothership" is designed to be your private financial clearinghouse. This manual provides the C-level roadmap for deploying a hardened, high-performance node stack.</p>
+				
+				<p>We focus on <strong>Block-Level Storage</strong> optimization and <strong>Tor-Hidden-Service</strong> isolation.</p>
+			</section>
+
+			<section class="storage-logic">
+				<h2>1. Block Storage: XFS vs. EXT4</h2>
+				<p>Running a full node (especially Monero or Bitcoin with index) requires massive amounts of disk I/O. Standard Linux defaults can lead to "Database Corruption" during a sudden power loss. Tebian optimizes the storage layer.</p>
+				
+				<h3>The XFS Choice</h3>
+				<p>We recommend <strong>XFS</strong> for node data partitions. XFS is a 64-bit journaling filesystem that handles large files and metadata-heavy workloads better than EXT4. It uses <strong>Delayed Allocation</strong> to minimize disk fragmentation during initial block downloads (IBD).</p>
+				<ul>
+					<li><strong>Mount Options:</strong> We use <code>noatime,nodiratime</code> to eliminate unnecessary metadata writes.</li>
+					<li><strong>I/O Scheduler:</strong> We set the partition's scheduler to <code>none</code> or <code>mq-deadline</code> to allow the SSD's internal controller to handle the queue.</li>
+				</ul>
+			</section>
+
+			<section class="tor-isolation">
+				<h2>2. Privacy: The Tor-Mesh Architecture</h2>
+				<p>Your IP address is your identity. Running a node on the "Clearnet" reveals your financial activity to your ISP and the world. Tebian isolates your nodes behind <strong>Tor (The Onion Router).</strong></p>
+				
+				<h3>Hidden Services</h3>
+				<p>We configure <code>bitcoind</code> and <code>monerod</code> to run as <strong>Tor Hidden Services (.onion)</strong>. This allows your nodes to communicate with the network while keeping your physical location and IP address hidden. We use a C-based Tor daemon that runs in a rootless container for maximum isolation.</p>
+			</section>
+
+			<section class="wallet-integration">
+				<h2>3. The Client: Sparrow and Monero-GUI</h2>
+				<p>Your Tebian workstation connects to your Mothership node via the <strong>T-Link Mesh.</strong> You run <strong>Sparrow Wallet</strong> (for Bitcoin) or <strong>Monero-GUI</strong> on your desktop, pointing them to the local <code>.onion</code> address of your node.</p>
+				<ul>
+					<li><strong>Cold Storage Integration:</strong> sparrow connects seamlessly to Jade or Trezor devices via Tebian's <code>udev</code> rules.</li>
+					<li><strong>Stateless Sessions:</strong> Use Tebian's <code>amnesic-mode</code> to run your wallet from RAM, ensuring no secrets are ever written to disk.</li>
+				</ul>
+			</section>
+
+			<section class="conclusion">
+				<h2>Conclusion: Be the Bank</h2>
+				<p>The Sovereign Node Manual is about more than "crypto." It's about infrastructure. By running your own node on a stable, C-based OS, you remove the need for trusted third parties. You become the root of your own financial tree. One ISO. One menu. Total sovereignty.</p>
+			</section>
+		</article>
+
+		<div class="nav">
+			<a href="/docs">← Back to Manuals</a>
+			<a href="/blog/air-gapped-mindset">The Privacy Blog →</a>
+		</div>
+	</main>
+</Layout>
+
+<style>
+	.resource { max-width: 1000px; width: 100%; padding: 4rem 1rem; }
+	header { margin-bottom: 4rem; text-align: center; }
+	.category { color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; font-size: 0.8rem; }
+	h1 { font-size: 4rem; color: #fff; margin: 0.5rem 0; line-height: 1.1; font-weight: 800; }
+	.subtitle { color: #9399b2; font-size: 1.25rem; font-style: italic; }
+	h2 { color: var(--accent); font-size: 2.2rem; margin: 4rem 0 1.5rem 0; border-bottom: 1px solid rgba(137, 180, 250, 0.2); padding-bottom: 0.5rem; }
+	h3 { color: #cdd6f4; font-size: 1.6rem; margin: 2rem 0 1rem 0; }
+	p { color: #9399b2; line-height: 1.8; margin-bottom: 2rem; font-size: 1.1rem; }
+	.nav { margin-top: 4rem; padding-top: 2rem; border-top: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; }
+	.nav a { color: #6c7086; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+	.nav a:hover { color: var(--accent); }
+</style>

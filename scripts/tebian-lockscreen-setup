@@ -1,0 +1,129 @@
+#!/bin/bash
+# Sets up gtklock config and styling for Tebian
+# Called by onboarding, essentials install, and screen lock install
+
+mkdir -p "$HOME/.config/gtklock"
+
+# Config
+cat > "$HOME/.config/gtklock/config.ini" << 'EOF'
+[main]
+gtk-theme=Adwaita-dark
+style=$HOME_PLACEHOLDER/.config/gtklock/style.css
+modules=gtklock-userinfo-module
+time-format=%H:%M
+date-format=%A, %B %d
+
+[userinfo]
+under-clock=true
+image-size=128
+round-image=true
+vertical-layout=true
+font-size=24
+text-color=#eceff4
+EOF
+
+# Fix $HOME path in config
+sed -i "s|\$HOME_PLACEHOLDER|$HOME|g" "$HOME/.config/gtklock/config.ini"
+
+# CSS Style
+cat > "$HOME/.config/gtklock/style.css" << EOF
+window {
+    background-image: url("$HOME/.local/share/backgrounds/tebian/default.jpg");
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#clock-label {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 120px;
+    font-weight: bold;
+    color: #eceff4;
+    margin-bottom: 20px;
+}
+
+#date-label {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 32px;
+    font-weight: bold;
+    color: #d8dee9;
+    margin-bottom: 40px;
+}
+
+/* Hide the "Password:" label */
+#input-label {
+    font-size: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
+}
+
+/* Transparent rounded password input field */
+#input-field {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(136, 192, 208, 0.3);
+    border-radius: 24px;
+    padding: 12px 20px;
+    color: #eceff4;
+    caret-color: #88c0d0;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 18px;
+    box-shadow: none;
+}
+
+#input-field:focus {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(136, 192, 208, 0.6);
+    box-shadow: none;
+}
+
+/* Body grid container */
+#body-grid {
+    background-color: transparent;
+}
+
+#unlock-button {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(236, 239, 244, 0.6);
+    border: 1px solid rgba(136, 192, 208, 0.3);
+    border-radius: 20px;
+    padding: 10px 40px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 14px;
+    font-weight: bold;
+    margin-top: 4px;
+}
+
+#unlock-button:hover {
+    background-color: rgba(136, 192, 208, 0.2);
+    color: #eceff4;
+    border-color: rgba(136, 192, 208, 0.6);
+}
+
+/* Error/warning messages */
+#error-label {
+    color: #bf616a;
+    font-size: 14px;
+}
+
+#warning-label {
+    color: #ebcb8b;
+    font-size: 14px;
+}
+
+/* User Info Module */
+#user-image {
+    border: 3px solid rgba(236, 239, 244, 0.6);
+    margin-bottom: 10px;
+}
+
+#user-name {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 24px;
+    font-weight: bold;
+    color: #eceff4;
+    margin-bottom: 20px;
+}
+EOF
