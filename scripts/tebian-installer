@@ -636,11 +636,8 @@ APT
                 sway swaybg fuzzel kitty \
                 pipewire wireplumber pipewire-pulse \
                 fonts-noto fonts-jetbrains-mono \
-                greetd gtkgreet cage libnotify-bin \
+                greetd nwg-hello libnotify-bin \
                 >/dev/null 2>&1
-
-            # nwg-hello (optional)
-            chroot "$TARGET" apt-get install -y nwg-hello >/dev/null 2>&1 || true
 
             # Nerd font
             chroot "$TARGET" bash -c "

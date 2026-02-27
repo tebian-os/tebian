@@ -96,10 +96,17 @@ Install Legacy System Utils (man, locate...)
                 echo -e 'ALGO=zstd\nPERCENT=60' | sudo tee /etc/default/zramswap > /dev/null 2>&1
                 sudo systemctl restart zramswap 2>/dev/null || true
             fi
-            # Fix greetd to use cage for gtkgreet
-            if [ -f /etc/greetd/config.toml ] && grep -q '\"gtkgreet' /etc/greetd/config.toml && ! grep -q 'cage' /etc/greetd/config.toml; then
+            # Configure greetd for nwg-hello
+            if [ -f /etc/greetd/config.toml ] && ! grep -q 'nwg-hello' /etc/greetd/config.toml; then
                 echo 'Configuring login screen...'
-                sudo sed -i 's|command = \"gtkgreet|command = \"cage -s -- gtkgreet|' /etc/greetd/config.toml
+                sudo tee /etc/greetd/config.toml > /dev/null << 'GREETDCFG'
+[terminal]
+vt = 7
+
+[default_session]
+command = "sway --config /etc/nwg-hello/sway-config"
+user = "greeter"
+GREETDCFG
             fi
             echo ''
             echo 'Done! Some features require Sway restart.'

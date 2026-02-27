@@ -123,15 +123,13 @@ GTKEOF
     echo "XCURSOR_THEME=Adwaita" > "$cursor_conf"
     echo "XCURSOR_SIZE=$cursor_size" >> "$cursor_conf"
 
-    # 11. Login screen (gtkgreet) theme — requires sudo
-    local greetd_css="/etc/greetd/style.css"
-    if [ -f "$greetd_css" ] && [ -f "$theme_conf" ]; then
-        local t_bg t_fg
-        t_bg=$(grep '^BASE=' "$theme_conf" | cut -d= -f2)
-        t_fg=$(grep '^TEXT=' "$theme_conf" | cut -d= -f2)
-        if [ -n "$t_bg" ] && [ -n "$t_fg" ]; then
-            sudo -n sed -i "s/background-color: #[0-9a-fA-F]\{6\}/background-color: $t_bg/" "$greetd_css" 2>/dev/null
-            sudo -n sed -i "s/color: #[0-9a-fA-F]\{6\}/color: $t_fg/" "$greetd_css" 2>/dev/null
+    # 11. Login screen (nwg-hello) theme — requires sudo
+    local nwg_css="/etc/nwg-hello/nwg-hello.css"
+    if [ -f "$nwg_css" ] && [ -f "$theme_conf" ]; then
+        # nwg-hello uses the wallpaper set in its CSS, so update the background-image
+        local wallpaper="/usr/share/backgrounds/tebian/default.jpg"
+        if [ -f "$wallpaper" ]; then
+            sudo -n sed -i "s|background-image: url(\"[^\"]*\")|background-image: url(\"$wallpaper\")|" "$nwg_css" 2>/dev/null
         fi
     fi
 

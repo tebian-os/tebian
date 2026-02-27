@@ -50,11 +50,11 @@ PACKAGES=(
     fonts-noto fonts-jetbrains-mono
     network-manager
     curl
-    greetd gtkgreet cage libnotify-bin
+    greetd nwg-hello libnotify-bin
 )
 
 # Optional packages (don't fail if missing)
-OPTIONAL_PACKAGES=(nwg-hello)
+OPTIONAL_PACKAGES=()
 
 if ! sudo apt install -y "${PACKAGES[@]}"; then
     log_error "Failed to install packages"

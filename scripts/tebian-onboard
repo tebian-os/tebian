@@ -328,9 +328,16 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         tebian-lockscreen-setup
         echo "  Screen lock configured"
 
-        # Fix greetd to use cage for gtkgreet login screen
-        if [ -f /etc/greetd/config.toml ] && grep -q "\"gtkgreet" /etc/greetd/config.toml && ! grep -q "cage" /etc/greetd/config.toml; then
-            sudo sed -i "s|command = \"gtkgreet|command = \"cage -s -- gtkgreet|" /etc/greetd/config.toml
+        # Configure greetd to use nwg-hello
+        if [ -f /etc/greetd/config.toml ] && ! grep -q "nwg-hello" /etc/greetd/config.toml; then
+            sudo tee /etc/greetd/config.toml > /dev/null << 'GREETD'
+[terminal]
+vt = 7
+
+[default_session]
+command = "sway --config /etc/nwg-hello/sway-config"
+user = "greeter"
+GREETD
             echo "  Login greeter configured"
         fi
 
