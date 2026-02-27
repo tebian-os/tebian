@@ -210,9 +210,9 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             grim slurp wl-clipboard cliphist
             brightnessctl autotiling wob
             xwayland python3-i3ipc wget
-            libspa-0.2-bluetooth
+            libspa-0.2-bluetooth rfkill
             pavucontrol
-            bluez blueman
+            bluez blueman bluez-tools
             gvfs gvfs-backends
             adwaita-qt
             xdg-desktop-portal-wlr

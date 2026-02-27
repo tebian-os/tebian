@@ -112,8 +112,9 @@ bluetooth_menu() {
             tnotify "Bluetooth" "Downloading Bluetooth..."
             $TERM_CMD bash -c "
                 echo 'Installing Bluetooth...'
-                sudo apt update && sudo apt install -y bluez blueman libspa-0.2-bluetooth
+                sudo apt update && sudo apt install -y bluez blueman bluez-tools libspa-0.2-bluetooth rfkill
                 sudo systemctl enable --now bluetooth
+                systemctl --user restart pipewire wireplumber 2>/dev/null
                 echo ''
                 echo 'Done! Bluetooth is ready.'
                 read -p 'Press Enter...'
@@ -133,51 +134,44 @@ bluetooth_menu() {
             B_OPTS="󰂲 Bluetooth: OFF (click to enable)
 󰌍 Back"
 
-            B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " Bluetooth | ")
+            B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
             if [[ "$B_CHOICE" =~ "Back" || -z "$B_CHOICE" ]]; then return; fi
 
             if [[ "$B_CHOICE" =~ "Bluetooth: OFF" ]]; then
                 bluetoothctl power on
-                tnotify "Bluetooth" "Enabled - scanning..."
+                tnotify "Bluetooth" "Enabled"
                 pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
-                sleep 2
+                sleep 1
             fi
         else
-            # Bluetooth is ON - show devices
-            # Start scan briefly to find devices (with cleanup trap)
-            notify-send -t 3000 "Bluetooth" "Scanning for devices..." 2>/dev/null
-            bluetoothctl scan on 2>/dev/null &
-            SCAN_PID=$!
-            trap "kill $SCAN_PID 2>/dev/null" RETURN
-            sleep 2
-            kill $SCAN_PID 2>/dev/null
-            trap - RETURN
+            # Bluetooth is ON — build device lists
 
-            # Get connected devices
-            CONNECTED=$(bluetoothctl devices Connected 2>/dev/null | while read -r _ mac name; do
-                echo "󰂱 $name (connected)"
-            done)
+            # Connected devices
+            CONNECTED=""
+            while read -r _ mac name; do
+                [ -z "$mac" ] && continue
+                CONNECTED+="󰂱 $name [$mac] (connected)"$'\n'
+            done < <(bluetoothctl devices Connected 2>/dev/null)
 
-            # Get paired but not connected
-            PAIRED=$(bluetoothctl devices Paired 2>/dev/null | while read -r _ mac name; do
-                echo "󰂯 $name"
-            done)
-
-            # Get available (discovered) devices
-            AVAILABLE=$(bluetoothctl devices 2>/dev/null | while read -r _ mac name; do
-                echo "$name"
-            done | sort -u)
+            # Paired but not connected
+            PAIRED=""
+            PAIRED_MACS=""
+            while read -r _ mac name; do
+                [ -z "$mac" ] && continue
+                # Skip if already listed as connected
+                if echo "$CONNECTED" | grep -q "$mac"; then continue; fi
+                PAIRED+="󰂯 $name [$mac] (paired)"$'\n'
+                PAIRED_MACS+="$mac "
+            done < <(bluetoothctl devices Paired 2>/dev/null)
 
             B_OPTS="󰂲 Turn Bluetooth OFF
-$CONNECTED
-$PAIRED
-󰴈 Scan for new devices
-󰀱 Open full manager (bluetuith)
+${CONNECTED}${PAIRED}󰴈 Scan for new devices...
+󰀱 Open bluetuith (full manager)
 ─────────────────────────────────
 󰌍 Back"
 
-            B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " Bluetooth | ")
+            B_CHOICE=$(echo -e "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
             if [[ "$B_CHOICE" =~ "Back" || -z "$B_CHOICE" ]]; then return; fi
 
@@ -185,31 +179,161 @@ $PAIRED
                 bluetoothctl power off
                 tnotify "Bluetooth" "Disabled"
                 pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+
             elif [[ "$B_CHOICE" =~ "Scan for new devices" ]]; then
-                tnotify "Bluetooth" "Scanning..."
-                bluetoothctl scan on 2>/dev/null &
-                sleep 3
-                kill $! 2>/dev/null
-            elif [[ "$B_CHOICE" =~ "Open full manager" ]]; then
-                $TERM_CMD bluetuith
+                bt_scan_and_pair
+
+            elif [[ "$B_CHOICE" =~ "Open bluetuith" ]]; then
+                if command -v bluetuith &>/dev/null; then
+                    $TERM_CMD bluetuith
+                else
+                    tnotify "Bluetooth" "bluetuith not installed"
+                fi
+
             elif [[ "$B_CHOICE" =~ "(connected)" ]]; then
-                # Connected device - offer disconnect
-                DEV_NAME=$(echo "$B_CHOICE" | sed 's/󰂱 //g' | sed 's/ (connected)//g')
-                DEV_MAC=$(bluetoothctl devices Connected | grep "$DEV_NAME" | awk '{print $2}')
-                bluetoothctl disconnect "$DEV_MAC"
-                tnotify "Bluetooth" "Disconnected from $DEV_NAME"
-                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
-            elif [[ -n "$B_CHOICE" ]]; then
-                # Try to connect to selected device
-                DEV_NAME=$(echo "$B_CHOICE" | sed 's/󰂱\|󰂯//g' | xargs)
-                DEV_MAC=$(bluetoothctl devices | grep "$DEV_NAME" | awk '{print $2}')
-                if [ -n "$DEV_MAC" ]; then
-                    tnotify "Bluetooth" "Connecting to $DEV_NAME..."
-                    bluetoothctl connect "$DEV_MAC" && notify-send "Bluetooth" "Connected to $DEV_NAME" || tnotify "Bluetooth" "Connection failed"
+                # Connected device — offer disconnect or forget
+                DEV_MAC=$(echo "$B_CHOICE" | grep -oP '\[\K[A-F0-9:]+(?=\])')
+                DEV_NAME=$(echo "$B_CHOICE" | sed 's/^[^ ]* //;s/ \[.*$//')
+                ACTION=$(echo -e "󰂲 Disconnect\n Forget (unpair)\n󰌍 Cancel" | tfuzzel -d -p " $DEV_NAME | ")
+                if [[ "$ACTION" =~ "Disconnect" ]]; then
+                    bluetoothctl disconnect "$DEV_MAC" 2>/dev/null
+                    tnotify "Bluetooth" "Disconnected from $DEV_NAME"
                     pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                elif [[ "$ACTION" =~ "Forget" ]]; then
+                    bluetoothctl disconnect "$DEV_MAC" 2>/dev/null
+                    bluetoothctl remove "$DEV_MAC" 2>/dev/null
+                    tnotify "Bluetooth" "Removed $DEV_NAME"
+                fi
+
+            elif [[ "$B_CHOICE" =~ "(paired)" ]]; then
+                # Paired but not connected — offer connect or forget
+                DEV_MAC=$(echo "$B_CHOICE" | grep -oP '\[\K[A-F0-9:]+(?=\])')
+                DEV_NAME=$(echo "$B_CHOICE" | sed 's/^[^ ]* //;s/ \[.*$//')
+                ACTION=$(echo -e "󰂱 Connect\n Forget (unpair)\n󰌍 Cancel" | tfuzzel -d -p " $DEV_NAME | ")
+                if [[ "$ACTION" =~ "Connect" ]]; then
+                    tnotify "Bluetooth" "Connecting to $DEV_NAME..."
+                    if bluetoothctl connect "$DEV_MAC" 2>/dev/null; then
+                        tnotify "Bluetooth" "Connected to $DEV_NAME"
+                    else
+                        tnotify "Bluetooth" "Failed to connect to $DEV_NAME"
+                    fi
+                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                elif [[ "$ACTION" =~ "Forget" ]]; then
+                    bluetoothctl remove "$DEV_MAC" 2>/dev/null
+                    tnotify "Bluetooth" "Removed $DEV_NAME"
                 fi
             fi
         fi
     done
 }
 
+# Dedicated scan + pair flow
+bt_scan_and_pair() {
+    # Enable pairing and discovery
+    bluetoothctl pairable on 2>/dev/null
+    bluetoothctl discoverable on 2>/dev/null
+
+    notify-send -t 5000 "Bluetooth" "Scanning... put your device in pairing mode" 2>/dev/null
+
+    # Scan for devices (keep scan running long enough to find BLE devices)
+    timeout 8 bluetoothctl --timeout 8 scan on >/dev/null 2>&1 &
+    local SCAN_PID=$!
+    sleep 8
+    kill $SCAN_PID 2>/dev/null
+    wait $SCAN_PID 2>/dev/null
+
+    # Get all discovered devices, exclude already-paired
+    local PAIRED_MACS
+    PAIRED_MACS=$(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}')
+
+    local DISCOVERED=""
+    while read -r _ mac name; do
+        [ -z "$mac" ] && continue
+        [ -z "$name" ] && continue
+        # Skip already paired
+        if echo "$PAIRED_MACS" | grep -q "$mac"; then continue; fi
+        # Skip unnamed/placeholder devices
+        [[ "$name" =~ ^[0-9A-F]{2}[-:] ]] && name="Unknown ($mac)"
+        DISCOVERED+="󰂰 $name [$mac]"$'\n'
+    done < <(bluetoothctl devices 2>/dev/null)
+
+    if [ -z "$DISCOVERED" ]; then
+        DISCOVERED="(no new devices found)"$'\n'
+    fi
+
+    local DEV_OPTS="${DISCOVERED}󰴈 Scan again
+󰌍 Back"
+
+    local DEV_CHOICE
+    DEV_CHOICE=$(echo -e "$DEV_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂰 New devices | ")
+
+    # Disable discoverable after scan
+    bluetoothctl discoverable off 2>/dev/null
+
+    if [[ "$DEV_CHOICE" =~ "Back" || -z "$DEV_CHOICE" ]]; then
+        bluetoothctl pairable off 2>/dev/null
+        return
+    fi
+
+    if [[ "$DEV_CHOICE" =~ "Scan again" ]]; then
+        bt_scan_and_pair
+        return
+    fi
+
+    if [[ "$DEV_CHOICE" =~ "no new devices" ]]; then
+        bluetoothctl pairable off 2>/dev/null
+        return
+    fi
+
+    # Extract MAC from selection
+    local SEL_MAC SEL_NAME
+    SEL_MAC=$(echo "$DEV_CHOICE" | grep -oP '\[\K[A-F0-9:]+(?=\])')
+    SEL_NAME=$(echo "$DEV_CHOICE" | sed 's/^[^ ]* //;s/ \[.*$//')
+
+    if [ -z "$SEL_MAC" ]; then
+        bluetoothctl pairable off 2>/dev/null
+        return
+    fi
+
+    tnotify "Bluetooth" "Pairing with $SEL_NAME..."
+
+    # bt-agent handles BLE pairing handshake — bluetoothctl can't register
+    # an agent in non-interactive/scripted mode, so we use bt-agent from
+    # bluez-tools as a standalone background daemon.
+    pkill bt-agent 2>/dev/null; sleep 0.3
+    bt-agent -c NoInputNoOutput &
+    local AGENT_PID=$!
+    sleep 0.5
+
+    # Trust + pair + connect as separate commands (agent handles handshake)
+    bluetoothctl trust "$SEL_MAC" 2>/dev/null
+    sleep 0.5
+    local PAIR_RESULT
+    PAIR_RESULT=$(timeout 10 bluetoothctl pair "$SEL_MAC" 2>&1)
+
+    if echo "$PAIR_RESULT" | grep -qi "pairing successful\|already paired"; then
+        tnotify "Bluetooth" "Paired with $SEL_NAME — connecting..."
+        sleep 1
+
+        local CONN_RESULT
+        CONN_RESULT=$(timeout 10 bluetoothctl connect "$SEL_MAC" 2>&1)
+
+        if echo "$CONN_RESULT" | grep -qi "connection successful\|already connected"; then
+            tnotify "Bluetooth" "Connected to $SEL_NAME"
+        else
+            tnotify "Bluetooth" "Paired but connect failed — try again from main menu"
+        fi
+    else
+        if echo "$PAIR_RESULT" | grep -qi "not available\|timeout\|failed"; then
+            tnotify "Bluetooth" "Pairing failed — make sure $SEL_NAME is in pairing mode"
+        else
+            tnotify "Bluetooth" "Pairing failed with $SEL_NAME"
+        fi
+    fi
+
+    # Clean up agent
+    kill $AGENT_PID 2>/dev/null; wait $AGENT_PID 2>/dev/null
+
+    bluetoothctl pairable off 2>/dev/null
+    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+}

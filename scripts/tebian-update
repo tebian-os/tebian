@@ -47,10 +47,11 @@ for script in "$TEBIAN_DIR/scripts/"*; do
     name=$(basename "$script")
     case "$name" in
         desktop.sh|build-iso.sh|uninstall.sh) continue ;;
-        *) cp "$script" "$LOCAL_BIN/" ;;
+        *) cp -r "$script" "$LOCAL_BIN/" ;;
     esac
 done
 chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
+chmod +x "$LOCAL_BIN"/tebian-settings.d/*.sh 2>/dev/null || true
 echo -e "${GREEN}[update]${NC} Scripts synced"
 
 # Run rebuild if manifest exists
