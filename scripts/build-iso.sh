@@ -152,25 +152,10 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin user --noclear %I $TERM
 GETTY
 
-# Auto-launch installer menu on login
+# Auto-launch installer on login
 cat >> /home/user/.bash_profile << 'PROFILE'
-# Tebian Live Session
-clear
-echo ""
-echo "  ┌───────────────────────────────┐"
-echo "  │       T E B I A N             │"
-echo "  │                               │"
-echo "  │  [1] Install Tebian           │"
-echo "  │  [2] Shell (try before install)│"
-echo "  │                               │"
-echo "  └───────────────────────────────┘"
-echo ""
-read -p "  Select [1/2]: " choice
-case "$choice" in
-    1) sudo tebian-installer ;;
-    2) echo ""; echo "  Type 'sudo tebian-installer' to install later."; echo "" ;;
-    *) echo ""; echo "  Type 'sudo tebian-installer' to install later."; echo "" ;;
-esac
+# Tebian Live Session — launch installer directly
+sudo tebian-installer
 PROFILE
 chown user:user /home/user/.bash_profile
 HOOKEOF

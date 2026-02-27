@@ -82,16 +82,22 @@ die() {
 
 # ── Step 1: Welcome ──
 welcome() {
-    whiptail --title "  T E B I A N" --msgbox "\
-Welcome to the Tebian Installer.
+    local choice
+    choice=$(whiptail --title "  T E B I A N" --menu "\
+Welcome to Tebian.
 
-This will install Tebian OS to your hard drive.
+Select an option below:" \
+        $WT_HEIGHT $WT_WIDTH $WT_MENU \
+        "install" "Install Tebian to disk" \
+        "shell"   "Drop to shell (try before installing)" \
+        3>&1 1>&2 2>&3) || exit 0
 
-  • Dual-boot with Windows supported
-  • Optional disk encryption (LUKS)
-  • Desktop or Server mode
-
-Press OK to begin." $WT_HEIGHT $WT_WIDTH
+    if [ "$choice" = "shell" ]; then
+        echo ""
+        echo "  Type 'sudo tebian-installer' to return to the installer."
+        echo ""
+        exit 0
+    fi
 }
 
 # ── Step 2: Detect boot mode ──
@@ -121,7 +127,7 @@ select_disk() {
 Choose the disk to install Tebian on.
 
 WARNING: Data on the selected disk may be erased." \
-        $WT_HEIGHT $WT_WIDTH $WT_MENU "${disks[@]}" 3>&1 1>&2 2>&3) || exit 1
+        $WT_HEIGHT $WT_WIDTH $WT_MENU "${disks[@]}" 3>&1 1>&2 2>&3) || return 1
 }
 
 # ── Step 4: Partition strategy ──
@@ -170,7 +176,7 @@ select_partition_mode() {
     choice=$(whiptail --title "  Partition Disk" --menu "\
 ${existing_os}
 How would you like to partition ${DISK}?" \
-        $WT_HEIGHT $WT_WIDTH $WT_MENU "${options[@]}" 3>&1 1>&2 2>&3) || exit 1
+        $WT_HEIGHT $WT_WIDTH $WT_MENU "${options[@]}" 3>&1 1>&2 2>&3) || return 1
 
     case "$choice" in
         alongside) partition_alongside ;;
@@ -414,7 +420,7 @@ setup_encryption() {
 # ── Step 6: User creation ──
 setup_user() {
     while true; do
-        USERNAME=$(input "Enter your username:" "") || exit 1
+        USERNAME=$(input "Enter your username:" "") || return 1
         # Validate username
         if [[ "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]] && [ ${#USERNAME} -le 32 ]; then
             break
@@ -424,8 +430,8 @@ setup_user() {
 
     while true; do
         local pass1 pass2
-        pass1=$(password "Enter password for ${USERNAME}:") || exit 1
-        pass2=$(password "Confirm password:") || exit 1
+        pass1=$(password "Enter password for ${USERNAME}:") || return 1
+        pass2=$(password "Confirm password:") || return 1
 
         if [ "$pass1" = "$pass2" ] && [ -n "$pass1" ]; then
             USERPASS="$pass1"
@@ -434,7 +440,7 @@ setup_user() {
         msg "Passwords don't match or are empty. Try again."
     done
 
-    HOSTNAME_VAL=$(input "Enter hostname:" "tebian") || exit 1
+    HOSTNAME_VAL=$(input "Enter hostname:" "tebian") || return 1
 }
 
 # ── Step 7: Mode selection ──
@@ -444,7 +450,7 @@ Choose what to install:\n" \
         $WT_HEIGHT $WT_WIDTH $WT_MENU \
         "desktop" "Tebian Desktop (Sway, audio, apps menu)" \
         "server"  "Tebian Server (headless)" \
-        3>&1 1>&2 2>&3) || exit 1
+        3>&1 1>&2 2>&3) || return 1
 
     if [ "$MODE" = "server" ]; then
         MODE=$(whiptail --title "  Server Mode" --menu "\
@@ -452,7 +458,7 @@ Choose server configuration:\n" \
             $WT_HEIGHT $WT_WIDTH $WT_MENU \
             "server-bare"   "Bare Server (SSH + pure Debian)" \
             "server-secure" "Secure Server (SSH + firewall + monitoring)" \
-            3>&1 1>&2 2>&3) || exit 1
+            3>&1 1>&2 2>&3) || return 1
     fi
 }
 
@@ -480,7 +486,7 @@ Ready to install Tebian.
   Mode:        ${mode_str}
 
 This is your last chance to cancel.
-Proceed with installation?" $WT_HEIGHT $WT_WIDTH || exit 1
+Proceed with installation?" $WT_HEIGHT $WT_WIDTH || return 1
 }
 
 # ── Step 9: Install base system ──
@@ -712,7 +718,7 @@ cleanup() {
     [ "$ENCRYPT" = true ] && cryptsetup close "$CRYPT_NAME" 2>/dev/null || true
 }
 
-# ── Main ──
+# ── Main (step-based with back navigation) ──
 main() {
     trap cleanup EXIT
 
@@ -721,14 +727,30 @@ main() {
         die "The installer must be run as root.\n\nRun: sudo tebian-installer"
     fi
 
-    welcome
     detect_efi
-    select_disk
-    select_partition_mode
-    setup_encryption
-    setup_user
-    select_mode
-    confirm
+
+    # Steps array — cancel on any step goes back to previous
+    local step=0
+    local steps=(welcome select_disk select_partition_mode setup_encryption setup_user select_mode confirm)
+
+    while [ $step -lt ${#steps[@]} ]; do
+        if ${steps[$step]}; then
+            step=$((step + 1))
+        else
+            # Cancel pressed — go back (but not before first step)
+            if [ $step -gt 0 ]; then
+                step=$((step - 1))
+            else
+                # Cancel on welcome = exit to shell
+                echo ""
+                echo "  Type 'sudo tebian-installer' to return to the installer."
+                echo ""
+                exit 0
+            fi
+        fi
+    done
+
+    # All steps passed — install
     install_base
 
     whiptail --title "  Installation Complete" --msgbox "\
