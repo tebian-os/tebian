@@ -51,6 +51,7 @@ lb config \
     --architecture amd64 \
     --distribution "$DEBIAN_VERSION" \
     --binary-images iso-hybrid \
+    --bootloaders "grub-efi,syslinux" \
     --bootappend-live "quiet splash" \
     --debian-installer none \
     --mode debian \
@@ -64,6 +65,10 @@ lb config \
 mkdir -p config/package-lists
 
 cat > config/package-lists/live.list.chroot << 'EOF'
+# Live boot (required — mounts squashfs as root)
+live-boot
+live-boot-initramfs-tools
+
 # Live session packages (for running the installer)
 linux-image-amd64
 firmware-linux
