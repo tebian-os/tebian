@@ -52,7 +52,7 @@ lb config \
     --distribution "$DEBIAN_VERSION" \
     --binary-images iso-hybrid \
     --bootloaders "grub-efi,syslinux" \
-    --bootappend-live "quiet splash" \
+    --bootappend-live "boot=live components quiet splash" \
     --debian-installer none \
     --mode debian \
     --archive-areas "main contrib non-free non-free-firmware" \
