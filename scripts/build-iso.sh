@@ -42,16 +42,17 @@ sudo apt install -y live-build
 BUILD_DIR="tebian-build-amd64"
 ISO_NAME="tebian-$(date +%Y%m%d).iso"
 
-rm -rf "$BUILD_DIR"
+# Clean old build (needs sudo — lb build creates root-owned files)
+sudo rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Initialize live-build (no debian-installer — we use our own)
+# Initialize live-build
 lb config \
     --architecture amd64 \
     --distribution "$DEBIAN_VERSION" \
     --binary-images iso-hybrid \
-    --bootloaders "grub-efi,syslinux" \
+    --bootloaders "syslinux,grub-efi" \
     --bootappend-live "boot=live components quiet splash" \
     --debian-installer none \
     --mode debian \
@@ -68,12 +69,15 @@ cat > config/package-lists/live.list.chroot << 'EOF'
 # Live boot (required — mounts squashfs as root)
 live-boot
 live-boot-initramfs-tools
+live-config
+live-config-systemd
 
 # Live session packages (for running the installer)
 linux-image-amd64
 firmware-linux
 firmware-iwlwifi
 firmware-misc-nonfree
+systemd-sysv
 sudo
 curl
 bash-completion
@@ -100,7 +104,7 @@ EOF
 
 # ── Copy Tebian repo into live filesystem ──
 mkdir -p config/includes.chroot/home/user/Tebian
-rsync -a --exclude='node_modules' --exclude='dist' --exclude='.astro' "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
+rsync -a --exclude='node_modules' --exclude='dist' --exclude='.astro' --exclude='.git' "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
 
 # Install tebian-installer system-wide
 mkdir -p config/includes.chroot/usr/local/bin
@@ -118,30 +122,31 @@ chmod +x config/includes.chroot/usr/local/bin/tebian-session
 mkdir -p config/includes.chroot/usr/share/backgrounds/tebian
 cp "$TEBIAN_SRC/assets/wallpapers/glass.jpg" config/includes.chroot/usr/share/backgrounds/tebian/default.jpg
 
-# ── Hooks ──
-mkdir -p config/hooks/live
+# ── Hooks (chroot hooks go in config/hooks/normal/) ──
+mkdir -p config/hooks/normal
 
-# Create live user
-cat > config/hooks/live/0100-tebian-user.hook.chroot << 'EOF'
+# Create live user and configure auto-login
+cat > config/hooks/normal/0100-tebian-live.hook.chroot << 'HOOKEOF'
 #!/bin/bash
+# Create the live user
 useradd -m -s /bin/bash user
 echo "user:user" | chpasswd
 usermod -aG sudo user
 chown -R user:user /home/user/Tebian
-EOF
-chmod +x config/hooks/live/0100-tebian-user.hook.chroot
 
 # Passwordless sudo for live session (installer needs root)
-cat > config/hooks/live/0110-live-sudo.hook.chroot << 'EOF'
-#!/bin/bash
 echo "user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/live-user
 chmod 440 /etc/sudoers.d/live-user
-EOF
-chmod +x config/hooks/live/0110-live-sudo.hook.chroot
 
-# Auto-launch installer on live boot login
-cat > config/hooks/live/0200-autostart.hook.chroot << 'EOF'
-#!/bin/bash
+# Auto-login on tty1 via systemd override
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << 'GETTY'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin user --noclear %I $TERM
+GETTY
+
+# Auto-launch installer menu on login
 cat >> /home/user/.bash_profile << 'PROFILE'
 # Tebian Live Session
 clear
@@ -162,8 +167,8 @@ case "$choice" in
 esac
 PROFILE
 chown user:user /home/user/.bash_profile
-EOF
-chmod +x config/hooks/live/0200-autostart.hook.chroot
+HOOKEOF
+chmod +x config/hooks/normal/0100-tebian-live.hook.chroot
 
 # ── Build ──
 echo ""
