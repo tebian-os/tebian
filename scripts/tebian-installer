@@ -131,7 +131,7 @@ select_partition_mode() {
     local has_linux=false
     local existing_os=""
 
-    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9] 2>/dev/null; do
+    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
         [ -b "$part" ] || continue
         local fstype
         fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
@@ -250,7 +250,7 @@ partition_alongside() {
     local largest_part=""
     local largest_size=0
 
-    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9] 2>/dev/null; do
+    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
         [ -b "$part" ] || continue
         local size_bytes
         size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
