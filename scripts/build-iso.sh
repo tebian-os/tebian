@@ -62,6 +62,12 @@ lb config \
     --mirror-bootstrap http://deb.debian.org/debian \
     --mirror-binary http://deb.debian.org/debian
 
+# ── Bootloader branding ──
+if [ -d "$TEBIAN_SRC/config/bootloaders" ]; then
+    cp -r "$TEBIAN_SRC/config/bootloaders" config/
+    echo -e "${GREEN}[iso]${NC} Custom boot theme applied"
+fi
+
 # ── Package lists ──
 mkdir -p config/package-lists
 

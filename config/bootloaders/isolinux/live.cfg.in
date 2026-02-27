@@ -1,0 +1,18 @@
+label live-normal
+  menu label Tebian OS
+  menu default
+  linux @KERNEL_LIVE@
+  append @APPEND_LIVE@
+  initrd @INITRD_LIVE@
+
+label live-failsafe
+  menu label Tebian OS (safe graphics)
+  linux @KERNEL_LIVE@
+  append @APPEND_LIVE@ nomodeset
+  initrd @INITRD_LIVE@
+
+label live-toram
+  menu label Tebian OS (load to RAM)
+  linux @KERNEL_LIVE@
+  append @APPEND_LIVE@ toram
+  initrd @INITRD_LIVE@
