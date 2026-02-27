@@ -183,6 +183,22 @@ How would you like to partition ${DISK}?" \
 partition_erase() {
     yesno "This will ERASE ALL DATA on ${DISK}.\n\nAre you sure?" || exit 1
 
+    # Set partition names BEFORE the subshell so they survive
+    if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
+        local P="p"
+    else
+        local P=""
+    fi
+
+    if $IS_EFI; then
+        PARTITION_EFI="${DISK}${P}1"
+        PARTITION_SWAP="${DISK}${P}2"
+        PARTITION_ROOT="${DISK}${P}3"
+    else
+        PARTITION_SWAP="${DISK}${P}1"
+        PARTITION_ROOT="${DISK}${P}2"
+    fi
+
     (
         echo 10; echo "# Wiping partition table..."
         wipefs -a "$DISK" >/dev/null 2>&1
@@ -199,17 +215,6 @@ partition_erase() {
             partprobe "$DISK" 2>/dev/null || true
             sleep 1
 
-            # Detect partition names (handle nvme vs sd naming)
-            if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
-                PARTITION_EFI="${DISK}p1"
-                PARTITION_SWAP="${DISK}p2"
-                PARTITION_ROOT="${DISK}p3"
-            else
-                PARTITION_EFI="${DISK}1"
-                PARTITION_SWAP="${DISK}2"
-                PARTITION_ROOT="${DISK}3"
-            fi
-
             echo 60; echo "# Formatting EFI partition..."
             mkfs.fat -F32 "$PARTITION_EFI" >/dev/null 2>&1
         else
@@ -222,14 +227,6 @@ partition_erase() {
             sleep 1
             partprobe "$DISK" 2>/dev/null || true
             sleep 1
-
-            if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
-                PARTITION_SWAP="${DISK}p1"
-                PARTITION_ROOT="${DISK}p2"
-            else
-                PARTITION_SWAP="${DISK}1"
-                PARTITION_ROOT="${DISK}2"
-            fi
         fi
 
         echo 70; echo "# Formatting swap..."
@@ -287,6 +284,9 @@ partition_alongside() {
     local fstype
     fstype=$(blkid -o value -s TYPE "$largest_part" 2>/dev/null || true)
 
+    local _partfile
+    _partfile=$(mktemp /tmp/tebian-parts.XXXXXX)
+
     (
         echo 10; echo "# Preparing to resize..."
 
@@ -309,46 +309,37 @@ partition_alongside() {
         echo 50; echo "# Creating Tebian partitions in free space..."
         local free_start="${shrink_to_gb}GB"
 
+        parted -s "$DISK" mkpart primary linux-swap "$free_start" "$((shrink_to_gb + 2))GB"
+        parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GB" 100%
+
+        sleep 1
+        partprobe "$DISK" 2>/dev/null || true
+        sleep 1
+
+        # Find our new partitions (last two) and write to temp file
+        local parts
+        parts=($(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$" | tail -2))
+        echo "PARTITION_SWAP=${parts[0]}" > "$_partfile"
+        echo "PARTITION_ROOT=${parts[1]}" >> "$_partfile"
+
         if $IS_EFI; then
-            # EFI: create swap + root in free space (EFI partition already exists)
-            parted -s "$DISK" mkpart primary linux-swap "$free_start" "$((shrink_to_gb + 2))GB"
-            parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GB" 100%
-
-            sleep 1
-            partprobe "$DISK" 2>/dev/null || true
-            sleep 1
-
-            # Find our new partitions (last two)
-            local parts
-            parts=($(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$" | tail -2))
-            PARTITION_SWAP="${parts[0]}"
-            PARTITION_ROOT="${parts[1]}"
-
-            # Find existing EFI partition
-            PARTITION_EFI=$(blkid -t TYPE=vfat -o device "$DISK"* 2>/dev/null | head -1)
-        else
-            # BIOS: create swap + root in free space
-            parted -s "$DISK" mkpart primary linux-swap "$free_start" "$((shrink_to_gb + 2))GB"
-            parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GB" 100%
-
-            sleep 1
-            partprobe "$DISK" 2>/dev/null || true
-            sleep 1
-
-            local parts
-            parts=($(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$" | tail -2))
-            PARTITION_SWAP="${parts[0]}"
-            PARTITION_ROOT="${parts[1]}"
+            local efi_part
+            efi_part=$(blkid -t TYPE=vfat -o device "$DISK"* 2>/dev/null | head -1)
+            echo "PARTITION_EFI=$efi_part" >> "$_partfile"
         fi
 
         echo 70; echo "# Formatting swap..."
-        mkswap "$PARTITION_SWAP" >/dev/null 2>&1
+        mkswap "${parts[0]}" >/dev/null 2>&1
 
         echo 80; echo "# Formatting root partition..."
-        mkfs.ext4 -F "$PARTITION_ROOT" >/dev/null 2>&1
+        mkfs.ext4 -F "${parts[1]}" >/dev/null 2>&1
 
         echo 100; echo "# Partitioning complete"
     ) | progress "Partitioning for dual-boot..."
+
+    # Read partition names back from temp file
+    source "$_partfile"
+    rm -f "$_partfile"
 }
 
 # ── Partition: manual ──
