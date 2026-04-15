@@ -4,7 +4,7 @@
 # Uses include files instead of fragile sed replacements
 # ==============================================================================
 
-THEME_DIR="$HOME/Tebian/configs/themes"
+THEME_DIR="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes"
 CONFIG_DIR="$HOME/.config"
 SWAY_THEME_FILE="$CONFIG_DIR/sway/theme"
 
@@ -23,16 +23,7 @@ apply_theme() {
     mkdir -p "$CONFIG_DIR/sway"
     cp "$theme_path/sway-theme" "$SWAY_THEME_FILE"
     
-    # 2. Update bar mode in main sway config (sadly, sway doesn't support variables here)
-    local bar_mode="hide"
-    local bar_hidden="hide"
-    case "$theme" in
-        solid|paper) bar_mode="dock"; bar_hidden="show" ;;
-        *) bar_mode="hide"; bar_hidden="hide" ;;
-    esac
-    sed -i -E "s/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)[[:space:]]*$/    mode $bar_mode/" "$CONFIG_DIR/sway/config"
-    
-    # 3. Kitty
+    # 2. Kitty
     cp "$theme_path/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
     
     # 4. Fuzzel
@@ -40,16 +31,18 @@ apply_theme() {
     cp "$theme_path/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
     
     # 5. Mako
+    mkdir -p "$CONFIG_DIR/mako"
     cp "$theme_path/mako" "$CONFIG_DIR/mako/config"
     
     # 6. Wallpaper
     local wallpaper_dir="$HOME/.local/share/backgrounds/tebian"
-    local wallpaper_src="$HOME/Tebian/assets/wallpapers/${theme}.jpg"
+    local wallpaper_src="${TEBIAN_DIR:-$HOME/Tebian}/assets/wallpapers/${theme}.jpg"
     if [ -f "$wallpaper_src" ]; then
         mkdir -p "$wallpaper_dir"
         cp "$wallpaper_src" "$wallpaper_dir/default.jpg"
-        pkill swaybg 2>/dev/null
+        pkill swaybg 2>/dev/null; sleep 0.1
         swaybg -i "$wallpaper_dir/default.jpg" -m fill &
+        disown
     fi
     
     # 7. GTK theme (dark/light based on theme)
@@ -61,12 +54,12 @@ apply_theme() {
 [Settings]
 gtk-application-prefer-dark-theme=true
 gtk-theme-name=Adwaita-dark
-gtk-icon-theme-name=Papirus-Dark
+gtk-icon-theme-name=Papirus
 gtk-cursor-theme-name=Adwaita
 GTKEOF
     fi
     # Ensure icon theme line exists
-    grep -q '^gtk-icon-theme-name=' "$gtk_settings" || echo "gtk-icon-theme-name=Papirus-Dark" >> "$gtk_settings"
+    grep -q '^gtk-icon-theme-name=' "$gtk_settings" || echo "gtk-icon-theme-name=Papirus" >> "$gtk_settings"
     if [ "$theme" = "paper" ]; then
         sed -i 's/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=false/' "$gtk_settings"
         sed -i 's/^gtk-theme-name=.*/gtk-theme-name=Adwaita/' "$gtk_settings"
@@ -74,7 +67,52 @@ GTKEOF
     else
         sed -i 's/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=true/' "$gtk_settings"
         sed -i 's/^gtk-theme-name=.*/gtk-theme-name=Adwaita-dark/' "$gtk_settings"
-        sed -i 's/^gtk-icon-theme-name=.*/gtk-icon-theme-name=Papirus-Dark/' "$gtk_settings"
+        sed -i 's/^gtk-icon-theme-name=.*/gtk-icon-theme-name=Papirus/' "$gtk_settings"
+    fi
+
+    # 7b. GTK4 settings (same as GTK3 but separate path)
+    local gtk4_settings="$CONFIG_DIR/gtk-4.0/settings.ini"
+    mkdir -p "$CONFIG_DIR/gtk-4.0"
+    if [ "$theme" = "paper" ]; then
+        cat > "$gtk4_settings" <<'GTK4EOF'
+[Settings]
+gtk-application-prefer-dark-theme=false
+gtk-theme-name=Adwaita
+gtk-icon-theme-name=Papirus
+gtk-cursor-theme-name=Adwaita
+GTK4EOF
+    else
+        cat > "$gtk4_settings" <<'GTK4EOF'
+[Settings]
+gtk-application-prefer-dark-theme=true
+gtk-theme-name=Adwaita-dark
+gtk-icon-theme-name=Papirus
+gtk-cursor-theme-name=Adwaita
+GTK4EOF
+    fi
+
+    # 7c. gsettings for Wayland portal theme detection
+    if command -v gsettings &>/dev/null; then
+        if [ "$theme" = "paper" ]; then
+            gsettings set org.gnome.desktop.interface color-scheme 'prefer-light' 2>/dev/null || true
+            gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita' 2>/dev/null || true
+        else
+            gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 2>/dev/null || true
+            gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' 2>/dev/null || true
+        fi
+        gsettings set org.gnome.desktop.interface icon-theme 'Papirus' 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' 2>/dev/null || true
+    fi
+
+    # 7d. GTK CSS overrides (force colored sidebar icons in file managers)
+    local gtk_css="$CONFIG_DIR/gtk-3.0/gtk.css"
+    if [ ! -f "$gtk_css" ]; then
+        cat > "$gtk_css" <<'CSSEOF'
+/* Force sidebar to use colored icons instead of symbolic (dark) ones */
+placessidebar row image {
+    -gtk-icon-style: regular;
+}
+CSSEOF
     fi
 
     # 8. gtklock CSS colors (update from theme.conf)
@@ -97,14 +135,22 @@ GTKEOF
         sed -i "/#error-label/,/}/ s/color: #[0-9a-fA-F]\{6\}/color: $t_red/" "$gtklock_css"
     fi
 
-    # 9. wob.ini colors
+    # 9. wob.ini colors (all 6 fields)
     local wob_conf="$CONFIG_DIR/wob/wob.ini"
     if [ -f "$wob_conf" ] && [ -f "$theme_conf" ]; then
-        local t_base t_surface
+        local t_base t_surface t_wob_accent t_wob_red
         t_base=$(grep '^BASE=' "$theme_conf" | cut -d= -f2)
         t_surface=$(grep '^SURFACE0=' "$theme_conf" | cut -d= -f2)
-        [ -n "$t_base" ] && sed -i "s/^background_color = .*/background_color = ${t_base#\#}FF/" "$wob_conf"
+        t_wob_accent=$(grep -m1 '^LAVENDER=\|^FROST=\|^PURPLE=\|^BLUE=\|^CYAN=' "$theme_conf" | cut -d= -f2)
+        t_wob_red=$(grep '^RED=' "$theme_conf" | cut -d= -f2)
+        [ -z "$t_wob_accent" ] && t_wob_accent="$t_surface"
+        [ -z "$t_wob_red" ] && t_wob_red="#bf616a"
+        [ -n "$t_base" ] && sed -i "s/^background_color = .*/background_color = ${t_base#\#}DD/" "$wob_conf"
+        [ -n "$t_wob_accent" ] && sed -i "s/^border_color = .*/border_color = ${t_wob_accent#\#}4D/" "$wob_conf"
         [ -n "$t_surface" ] && sed -i "s/^bar_color = .*/bar_color = ${t_surface#\#}FF/" "$wob_conf"
+        [ -n "$t_base" ] && sed -i "s/^overflow_background_color = .*/overflow_background_color = ${t_base#\#}DD/" "$wob_conf"
+        [ -n "$t_wob_red" ] && sed -i "s/^overflow_border_color = .*/overflow_border_color = ${t_wob_red#\#}80/" "$wob_conf"
+        [ -n "$t_wob_red" ] && sed -i "s/^overflow_bar_color = .*/overflow_bar_color = ${t_wob_red#\#}FF/" "$wob_conf"
     fi
 
     # 10. Cursor theme (use Adwaita for consistency — available everywhere)
@@ -136,7 +182,8 @@ GTKEOF
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then
         swaymsg reload 2>/dev/null
-        pkill mako 2>/dev/null; mako &
+        pkill mako 2>/dev/null; sleep 0.1; mako &
+        disown
         notify-send "Tebian Theme" "$theme theme applied"
     fi
 

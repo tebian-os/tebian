@@ -1,8 +1,8 @@
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 # ==============================================================================
-# TEBIAN MASTER MENU (V1.0)
-# The unified entry point for Apps, Settings, and Power.
+# TEBIAN MAIN MENU (Mod+D)
+# Shows pinned apps + system entries. Pin/unpin from the App Drawer.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,67 +12,98 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
     source "$HOME/.local/bin/tebian-common"
 fi
 
-# 1. Build menu dynamically based on what's installed
-APPS=""
+PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
+DESKTOP_DIRS="/usr/share/applications $HOME/.local/share/applications /var/lib/flatpak/exports/share/applications $HOME/.local/share/flatpak/exports/share/applications"
 
-# Detect browsers
-if command -v firefox &>/dev/null; then
-    APPS+="󰈹 Firefox\0icon\x1fbrowser\n"
-elif command -v firefox-esr &>/dev/null; then
-    APPS+="󰈹 Firefox ESR\0icon\x1fbrowser\n"
-elif [ -f "$HOME/Applications/Zen.AppImage" ]; then
-    APPS+="󰈹 Zen Browser\0icon\x1fbrowser\n"
-elif command -v chromium &>/dev/null; then
-    APPS+="󰈹 Chromium\0icon\x1fbrowser\n"
+# Create default pins on first run
+if [ ! -f "$PIN_FILE" ]; then
+    mkdir -p "$HOME/.config/tebian"
+    cat > "$PIN_FILE" << 'EOF'
+firefox-esr.desktop
+firefox.desktop
+chromium.desktop
+org.mozilla.firefox.desktop
+kitty.desktop
+thunar.desktop
+code.desktop
+EOF
 fi
 
-# Core apps (always present)
-APPS+="󰆍 Terminal\0icon\x1fterminal\n"
-APPS+="󰝰 File Manager\0icon\x1fsystem-file-manager\n"
+# Resolve a .desktop file to Name and Icon
+resolve_desktop() {
+    local basename="$1"
+    for dir in $DESKTOP_DIRS; do
+        local f="$dir/$basename"
+        [ -f "$f" ] || continue
+        # Skip NoDisplay/Hidden
+        grep -q "^NoDisplay=true" "$f" 2>/dev/null && return 1
+        grep -q "^Hidden=true" "$f" 2>/dev/null && return 1
+        # Check TryExec
+        local tryexec
+        tryexec=$(grep -m1 "^TryExec=" "$f" | cut -d= -f2-)
+        [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && return 1
+        local name icon
+        name=$(grep -m1 "^Name=" "$f" | cut -d= -f2-)
+        icon=$(grep -m1 "^Icon=" "$f" | cut -d= -f2-)
+        [ -z "$name" ] && return 1
+        echo "$name|$icon|$basename"
+        return 0
+    done
+    return 1
+}
 
-# Detect optional apps
-command -v code &>/dev/null && APPS+="󰨞 VS Code\0icon\x1fvisual-studio-code\n"
-command -v parsec &>/dev/null && APPS+="󰒓 Parsec\0icon\x1fvideo-display\n"
+# Build pinned apps list
+APPS=""
+declare -A SHOWN
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    [[ "$line" =~ ^# ]] && continue
+    local_info=$(resolve_desktop "$line") || continue
+    IFS='|' read -r pname picon _pfile <<< "$local_info"
+    [ -n "${SHOWN[$pname]}" ] && continue
+    SHOWN[$pname]=1
+    if [ -n "$picon" ]; then
+        APPS+="$pname\0icon\x1f$picon\n"
+    else
+        APPS+="$pname\n"
+    fi
+done < "$PIN_FILE"
 
-# System entries (always present)
-APPS+="󰚰 System Settings\0icon\x1fpreferences-system\n"
-APPS+="󰐥 Power Options\0icon\x1fsystem-shutdown"
+# System entries (always present — nerd font icons for consistent mono look)
+APPS+="󰀻 App Drawer\n"
+APPS+="󰒓 System Settings\n"
+APPS+="󰐥 Power Options"
 
-# 2. Launch the Menu
+# Launch fuzzel
 CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰀻 Tebian | " --width 30)
 
-if [ -z "$CHOICE" ]; then exit 0; fi
+[ -z "$CHOICE" ] && exit 0
 
-# 3. Logic Hub
+# Handle system entries
 case "$CHOICE" in
-    *"Firefox ESR"*)
-        firefox-esr &
-        ;;
-    *"Firefox"*)
-        firefox &
-        ;;
-    *"Zen Browser"*)
-        ~/Applications/Zen.AppImage &
-        ;;
-    *"Chromium"*)
-        chromium &
-        ;;
-    *"Terminal"*)
-        swaymsg exec \$term &
-        ;;
-    *"File Manager"*)
-        pcmanfm &
-        ;;
-    *"VS Code"*)
-        code &
-        ;;
-    *"Parsec"*)
-        parsec &
+    *"App Drawer"*)
+        tebian-drawer &
+        exit 0
         ;;
     *"System Settings"*)
         tebian-settings
+        exit 0
         ;;
     *"Power Options"*)
         tebian-settings --power
+        exit 0
         ;;
 esac
+
+# Find and launch the selected pinned app
+for dir in $DESKTOP_DIRS; do
+    [ -d "$dir" ] || continue
+    for desktop in "$dir"/*.desktop; do
+        [ -f "$desktop" ] || continue
+        if grep -qxF "Name=$CHOICE" "$desktop" 2>/dev/null; then
+            exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
+            swaymsg exec -- "$exec_cmd"
+            exit 0
+        fi
+    done
+done

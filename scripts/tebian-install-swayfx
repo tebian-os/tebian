@@ -1,0 +1,121 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN SWAYFX INSTALLER
+# Builds SwayFX 0.5.3 from source for Debian Trixie using meson subprojects
+# Drop-in replacement for sway with blur, rounded corners, shadows, dim
+# ==============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+SWAYFX_VERSION="0.5.3"
+WLROOTS_VERSION="0.19.0"
+SCENEFX_VERSION="0.4.1"
+BUILD_DIR="$HOME/.cache/tebian-swayfx-build"
+MARKER="$HOME/.config/tebian/swayfx-installed"
+
+if [ -f "$MARKER" ]; then
+    echo "SwayFX is already installed."
+    echo "To reinstall, remove $MARKER and run again."
+    exit 0
+fi
+
+echo ""
+echo "  ┌─────────────────────────┐"
+echo "  │  SwayFX $SWAYFX_VERSION Installer  │"
+echo "  └─────────────────────────┘"
+echo ""
+echo "  This will build SwayFX from source (~5 min)."
+echo "  Your sway config is fully compatible — no changes needed."
+echo ""
+
+# 1. Install build dependencies
+echo "[1/4] Installing build dependencies..."
+sudo apt update
+sudo apt install -y \
+    meson ninja-build cmake pkg-config \
+    libwayland-dev libwayland-egl-backend-dev wayland-protocols \
+    libinput-dev libxkbcommon-dev libpixman-1-dev \
+    libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev \
+    libvulkan-dev glslang-tools \
+    libseat-dev libxcb-composite0-dev libxcb-icccm4-dev \
+    libxcb-xinput-dev libxcb-render-util0-dev \
+    libxcb-res0-dev libxcb-ewmh-dev \
+    hwdata xwayland \
+    libpcre2-dev libjson-c-dev libpango1.0-dev libcairo2-dev \
+    libgdk-pixbuf-2.0-dev libevdev-dev \
+    scdoc gettext \
+    libsystemd-dev \
+    liblcms2-dev libliftoff-dev libdisplay-info-dev \
+    git
+
+echo ""
+echo "[2/4] Downloading sources..."
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+# Download SwayFX
+git clone --depth 1 --branch "$SWAYFX_VERSION" https://github.com/WillPower3309/swayfx.git
+cd swayfx
+
+# Set up meson subprojects (bundles correct wlroots + scenefx versions)
+mkdir -p subprojects
+cd subprojects
+
+git clone --depth 1 --branch "$WLROOTS_VERSION" https://gitlab.freedesktop.org/wlroots/wlroots.git
+git clone --depth 1 --branch "$SCENEFX_VERSION" https://github.com/wlrfx/scenefx.git
+
+cd ..
+
+echo ""
+echo "[3/4] Building SwayFX (this takes a few minutes)..."
+meson setup build/ --prefix=/usr/local -Dman-pages=disabled -Dswaybar=false -Dswaynag=false
+ninja -C build/
+
+echo ""
+echo "[4/4] Installing..."
+sudo ninja -C build/ install
+sudo ldconfig
+
+# Mark as installed
+mkdir -p "$HOME/.config/tebian"
+touch "$MARKER"
+
+# Enable effects in config
+if [ -f "$HOME/.config/sway/config.user" ]; then
+    # Add swayfx effects if not already present
+    if ! grep -q '# tebian-swayfx' "$HOME/.config/sway/config.user" 2>/dev/null; then
+        cat >> "$HOME/.config/sway/config.user" << 'FXEOF'
+blur enable # tebian-swayfx
+blur_xray off # tebian-swayfx
+blur_passes 2 # tebian-swayfx
+blur_radius 5 # tebian-swayfx
+corner_radius 8 # tebian-swayfx
+shadows enable # tebian-swayfx
+shadow_blur_radius 20 # tebian-swayfx
+default_dim_inactive 0.1 # tebian-swayfx
+FXEOF
+    fi
+fi
+
+echo ""
+echo "  ✅ SwayFX $SWAYFX_VERSION installed!"
+echo ""
+echo "  SwayFX replaces sway at /usr/local/bin/sway."
+echo "  /usr/local/bin takes priority over /usr/bin in PATH."
+echo ""
+echo "  Effects enabled: blur, corner radius, shadows, dim inactive"
+echo "  Toggle effects in: Settings > More > Desktop & UI > Window Effects"
+echo ""
+echo "  Log out and back in (or reboot) to activate."
+echo ""
+
+# Clean up build directory
+rm -rf "$BUILD_DIR"

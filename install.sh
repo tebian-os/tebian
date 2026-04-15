@@ -2,6 +2,7 @@
 # ==============================================================================
 # TEBIAN REMOTE INSTALLER
 # Usage: curl -sL tebian.org/install | bash
+# Local: bash install.sh --local
 # Fleet: curl -sL tebian.org/install | bash -s -- --repo https://git.company.com/org/tebian.git
 # Works on: Debian, Raspberry Pi OS, Armbian, Ubuntu (any Debian-based distro)
 # ==============================================================================
@@ -18,10 +19,22 @@ TEBIAN_TARBALL="https://github.com/tebian-os/tebian/archive/main.tar.gz"
 TEBIAN_CHECKSUM_URL="https://github.com/tebian-os/tebian/releases/latest/download/SHA256SUMS"
 USE_GIT=""
 TEBIAN_REPO=""
+USE_LOCAL=""
+LOCAL_SRC=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --local)
+            USE_LOCAL="yes"
+            # Check if next arg is a path (not another flag)
+            if [[ $# -gt 1 && ! "$2" =~ ^-- ]]; then
+                LOCAL_SRC="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
         --repo)
             USE_GIT="yes"
             TEBIAN_REPO="$2"
@@ -54,8 +67,47 @@ if [ -f /sys/firmware/devicetree/base/model ]; then
 fi
 echo ""
 
+# Local mode: use the local tebian-os directory
+if [[ "$USE_LOCAL" == "yes" ]]; then
+    # Auto-detect source directory if not specified
+    if [ -z "$LOCAL_SRC" ]; then
+        SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$SCRIPT_PATH/bootstrap.sh" ] && [ -d "$SCRIPT_PATH/scripts" ]; then
+            LOCAL_SRC="$SCRIPT_PATH"
+        elif [ -d "$HOME/tebian-os/scripts" ]; then
+            LOCAL_SRC="$HOME/tebian-os"
+        else
+            echo -e "${RED}  Error: Could not auto-detect tebian-os directory${NC}"
+            echo "  Usage: bash install.sh --local /path/to/tebian-os"
+            exit 1
+        fi
+    fi
+
+    LOCAL_SRC="$(cd "$LOCAL_SRC" && pwd)"
+
+    if [ ! -f "$LOCAL_SRC/bootstrap.sh" ] || [ ! -d "$LOCAL_SRC/scripts" ]; then
+        echo -e "${RED}  Error: $LOCAL_SRC doesn't look like a tebian-os directory${NC}"
+        echo "  Expected: bootstrap.sh and scripts/ in $LOCAL_SRC"
+        exit 1
+    fi
+
+    echo -e "${GREEN}  Local mode:${NC} $LOCAL_SRC"
+
+    if [ "$LOCAL_SRC" != "$TEBIAN_DIR" ]; then
+        if [ -d "$TEBIAN_DIR" ]; then
+            echo -e "${YELLOW}  Updating $TEBIAN_DIR from local source...${NC}"
+        else
+            echo "  Linking local source to $TEBIAN_DIR..."
+        fi
+        rm -rf "$TEBIAN_DIR"
+        ln -sf "$LOCAL_SRC" "$TEBIAN_DIR"
+        echo -e "${GREEN}  ✓ Symlinked $TEBIAN_DIR -> $LOCAL_SRC${NC}"
+    else
+        echo -e "${GREEN}  ✓ Source is already at $TEBIAN_DIR${NC}"
+    fi
+
 # Check if Tebian is already installed
-if [ -d "$TEBIAN_DIR" ]; then
+elif [ -d "$TEBIAN_DIR" ]; then
     echo -e "${YELLOW}  Tebian directory already exists at $TEBIAN_DIR${NC}"
     echo ""
     read -p "  Update and reinstall? [Y/n]: " confirm

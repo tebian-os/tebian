@@ -14,19 +14,14 @@ sysinfo_menu() {
     GPU=$(lspci 2>/dev/null | grep -iE "VGA|3D|Display" | head -1 | sed 's/.*: //')
     
     INFO="󰋅 System Info
-─────────────────────────────────
 󰌢 Host: $HOSTNAME
 󰓅 Uptime: $UPTIME
 󰍛 Kernel: $KERNEL
-─────────────────────────────────
 󰚰 CPU: $CPU
 󰍛 RAM: $MEM_USED / $MEM_TOTAL
 󰋊 Disk: $DISK_USED / $DISK_TOTAL
-─────────────────────────────────
 󰢻 GPU: ${GPU:-Not detected}
-─────────────────────────────────
 󰌍 Back
-─────────────────────────────────
 An act of God."
 
     CHOICE=$(echo -e "$INFO" | tfuzzel -d -p "" --width 50 --lines 15)
@@ -54,9 +49,9 @@ temple_os() {
         TEMPLE_ISO=\"/tmp/TempleOS.iso\"
         if [ ! -f \"\$TEMPLE_ISO\" ]; then
             echo '  Downloading TempleOS ISO (~20MB)...'
-            curl -fSL 'https://templeos.org/Downloads/TOS_Distro.ISO' \\
-                -o \"\$TEMPLE_ISO\" 2>/dev/null || \\
             curl -fSL 'https://archive.org/download/TempleOS_ISO_Archive/TOS_Distro.ISO' \\
+                -o \"\$TEMPLE_ISO\" 2>/dev/null || \\
+            curl -fSL 'https://templeos.org/Downloads/TOS_Distro.ISO' \\
                 -o \"\$TEMPLE_ISO\" || {
                 echo '  Download failed. Try manually:'
                 echo '  https://archive.org/details/TempleOS_ISO_Archive'
@@ -85,37 +80,16 @@ temple_os() {
     "
 }
 
-backup_tracking_menu() {
-    while true; do
-    BT_OPTS="󰆏 Backup & Restore\0icon\x1fdrive-harddisk
-󰑀 Config Tracking (Git)\0icon\x1fvcs-normal
-─────────────────────────────────
-󰌍 Back"
-
-    BT_CHOICE=$(echo -e "$BT_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
-
-    if [[ "$BT_CHOICE" =~ "Back" || -z "$BT_CHOICE" ]]; then return; fi
-
-    if [[ "$BT_CHOICE" =~ "Backup & Restore" ]]; then
-        backup_menu
-    elif [[ "$BT_CHOICE" =~ "Config Tracking" ]]; then
-        config_menu
-    fi
-    done
-}
-
 backup_menu() {
     while true; do
     BACKUP_OPTS="󰆏 Backup Configs to ~/Tebian-Backup
 󰑋 Restore from Backup
-─────────────────────────────────
 󰈔 View Current Backup
-─────────────────────────────────
 󰌍 Back"
     
     B_CHOICE=$(echo -e "$BACKUP_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
     
-    if [[ "$B_CHOICE" =~ "Back" || -z "$B_CHOICE" ]]; then return; fi
+    if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
 
     if [[ "$B_CHOICE" =~ "Backup Configs" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
@@ -151,7 +125,7 @@ backup_menu() {
         BACKUPS=$(ls -1t "$BACKUP_DIR" | head -10)
         R_CHOICE=$(echo -e "󰌍 Back\n$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
         
-        if [[ -z "$R_CHOICE" ]] || [[ "$R_CHOICE" =~ "Back" ]]; then
+        if [[ -z "$R_CHOICE" ]] || [[ "$R_CHOICE" == *"󰌍 Back"* ]]; then
             continue
         fi
         
@@ -164,7 +138,7 @@ backup_menu() {
         if [ -d "$RESTORE_DIR/gtklock" ]; then cp -r "$RESTORE_DIR/gtklock" ~/.config/; fi
         if [ -f "$RESTORE_DIR/.bashrc" ]; then cp "$RESTORE_DIR/.bashrc" ~/; fi
         
-        swaymsg reload 2>/dev/null
+        swaymsg reload 2>/dev/null &
         notify-send "Restore Complete" "Restored from $R_CHOICE"
         
     elif [[ "$B_CHOICE" =~ "View Current" ]]; then
@@ -180,7 +154,7 @@ backup_menu() {
 
 config_menu() {
     while true; do
-    TEBIAN_DIR="$HOME/Tebian"
+    TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
 
     # Detect git state
     if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ]; then
@@ -196,28 +170,23 @@ config_menu() {
 
         C_OPTS="󰋽 $STATUS_LABEL
 󰋽 $REMOTE_LABEL
-─────────────────────────────────
 󰚰 Update Tebian
 󰑓 Rebuild System
 📝 Edit tebian.conf
 󰊢 View Diff
 󰆓 Set Remote URL
-─────────────────────────────────
 󰌍 Back"
     else
-        C_OPTS="─────────────────────────────────
-󰚰 Update Tebian
+        C_OPTS="󰚰 Update Tebian
 󰑓 Rebuild System
 📝 Edit tebian.conf
-─────────────────────────────────
 󰊢 Enable Config Tracking (git)
-─────────────────────────────────
 󰌍 Back"
     fi
 
     C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | ")
 
-    if [[ -z "$C_CHOICE" || "$C_CHOICE" =~ "Back" ]]; then return; fi
+    if [[ -z "$C_CHOICE" || "$C_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
     if [[ "$C_CHOICE" =~ "Update Tebian" ]]; then
         $TERM_CMD bash -c "
@@ -304,14 +273,17 @@ power_menu() {
 󰐥 Shutdown
 󰤄 Sleep
 󰍃 Logout
-─────────────────────────────────
 󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
     
-    if [[ "$P_CHOICE" =~ "Back" || -z "$P_CHOICE" ]]; then return; fi
+    if [[ "$P_CHOICE" == *"󰌍 Back"* || -z "$P_CHOICE" ]]; then return; fi
 
-    if [[ "$P_CHOICE" =~ "Reboot" ]]; then systemctl reboot
-    elif [[ "$P_CHOICE" =~ "Shutdown" ]]; then systemctl poweroff
+    if [[ "$P_CHOICE" =~ "Reboot" || "$P_CHOICE" =~ "Shutdown" ]]; then
+        # Blank display before shutdown to prevent visible Sway→Plymouth transition
+        swaymsg output '*' dpms off 2>/dev/null
+        sudo sh -c 'echo 4 > /sys/class/graphics/fb0/blank' 2>/dev/null
+        if [[ "$P_CHOICE" =~ "Reboot" ]]; then systemctl reboot
+        else systemctl poweroff; fi
     elif [[ "$P_CHOICE" =~ "Sleep" ]]; then systemctl suspend
     elif [[ "$P_CHOICE" =~ "Logout" ]]; then swaymsg exit
     fi
@@ -342,9 +314,7 @@ except:
         HISTORY="(No recent notifications)"
     fi
     HIST_OPTS="$HISTORY
-─────────────────────────────────
 🗑️  Clear All
-─────────────────────────────────
 󰌍 Back"
     H_CHOICE=$(echo -e "$HIST_OPTS" | tfuzzel -d -p " 󰍡 Notifications | ")
     if [[ "$H_CHOICE" =~ "Clear All" ]]; then
@@ -356,22 +326,20 @@ except:
 # More drawer (advanced/occasional items)
 more_menu() {
     while true; do
-    M_OPTS="󰇄 Desktop & UI\0icon\x1fpreferences-desktop-display
-󰏗 Software\0icon\x1fapplications-system
-─────────────────────────────────
-󰒃 Security & Firewall\0icon\x1fsecurity-high
-󰡨 Infrastructure\0icon\x1fapplications-utilities
-󰓅 Performance\0icon\x1fpreferences-system
-─────────────────────────────────
-󰋅 System Info\0icon\x1fdialog-information
-󰆏 Backup & Tracking\0icon\x1fdrive-harddisk
-󰍡 Notification History\0icon\x1fdialog-information
-─────────────────────────────────
+    M_OPTS="󰇄 Desktop & UI
+󰏗 Software
+󰒃 Security & Firewall
+󰡨 Infrastructure
+󰓅 Performance
+󰋅 System Info
+󰆏 Backup & Restore
+󰑀 Config Tracking (Git)
+󰍡 Notification History
 󰌍 Back"
 
     M_CHOICE=$(echo -e "$M_OPTS" | tfuzzel -d -p " More | ")
 
-    if [[ -z "$M_CHOICE" ]] || [[ "$M_CHOICE" =~ "Back" ]]; then return; fi
+    if [[ -z "$M_CHOICE" ]] || [[ "$M_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
     if [[ "$M_CHOICE" =~ "Desktop & UI" ]]; then
         ui_menu
@@ -385,8 +353,10 @@ more_menu() {
         perf_menu
     elif [[ "$M_CHOICE" =~ "System Info" ]]; then
         sysinfo_menu
-    elif [[ "$M_CHOICE" =~ "Backup" ]]; then
-        backup_tracking_menu
+    elif [[ "$M_CHOICE" =~ "Backup & Restore" ]]; then
+        backup_menu
+    elif [[ "$M_CHOICE" =~ "Config Tracking" ]]; then
+        config_menu
     elif [[ "$M_CHOICE" =~ "Notification History" ]]; then
         notification_history_menu
     fi

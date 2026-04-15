@@ -56,6 +56,9 @@ if [ -d "$TEBIAN_DIR/configs/sway" ]; then
             touch "$CONFIG_DIR/sway/config.user"
         fi
     fi
+    # Remove stale hardcoded laptop outputs from both default and user overrides.
+    sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config" 2>/dev/null || true
+    sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config.user" 2>/dev/null || true
     log_info "Sway config synced"
 fi
 
@@ -87,6 +90,7 @@ fi
 if [ -d "$TEBIAN_DIR/scripts" ]; then
     mkdir -p "$LOCAL_BIN"
     for script in "$TEBIAN_DIR/scripts/"*; do
+        [ -d "$script" ] && continue
         name=$(basename "$script")
         case "$name" in
             desktop.sh|build-iso.sh|uninstall.sh) continue ;;
@@ -94,6 +98,12 @@ if [ -d "$TEBIAN_DIR/scripts" ]; then
         esac
     done
     chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
+
+    # Copy modular settings directory
+    if [ -d "$TEBIAN_DIR/scripts/tebian-settings.d" ]; then
+        mkdir -p "$LOCAL_BIN/tebian-settings.d"
+        cp "$TEBIAN_DIR/scripts/tebian-settings.d/"*.sh "$LOCAL_BIN/tebian-settings.d/"
+    fi
     log_info "Scripts synced to $LOCAL_BIN"
 fi
 

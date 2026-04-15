@@ -21,8 +21,8 @@ log_debug() { [ "${TEBIAN_DEBUG:-0}" = "1" ] && echo -e "${BLUE}[DEBUG]${NC} $1"
 tebian_error() {
     local exit_code=$?
     log_error "Script failed at line $1 (exit code: $exit_code)"
-    if [ "${TEBIAN_DEBUG:-0}" = "1" ]; then
-        log_error "Command: $(sed -n "${1}p" "$0")"
+    if [ "${TEBIAN_DEBUG:-0}" = "1" ] && [ -f "${BASH_SOURCE[1]:-}" ]; then
+        log_error "Command: $(sed -n "${1}p" "${BASH_SOURCE[1]}")"
     fi
     exit $exit_code
 }
@@ -109,15 +109,21 @@ confirm() {
     fi
 }
 
-# Fuzzel Wrapper (Handles Icon Toggling)
+# Fuzzel Wrapper (Handles Icon Toggling + Separator Filtering)
 tfuzzel() {
+    local RESULT
     if [ -f "$HOME/.config/tebian/no_icons" ]; then
         # Text Mode: Strip Nerd Fonts (PUA: E000-F8FF, F0000-FFFFD) and Emoji (1F300-1FAFF)
-        perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@"
+        RESULT=$(perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@")
     else
         # Icon Mode (Default): Pass through
-        fuzzel "$@"
+        RESULT=$(fuzzel "$@")
     fi
+    # Filter out separator lines — treat as no selection
+    if [[ "$RESULT" =~ ^─+$ ]]; then
+        return 1
+    fi
+    echo "$RESULT"
 }
 
 # ==============================================================================
@@ -193,6 +199,11 @@ detect_hardware() {
 setup_floating_mode() {
     local config_user="$HOME/.config/sway/config.user"
     mkdir -p "$HOME/.config/sway"
+
+    # Ensure edge-snap dependency is installed
+    if ! python3 -c "import i3ipc" 2>/dev/null; then
+        sudo apt install -y python3-i3ipc 2>/dev/null
+    fi
 
     # Remove existing floating mode lines first (idempotent)
     sed -i '/# tebian-floating-mode/d' "$config_user"

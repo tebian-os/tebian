@@ -4,14 +4,13 @@
 # Audio submenu (combines mixer + output)
 audio_menu() {
     while true; do
-        A_OPTS="󰕾 Audio Mixer\0icon\x1fmultimedia-volume-control
-󰔡 Switch Output\0icon\x1faudio-speakers
-─────────────────────────────────
+        A_OPTS="󰕾 Audio Mixer
+󰔡 Switch Output
 󰌍 Back"
 
         A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " Audio | ")
 
-        if [[ -z "$A_CHOICE" ]] || [[ "$A_CHOICE" =~ "Back" ]]; then return; fi
+        if [[ -z "$A_CHOICE" ]] || [[ "$A_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
         if [[ "$A_CHOICE" =~ "Mixer" ]]; then
             if command -v pulsemixer &>/dev/null; then
@@ -36,12 +35,11 @@ audio_output_menu() {
 
     # Build menu
     MENU="󰌍 Back
-─────────────────────────────────
 $SINKS"
 
     CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 󰔡 Output | " --width 40)
 
-    if [[ -z "$CHOICE" ]] || [[ "$CHOICE" =~ "Back" ]]; then
+    if [[ -z "$CHOICE" ]] || [[ "$CHOICE" == *"󰌍 Back"* ]]; then
         return
     fi
 

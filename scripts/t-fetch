@@ -3,12 +3,12 @@
 # Tebian High-Performance Fetch (t-fetch)
 # Zero-Fork / Zero-Bloat System Reporter
 
-# Colors (Catppuccin Mocha)
-C='\033[0;35m'  # Mauve
-L='\033[0;34m'  # Lavender
-B='\033[0;30m'  # Base
-G='\033[0;32m'  # Green
-W='\033[0;37m'  # White
+# Colors (ANSI — works with any theme)
+C='\033[0;35m'  # Purple (logo)
+L='\033[0;34m'  # Blue (labels)
+B='\033[0;30m'  # Black (palette swatch)
+G='\033[0;32m'  # Green (status)
+W='\033[0;37m'  # White (values)
 R='\033[0m'     # Reset
 
 # Logic: Get RAM (Built-in)
@@ -79,7 +79,7 @@ echo -e "
   ${C}   ██║   ${R}  ${L}RAM:  ${W}${mem_used}MB / ${mem_total}MB${R}
   ${C}   ╚═╝   ${R}
   ${L}TEBIAN OS${R}  ${L}ZRAM: ${ZRAM_STAT}
-  ${L}v$(cat "$HOME/Tebian/VERSION" 2>/dev/null || echo "?")${R}  ${L}SEC:  ${UFW_STAT}
+  ${L}v$(cat "${TEBIAN_DIR:-$HOME/Tebian}/VERSION" 2>/dev/null || echo "?")${R}  ${L}SEC:  ${UFW_STAT}
   ${R}           ${L}DEV:  ${W}${PROJECT}${R}
 
   ${B}██${C}██${L}██${G}██${W}██${R}

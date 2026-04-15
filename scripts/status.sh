@@ -32,7 +32,7 @@ fi
 
 # Bluetooth: find hci device and its rfkill
 BT_RFKILL=""
-if [ -d /sys/class/bluetooth ]; then
+if [ -d /sys/class/bluetooth ] && bluetoothctl show >/dev/null 2>&1; then
     BT_HCI=$(ls /sys/class/bluetooth/ 2>/dev/null | head -1)
     if [ -n "$BT_HCI" ]; then
         # Find rfkill for this hci device
@@ -63,8 +63,8 @@ for led in /sys/class/leds/*::capslock /sys/class/leds/input*::caps; do
 done
 [ -z "$CAPS_LED" ] && HAS_CAPS=0 || HAS_CAPS=1
 
-# Performance stats toggle
-[ -f "$HOME/.config/tebian/bar_perf_off" ] && SHOW_PERF=0 || SHOW_PERF=1
+# Performance stats toggle (re-checked dynamically in loop)
+SHOW_PERF=1
 
 # ============================================================
 # STATE VARIABLES
@@ -80,6 +80,7 @@ update_mem() {
         esac
         [[ -n "$total" && -n "$avail" ]] && break
     done < /proc/meminfo
+    [ -z "$total" ] || [ "$total" -eq 0 ] && return
     MEM_USAGE=$((100 * (total - avail) / total))
 }
 
@@ -98,61 +99,62 @@ caps_str=""
 
 [ $HAS_BAT -eq 0 ] && bat_status="" || bat_status="󰂃 --%"
 [ $HAS_WIFI -eq 0 ] && wifi_status="" || wifi_status="󰤮"
-[ $HAS_BT -eq 0 ] && bt_status="" || bt_status="󰂲"
+bt_status=""
 [ $HAS_BACKLIGHT -eq 0 ] && bright_str="" || bright_str="󰃠 --%"
 
 while true; do
-    # 1. PER-SECOND UPDATES (Built-ins only)
-    
+    # 1. PER-SECOND UPDATES (time + capslock only)
+
     printf -v date_str '%(%a %d %b %H:%M)T' -1
-    
-    # Brightness (conditional)
-    if [ $HAS_BACKLIGHT -eq 1 ]; then
-        read -r bright_cur < /sys/class/backlight/$BACKLIGHT_DEV/actual_brightness 2>/dev/null
-        read -r bright_max < /sys/class/backlight/$BACKLIGHT_DEV/max_brightness 2>/dev/null
-        if [ -n "$bright_cur" ] && [ -n "$bright_max" ] && [ "$bright_max" -gt 0 ]; then
-            bright=$((bright_cur * 100 / bright_max))
-            bright_str="󰃠 ${bright}%"
-        fi
-    fi
-    
-    update_mem
-    
-    # GPU (conditional by type)
-    case "$GPU_TYPE" in
-        intel)
-            read -r gpu_cur < /sys/class/drm/card0/gt_cur_freq_mhz 2>/dev/null
-            read -r gpu_max < /sys/class/drm/card0/gt_max_freq_mhz 2>/dev/null
-            if [ -n "$gpu_cur" ] && [ -n "$gpu_max" ] && [ "$gpu_max" -gt 0 ]; then
-                gpu_val=$((gpu_cur * 100 / gpu_max))
-                gpu_str="󰓅 ${gpu_val}%"
-            fi
-            ;;
-        amd)
-            # AMD uses hwmon for GPU metrics - skip for zero-fork, show nothing
-            gpu_str=""
-            ;;
-        *)
-            gpu_str=""
-            ;;
-    esac
-    
+
     # Capslock (conditional)
     if [ $HAS_CAPS -eq 1 ]; then
         read -r caps < "$CAPS_LED" 2>/dev/null
         [ "$caps" = "1" ] && caps_str="󰪛" || caps_str=""
     fi
 
-    # 2. POLL EVERY 10s
-    if [ $((counter % 10)) -eq 0 ]; then
+    # 2. POLL EVERY 5s (zero-fork: reads from /proc and /sys)
+    if [ $((counter % 5)) -eq 0 ]; then
+        # Brightness (conditional)
+        if [ $HAS_BACKLIGHT -eq 1 ]; then
+            read -r bright_cur < /sys/class/backlight/$BACKLIGHT_DEV/actual_brightness 2>/dev/null
+            read -r bright_max < /sys/class/backlight/$BACKLIGHT_DEV/max_brightness 2>/dev/null
+            if [ -n "$bright_cur" ] && [ -n "$bright_max" ] && [ "$bright_max" -gt 0 ]; then
+                bright=$((bright_cur * 100 / bright_max))
+                bright_str="󰃠 ${bright}%"
+            fi
+        fi
+
+        update_mem
+
+        # GPU (conditional by type)
+        case "$GPU_TYPE" in
+            intel)
+                read -r gpu_cur < /sys/class/drm/card0/gt_cur_freq_mhz 2>/dev/null
+                read -r gpu_max < /sys/class/drm/card0/gt_max_freq_mhz 2>/dev/null
+                if [ -n "$gpu_cur" ] && [ -n "$gpu_max" ] && [ "$gpu_max" -gt 0 ]; then
+                    gpu_val=$((gpu_cur * 100 / gpu_max))
+                    gpu_str="󰓅 ${gpu_val}%"
+                fi
+                ;;
+            amd) gpu_str="" ;;
+            *) gpu_str="" ;;
+        esac
+
+        # Volume (forks: wpctl)
         vol_raw=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
         if [[ $vol_raw =~ ([0-9]+)\.([0-9][0-9]) ]]; then
             vol_val=$((10#${BASH_REMATCH[1]} * 100 + 10#${BASH_REMATCH[2]}))
             [[ $vol_raw == *"[MUTED]"* ]] && vol_icon="󰝟" || vol_icon="󰕾"
             vol_str="$vol_icon ${vol_val}%"
         fi
-        
-        # WiFi (conditional)
+    fi
+
+    # 2b. POLL EVERY 10s (zero-fork: reads from /proc and /sys)
+    if [ $((counter % 10)) -eq 0 ]; then
+        # Dynamic perf stats toggle (zero-fork: file existence check)
+        [ -f "$HOME/.config/tebian/bar_perf_off" ] && SHOW_PERF=0 || SHOW_PERF=1
+        # WiFi (conditional — reads /proc/net/wireless, zero-fork)
         if [ $HAS_WIFI -eq 1 ]; then
             read -r wifi_stat < /sys/class/net/$WIFI_IF/operstate 2>/dev/null
             if [ "$wifi_stat" = "up" ]; then
@@ -174,20 +176,19 @@ while true; do
                 wifi_status="󰤮"
             fi
         fi
-        
-        disk_str="󰋊 $(df -h / | awk 'NR==2 {print $5}')"
     fi
-    
-    # 3. POLL EVERY 60s
-    if [ $((counter % 60)) -eq 0 ]; then
-        # Bluetooth (conditional)
+
+    # 3. POLL EVERY 30s (forks: df, bluetoothctl)
+    if [ $((counter % 30)) -eq 0 ]; then
+        disk_str="󰋊 $(df -h / | awk 'NR==2 {print $5}')"
+        # Bluetooth (conditional — hidden when off)
         if [ $HAS_BT -eq 1 ]; then
             read -r bt_state < "$BT_RFKILL" 2>/dev/null
             if [ "$bt_state" = "1" ]; then
                 bt_dev=$(bluetoothctl devices Connected 2>/dev/null | head -1 | sed 's/.* //')
                 [ -n "$bt_dev" ] && bt_status="󰂱 $bt_dev" || bt_status="󰂯"
             else
-                bt_status="󰂲"
+                bt_status=""
             fi
         fi
 

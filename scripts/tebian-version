@@ -17,7 +17,6 @@ get_version() {
 
 check_scripts() {
     local outdated=0
-    local scripts=("bootstrap.sh" "desktop.sh" "uninstall.sh" "build-iso.sh")
     local local_scripts=("tebian-menu" "tebian-settings" "tebian-theme" "tebian-welcome" "status.sh" "update-all")
     
     echo "Checking for script updates..."

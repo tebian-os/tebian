@@ -21,31 +21,12 @@ if command -v bun &> /dev/null; then
     bun upgrade
 fi
 
-# 4. Firmware (LVFS)
-if command -v fwupdmgr &> /dev/null; then
-    echo -e "
-💾 Checking for Firmware Updates..."
-    fwupdmgr refresh --force 2>/dev/null
-    if fwupdmgr get-updates 2>/dev/null | grep -q "Devices with"; then
-        echo "   Updates found. Creating capsule..."
-        fwupdmgr update -y
-    else
-        echo "   Firmware is up to date."
-    fi
-fi
-
-# 5. Flatpak (if installed)
+# 4. Flatpak (if installed)
 if command -v flatpak &> /dev/null; then
     echo -e "
 🍱 Updating Flatpaks..."
     flatpak update -y
 fi
-
-# 6. Cleanup
-echo -e "
-🧹 Cleaning up..."
-sudo apt autoremove -y
-sudo apt clean
 
 echo -e "
 ✅ All updates complete!"

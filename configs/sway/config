@@ -22,6 +22,10 @@ mouse_warping none
 focus_follows_mouse no
 workspace_layout default
 
+# Push session env to systemd/dbus (needed by xdg-desktop-portal, etc.)
+exec systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+
 # First boot onboarding (runs once)
 exec ~/.local/bin/tebian-onboard
 
@@ -70,7 +74,7 @@ bindsym XF86MonBrightnessDown exec brightnessctl set 5%- && sh -c 'command -v wo
 bindsym $mod+v exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null; command -v cliphist && cliphist list | tfuzzel -d -p "Clipboard | " | cliphist decode | wl-copy'
 
 # Screenshots
-bindsym Print exec bash -c 'grim -g "$(slurp)" - | wl-copy && notify-send "Screenshot" "Region copied to clipboard"'
+bindsym Print exec bash -c 'mkdir -p ~/Pictures/Screenshots && FILE=~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png && grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied to clipboard"'
 bindsym Shift+Print exec bash -c 'mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png && notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"'
 
 # Navigation
@@ -149,6 +153,9 @@ input type:touchpad {
     dwt enabled
     middle_emulation enabled
 }
+
+# --- Saved Display Layout ---
+include ~/.config/sway/outputs
 
 # --- User Customizations ---
 include ~/.config/sway/config.user

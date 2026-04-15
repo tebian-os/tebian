@@ -13,25 +13,48 @@ wifi_menu() {
 
             W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰖩 WiFi | ")
 
-            if [[ "$W_CHOICE" =~ "Back" || -z "$W_CHOICE" ]]; then return; fi
+            if [[ "$W_CHOICE" == *"󰌍 Back"* || -z "$W_CHOICE" ]]; then return; fi
 
             if [[ "$W_CHOICE" =~ "WiFi: OFF" ]]; then
                 nmcli radio wifi on
                 tnotify "WiFi" "Enabled - scanning..."
-                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 sleep 2
             fi
         else
             # WiFi is ON - scan and show networks
             notify-send -t 2000 "WiFi" "Scanning..." 2>/dev/null
-            nmcli dev wifi rescan 2>/dev/null; sleep 1
+
+            # Ensure the WiFi device is managed by NetworkManager
+            local wifi_dev
+            wifi_dev=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '/wifi/{print $1; exit}')
+            if [ -n "$wifi_dev" ]; then
+                local dev_state
+                dev_state=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep "^${wifi_dev}:" | cut -d: -f2)
+                if [ "$dev_state" = "unmanaged" ]; then
+                    nmcli device set "$wifi_dev" managed yes 2>/dev/null
+                    sleep 2
+                fi
+            fi
+
+            # Rescan with retry — some adapters need more time after boot
+            nmcli dev wifi rescan 2>/dev/null
+            sleep 2
+            local scan_result
+            scan_result=$(nmcli -t -f SIGNAL,SSID device wifi list 2>/dev/null)
+            if [ -z "$scan_result" ]; then
+                # Retry once if first scan returned empty
+                nmcli dev wifi rescan 2>/dev/null
+                sleep 3
+                scan_result=$(nmcli -t -f SIGNAL,SSID device wifi list 2>/dev/null)
+            fi
 
             # Get current connection
             CURRENT_SSID=$(nmcli -t -f ACTIVE,SSID dev wifi | grep "^yes:" | cut -d: -f2)
             [ -n "$CURRENT_SSID" ] && CURRENT_LABEL="󰤨 Connected: $CURRENT_SSID" || CURRENT_LABEL=""
 
             # Get available networks (terse mode handles SSIDs with spaces)
-            WIFI_LIST=$(nmcli -t -f SIGNAL,SSID device wifi list 2>/dev/null | sort -rn -t: | while IFS=: read -r signal ssid; do
+            WIFI_LIST=$(echo "$scan_result" | sort -rn -t: | while IFS=: read -r signal ssid; do
                 [ -z "$ssid" ] && continue
                 [ "$ssid" = "--" ] && continue
                 [ "$ssid" = "$CURRENT_SSID" ] && continue
@@ -43,32 +66,39 @@ wifi_menu() {
                 echo "$icon $ssid ($signal%)"
             done)
 
+            # Show message if no networks found
+            if [ -z "$WIFI_LIST" ] && [ -z "$CURRENT_SSID" ]; then
+                WIFI_LIST="(No networks found — try again)"
+            fi
+
             W_OPTS="󰤮 Turn WiFi OFF
 $CURRENT_LABEL
 $WIFI_LIST
-─────────────────────────────────
 󰌍 Back"
 
             SSID_RAW=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰖩 WiFi | ")
 
-            if [[ "$SSID_RAW" =~ "Back" || -z "$SSID_RAW" ]]; then return; fi
+            if [[ "$SSID_RAW" == *"󰌍 Back"* || -z "$SSID_RAW" ]]; then return; fi
 
             if [[ "$SSID_RAW" =~ "Turn WiFi OFF" ]]; then
                 nmcli radio wifi off
                 tnotify "WiFi" "Disabled"
-                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
             elif [[ "$SSID_RAW" =~ "Connected:" ]]; then
                 # Offer to disconnect
                 DISC=$(echo -e "No, keep connected\nYes, disconnect" | tfuzzel -d -p " Disconnect from $CURRENT_SSID? | ")
                 if [[ "$DISC" =~ "Yes" ]]; then
-                    nmcli dev disconnect wlan0 2>/dev/null || nmcli con down "$CURRENT_SSID" 2>/dev/null
+                    local wifi_dev
+                    wifi_dev=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '/wifi/{print $1; exit}')
+                    nmcli dev disconnect "${wifi_dev:-wlan0}" 2>/dev/null || nmcli con down "$CURRENT_SSID" 2>/dev/null
                     tnotify "WiFi" "Disconnected from $CURRENT_SSID"
-                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 fi
             else
                 # Connect to selected network
                 SSID=$(echo "$SSID_RAW" | sed 's/^[^ ]* //;s/ ([0-9]\{1,3\}%)$//')
-                PASS=$(echo "" | tfuzzel -d --password -p " 󰷦 Password for $SSID | ")
+                # Note: fuzzel doesn't support password masking — input is visible
+                PASS=$(echo "" | tfuzzel -d -p " 󰷦 Password for $SSID | ")
 
                 if [ -n "$PASS" ]; then
                     # Create temporary connection file to avoid password in ps aux
@@ -136,12 +166,12 @@ bluetooth_menu() {
 
             B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
-            if [[ "$B_CHOICE" =~ "Back" || -z "$B_CHOICE" ]]; then return; fi
+            if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
 
             if [[ "$B_CHOICE" =~ "Bluetooth: OFF" ]]; then
                 bluetoothctl power on
                 tnotify "Bluetooth" "Enabled"
-                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 sleep 1
             fi
         else
@@ -168,17 +198,16 @@ bluetooth_menu() {
             B_OPTS="󰂲 Turn Bluetooth OFF
 ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
 󰀱 Open bluetuith (full manager)
-─────────────────────────────────
 󰌍 Back"
 
             B_CHOICE=$(echo -e "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
-            if [[ "$B_CHOICE" =~ "Back" || -z "$B_CHOICE" ]]; then return; fi
+            if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
 
             if [[ "$B_CHOICE" =~ "Turn Bluetooth OFF" ]]; then
                 bluetoothctl power off
                 tnotify "Bluetooth" "Disabled"
-                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
 
             elif [[ "$B_CHOICE" =~ "Scan for new devices" ]]; then
                 bt_scan_and_pair
@@ -198,7 +227,7 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
                 if [[ "$ACTION" =~ "Disconnect" ]]; then
                     bluetoothctl disconnect "$DEV_MAC" 2>/dev/null
                     tnotify "Bluetooth" "Disconnected from $DEV_NAME"
-                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 elif [[ "$ACTION" =~ "Forget" ]]; then
                     bluetoothctl disconnect "$DEV_MAC" 2>/dev/null
                     bluetoothctl remove "$DEV_MAC" 2>/dev/null
@@ -217,7 +246,7 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
                     else
                         tnotify "Bluetooth" "Failed to connect to $DEV_NAME"
                     fi
-                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+                    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 elif [[ "$ACTION" =~ "Forget" ]]; then
                     bluetoothctl remove "$DEV_MAC" 2>/dev/null
                     tnotify "Bluetooth" "Removed $DEV_NAME"
@@ -270,7 +299,7 @@ bt_scan_and_pair() {
     # Disable discoverable after scan
     bluetoothctl discoverable off 2>/dev/null
 
-    if [[ "$DEV_CHOICE" =~ "Back" || -z "$DEV_CHOICE" ]]; then
+    if [[ "$DEV_CHOICE" == *"󰌍 Back"* || -z "$DEV_CHOICE" ]]; then
         bluetoothctl pairable off 2>/dev/null
         return
     fi
@@ -335,5 +364,5 @@ bt_scan_and_pair() {
     kill $AGENT_PID 2>/dev/null; wait $AGENT_PID 2>/dev/null
 
     bluetoothctl pairable off 2>/dev/null
-    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null
+    pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
 }

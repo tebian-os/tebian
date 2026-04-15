@@ -19,7 +19,7 @@
   "gtk-icon-theme": "",
   "gtk-cursor-theme": "",
   "prefer-dark-theme": true,
-  "template-name": "",
+  "template-name": "tebian.glade",
   "time-format": "%H:%M",
   "date-format": "%A, %B %d",
   "layer": "overlay",

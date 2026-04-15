@@ -5,6 +5,6 @@
   "ports": ["3306:3306"],
   "volumes": ["/opt/data/mysql:/var/lib/mysql"],
   "env": {
-    "MYSQL_ROOT_PASSWORD": "tebian123"
+    "MYSQL_ROOT_PASSWORD": "__GENERATE__"
   }
 }

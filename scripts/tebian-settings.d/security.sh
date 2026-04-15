@@ -3,8 +3,8 @@
 
 security_menu() {
     while true; do
-    # Detect state
-    UFW_ACTIVE=$(sudo -n ufw status 2>/dev/null | grep -q "Status: active" && echo "ON" || echo "OFF")
+    # Detect state — use systemctl (no sudo needed) where possible
+    UFW_ACTIVE=$(systemctl is-active --quiet ufw && echo "ON" || echo "OFF")
     F2B_ACTIVE=$(systemctl is-active --quiet fail2ban && echo "ON" || echo "OFF")
     SSH_ACTIVE=$(systemctl is-active --quiet ssh && echo "ON" || echo "OFF")
 
@@ -13,15 +13,15 @@ security_menu() {
     else
         SEC_LABEL="🛡️ Enable Hardened Security (Current: Standard)"
     fi
-    
+
     if [[ "$SSH_ACTIVE" == "ON" ]]; then
         SSH_LABEL="🛑 Disable Remote Access (SSH)"
     else
         SSH_LABEL="🌍 Enable Remote Access (SSH)"
     fi
 
-    # Detect SSH key-only mode
-    if grep -rqs 'PasswordAuthentication no' /etc/ssh/sshd_config.d/ 2>/dev/null; then
+    # Detect SSH key-only mode — check our specific file, not all of sshd_config.d
+    if [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
         SSH_KEY_LABEL="🔑 Revert SSH to Password Auth (Current: Key-Only)"
     else
         SSH_KEY_LABEL="🔑 Harden SSH (Key-Only Mode)"
@@ -34,11 +34,15 @@ security_menu() {
         KERN_LABEL="🧠 Enable Kernel Hardening"
     fi
 
-    # Detect AppArmor state
-    if command -v aa-status &>/dev/null && sudo -n aa-status --enabled 2>/dev/null; then
-        AA_LABEL="󰒃 AppArmor (Enforcing)"
+    # Detect AppArmor state — three states: Enforcing / Complain / Off
+    if systemctl is-active --quiet apparmor 2>/dev/null && [ -d /sys/kernel/security/apparmor ]; then
+        if grep -q ' enforce' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+            AA_LABEL="󰒃 AppArmor (Enforcing)"
+        else
+            AA_LABEL="󰒃 AppArmor (Complain)"
+        fi
     else
-        AA_LABEL="󰒃 AppArmor (Complain/Off)"
+        AA_LABEL="󰒃 AppArmor (OFF)"
     fi
 
     # Detect Firejail sandbox (browsers + networked apps)
@@ -81,7 +85,6 @@ security_menu() {
     fi
 
     SEC_OPTS="$PARANOID_LABEL
-─────────────────────────────────
 $SEC_LABEL
 $SSH_LABEL
 $SSH_KEY_LABEL
@@ -91,28 +94,39 @@ $FJ_LABEL
 $TOR_LABEL
 $DNS_LABEL
 $AUTOUPDATE_LABEL
-─────────────────────────────────
 󰒃 Security Tools
-─────────────────────────────────
 󰍉 View Open Ports
 󰍉 View Security Logs
-─────────────────────────────────
 󰌍 Back"
-    
+
     S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " Security | ")
 
-    if [[ "$S_CHOICE" =~ "Back" || -z "$S_CHOICE" ]]; then return; fi
+    if [[ "$S_CHOICE" == *"󰌍 Back"* || -z "$S_CHOICE" ]]; then return; fi
 
     if [[ "$S_CHOICE" =~ "Paranoid Mode" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
+        local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
         $TERM_CMD bash -c "echo '=== Disabling Paranoid Mode ===';
         echo '';
         echo 'Reverting transparent Tor and MAC randomization...';
+        echo '(Hardened security settings like UFW/AppArmor remain active)';
         echo '';
-        bash '$HOME/Tebian/modules/core/security.sh' paranoid-off;
+        if [ -f '$_tdir/modules/core/security.sh' ]; then
+            bash '$_tdir/modules/core/security.sh' paranoid-off;
+        else
+            echo 'Removing Tor iptables routing...';
+            sudo systemctl stop tebian-tor-iptables 2>/dev/null;
+            sudo systemctl disable tebian-tor-iptables 2>/dev/null;
+            sudo rm -f /etc/systemd/system/tebian-tor-iptables.service;
+            echo 'Removing MAC randomization...';
+            sudo rm -f /etc/NetworkManager/conf.d/99-tebian-mac-random.conf;
+            sudo systemctl restart NetworkManager 2>/dev/null;
+        fi;
         echo '';
         echo 'Normal networking restored.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Paranoid Mode disabled"
     elif [[ "$S_CHOICE" =~ "Paranoid Mode" ]]; then
+        local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
         $TERM_CMD bash -c "echo '=== PARANOID MODE ===';
         echo '';
         echo 'This will:';
@@ -126,7 +140,11 @@ $AUTOUPDATE_LABEL
         read -p 'Enable Paranoid Mode? [y/N]: ' confirm;
         if [[ \"\$confirm\" =~ ^[Yy]$ ]]; then
             echo '';
-            bash '$HOME/Tebian/modules/core/security.sh' paranoid;
+            if [ -f '$_tdir/modules/core/security.sh' ]; then
+                bash '$_tdir/modules/core/security.sh' paranoid;
+            else
+                echo 'Error: Security module not found at $_tdir/modules/core/security.sh';
+            fi;
             echo '';
             echo 'Verify: open https://check.torproject.org in your browser';
         else
@@ -134,8 +152,8 @@ $AUTOUPDATE_LABEL
         fi;
         read -p 'Press Enter to close...'"
     elif [[ "$S_CHOICE" =~ "Enable Hardened Security" ]]; then
-        $TERM_CMD bash -c "echo 'Hardening System...'; 
-        sudo apt update && sudo apt install -y ufw fail2ban; 
+        $TERM_CMD bash -c "echo 'Hardening System...';
+        sudo apt update && sudo apt install -y ufw fail2ban;
         sudo ufw default deny incoming;
         # Only allow SSH if it was explicitly enabled
         if systemctl is-active --quiet ssh; then
@@ -143,53 +161,73 @@ $AUTOUPDATE_LABEL
         fi
         sudo ufw --force enable;
         sudo systemctl enable --now fail2ban;
-        echo 'Done! Firewall active and Fail2Ban running.'; 
+        echo 'Done! Firewall active and Fail2Ban running.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Hardened security enabled"
     elif [[ "$S_CHOICE" =~ "Restore Standard Security" ]]; then
         CONFIRM=$(echo -e "No, cancel\nYes, remove security hardening" | tfuzzel -d --match-mode=exact -p " ⚠️ Remove firewall & fail2ban? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
             $TERM_CMD bash -c "echo 'Relaxing Security...';
+            sudo ufw --force reset;
             sudo ufw disable;
-            sudo systemctl stop fail2ban;
-            sudo systemctl disable fail2ban;
-            sudo apt purge -y fail2ban;
-            echo 'Done! Firewall disabled and Fail2Ban removed.';
+            sudo systemctl stop fail2ban 2>/dev/null;
+            sudo systemctl disable fail2ban 2>/dev/null;
+            sudo apt purge -y fail2ban 2>/dev/null;
+            echo 'Done! Firewall reset and Fail2Ban removed.';
             read -p 'Press Enter to close...'"
+            tnotify "Security" "Standard security restored"
         fi
     elif [[ "$S_CHOICE" =~ "Enable Remote Access" ]]; then
         $TERM_CMD bash -c "echo 'Enabling SSH Server...';
         sudo apt update && sudo apt install -y openssh-server;
         sudo systemctl enable --now ssh;
         # If firewall is active, allow SSH
-        if sudo ufw status | grep -q 'Status: active'; then
+        if sudo ufw status 2>/dev/null | grep -q 'Status: active'; then
             sudo ufw allow ssh;
             echo 'Firewall updated to allow SSH.';
         fi
+        echo '';
         echo 'Done! You can now SSH into this machine.';
-        ip -4 a | grep inet | grep -v 127.0.0.1;
+        echo 'Your IP addresses:';
+        ip -4 a | grep inet | grep -v 127.0.0.1 | awk '{print \"  \" \$2}';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "SSH enabled"
     elif [[ "$S_CHOICE" =~ "Disable Remote Access" ]]; then
         $TERM_CMD bash -c "echo 'Disabling SSH Server...';
         sudo systemctl stop ssh;
         sudo systemctl disable ssh;
-        # Close port in firewall
         sudo ufw delete allow ssh 2>/dev/null;
         echo 'Done! SSH access disabled.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "SSH disabled"
     elif [[ "$S_CHOICE" =~ "Key-Only Mode" ]]; then
-        $TERM_CMD bash -c "echo 'Hardening SSH to Key-Only Mode...';
-        printf 'PasswordAuthentication no\nX11Forwarding no\n' | sudo tee /etc/ssh/sshd_config.d/99-tebian-keyonly.conf;
-        sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null;
-        echo '';
-        echo 'Done! Password login is now disabled.';
-        echo 'Make sure you have an SSH key configured before disconnecting!';
-        read -p 'Press Enter to close...'"
+        if [[ "$SSH_ACTIVE" != "ON" ]]; then
+            tnotify "Security" "SSH is not enabled. Enable SSH first."
+        else
+            $TERM_CMD bash -c "echo 'Hardening SSH to Key-Only Mode...';
+            echo '';
+            echo '⚠️  Make sure you have an SSH key configured!';
+            echo '   Without one, you will be locked out of remote access.';
+            echo '';
+            read -p 'Continue? [y/N]: ' confirm;
+            if [[ \"\$confirm\" =~ ^[Yy]$ ]]; then
+                printf 'PasswordAuthentication no\nX11Forwarding no\n' | sudo tee /etc/ssh/sshd_config.d/99-tebian-keyonly.conf;
+                sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null;
+                echo '';
+                echo 'Done! Password login is now disabled.';
+            else
+                echo 'Cancelled.';
+            fi;
+            read -p 'Press Enter to close...'"
+            tnotify "Security" "SSH set to key-only"
+        fi
     elif [[ "$S_CHOICE" =~ "Revert SSH to Password" ]]; then
         $TERM_CMD bash -c "echo 'Reverting SSH to allow password auth...';
         sudo rm -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf;
         sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null;
         echo 'Done! Password authentication restored.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "SSH password auth restored"
     elif [[ "$S_CHOICE" =~ "Enable Kernel Hardening" ]]; then
         $TERM_CMD bash -c "echo 'Applying kernel hardening...';
         cat <<'SYSEOF' | sudo tee /etc/sysctl.d/99-tebian-hardening.conf
@@ -202,37 +240,38 @@ SYSEOF
         echo '';
         echo 'Done! Kernel hardening applied.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Kernel hardening enabled"
     elif [[ "$S_CHOICE" =~ "Remove Kernel Hardening" ]]; then
         $TERM_CMD bash -c "echo 'Removing kernel hardening...';
         sudo rm -f /etc/sysctl.d/99-tebian-hardening.conf;
-        sudo sysctl -w kernel.kptr_restrict=1;
-        sudo sysctl -w kernel.yama.ptrace_scope=0;
-        sudo sysctl -w net.ipv4.conf.all.rp_filter=0;
-        sudo sysctl -w net.ipv4.conf.default.rp_filter=0;
-        echo 'Done! Kernel hardening removed.';
+        sudo sysctl --system 2>&1 | tail -3;
+        echo '';
+        echo 'Done! System defaults restored.';
         read -p 'Press Enter to close...'"
-    elif [[ "$S_CHOICE" =~ "AppArmor" ]] && [[ "$S_CHOICE" =~ "Enforcing" ]]; then
-        $TERM_CMD bash -c "echo 'Setting AppArmor to complain mode...';
-        sudo apt install -y apparmor apparmor-utils 2>/dev/null;
-        sudo aa-complain /etc/apparmor.d/* 2>/dev/null;
-        echo 'Done! AppArmor set to complain mode.';
-        read -p 'Press Enter to close...'"
+        tnotify "Security" "Kernel hardening removed"
     elif [[ "$S_CHOICE" =~ "AppArmor" ]]; then
-        $TERM_CMD bash -c "echo 'Setting AppArmor to enforce mode...';
-        sudo apt install -y apparmor apparmor-utils;
-        sudo aa-enforce /etc/apparmor.d/* 2>/dev/null;
-        echo 'Done! AppArmor set to enforce mode.';
-        read -p 'Press Enter to close...'"
+        apparmor_menu
     elif [[ "$S_CHOICE" =~ "Firejail" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
-        $TERM_CMD bash -c "echo 'Removing Firejail sandboxing...';
-        for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
-            if [ -L /usr/local/bin/\$bin ] && readlink /usr/local/bin/\$bin | grep -q firejail; then
-                sudo rm -f /usr/local/bin/\$bin;
-                echo \"Removed sandbox for \$bin\";
-            fi
-        done;
-        echo 'Done! Sandboxing disabled.';
-        read -p 'Press Enter to close...'"
+        FJ_ACT=$(echo -e "󰈡 Disable Sandboxing (keep Firejail)\n󰆴 Disable & Uninstall Firejail\n󰌍 Back" | tfuzzel -d -p " 󰈡 Firejail | ")
+        if [[ "$FJ_ACT" == *"󰌍 Back"* || -z "$FJ_ACT" ]]; then continue; fi
+        if [[ "$FJ_ACT" =~ "Disable Sandboxing" ]] || [[ "$FJ_ACT" =~ "Uninstall" ]]; then
+            $TERM_CMD bash -c "echo 'Removing Firejail sandboxing...';
+            for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
+                if [ -L /usr/local/bin/\$bin ] && readlink /usr/local/bin/\$bin | grep -q firejail; then
+                    sudo rm -f /usr/local/bin/\$bin;
+                    echo \"Removed sandbox for \$bin\";
+                fi
+            done;
+            if echo '$FJ_ACT' | grep -q 'Uninstall'; then
+                echo '';
+                echo 'Uninstalling Firejail...';
+                sudo apt purge -y firejail firejail-profiles 2>/dev/null;
+            fi;
+            echo '';
+            echo 'Done!';
+            read -p 'Press Enter to close...'"
+            tnotify "Security" "Firejail sandboxing disabled"
+        fi
     elif [[ "$S_CHOICE" =~ "Firejail" ]]; then
         $TERM_CMD bash -c "echo 'Enabling Firejail sandboxing...';
         echo '';
@@ -241,7 +280,7 @@ SYSEOF
         echo '  Email: thunderbird, evolution';
         echo '  Chat: signal, telegram, discord';
         echo '';
-        sudo apt install -y firejail firejail-profiles;
+        sudo apt update && sudo apt install -y firejail firejail-profiles;
         for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
             if command -v \$bin &>/dev/null; then
                 sudo ln -sf /usr/bin/firejail /usr/local/bin/\$bin;
@@ -251,15 +290,24 @@ SYSEOF
         echo '';
         echo 'Done! Networked apps will launch in Firejail sandbox.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Firejail sandboxing enabled"
     elif [[ "$S_CHOICE" =~ "Tor" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
+        TOR_ACT=$(echo -e "󰗹 Disable Tor Service\n󰆴 Disable & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
+        if [[ "$TOR_ACT" == *"󰌍 Back"* || -z "$TOR_ACT" ]]; then continue; fi
         $TERM_CMD bash -c "echo 'Disabling Tor routing...';
         sudo systemctl stop tor;
         sudo systemctl disable tor;
-        echo 'Done! Tor routing disabled.';
+        if echo '$TOR_ACT' | grep -q 'Uninstall'; then
+            echo 'Uninstalling Tor and proxychains4...';
+            sudo apt purge -y tor proxychains4 2>/dev/null;
+            sudo apt autoremove -y 2>/dev/null;
+        fi;
+        echo 'Done!';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Tor routing disabled"
     elif [[ "$S_CHOICE" =~ "Tor" ]]; then
         $TERM_CMD bash -c "echo 'Enabling Tor routing (per-app via proxychains4)...';
-        sudo apt install -y tor proxychains4;
+        sudo apt update && sudo apt install -y tor proxychains4;
         if [ -f /etc/proxychains4.conf ]; then
             sudo sed -i 's/^strict_chain/#strict_chain/' /etc/proxychains4.conf;
             sudo sed -i 's/^#dynamic_chain/dynamic_chain/' /etc/proxychains4.conf;
@@ -269,33 +317,41 @@ SYSEOF
         echo 'Done! Use: proxychains4 <command> to route through Tor';
         echo 'Example: proxychains4 curl https://check.torproject.org';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "Tor routing enabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         $TERM_CMD bash -c "echo 'Disabling DNS-over-TLS...';
         sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
+        sudo rm -f /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf;
         sudo systemctl restart systemd-resolved 2>/dev/null;
+        # Restore NetworkManager DNS control
+        sudo rm -f /etc/resolv.conf 2>/dev/null;
+        sudo systemctl restart NetworkManager 2>/dev/null;
         echo 'Done! Using default DNS.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "DNS Privacy disabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]]; then
+        DNS_PROVIDER=$(echo -e "🛡️ Quad9 (privacy + malware blocking)\n⚡ Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
+        if [[ "$DNS_PROVIDER" == *"󰌍 Back"* || -z "$DNS_PROVIDER" ]]; then continue; fi
         $TERM_CMD bash -c "echo 'Enabling DNS-over-TLS...';
-        echo '';
-        echo '  [1] Quad9 (privacy-focused, malware blocking)';
-        echo '  [2] Cloudflare (fast, privacy-focused)';
-        echo '';
-        read -p '  Select [1/2]: ' dns_choice;
         sudo mkdir -p /etc/systemd/resolved.conf.d;
-        if [[ \"\$dns_choice\" == '2' ]]; then
+        if [[ '$DNS_PROVIDER' =~ 'Cloudflare' ]]; then
             printf '[Resolve]\nDNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
         else
             printf '[Resolve]\nDNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
         fi;
+        # Tell NetworkManager to use systemd-resolved
+        sudo mkdir -p /etc/NetworkManager/conf.d;
+        printf '[main]\ndns=systemd-resolved\n' | sudo tee /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf;
         sudo systemctl enable --now systemd-resolved 2>/dev/null;
         sudo systemctl restart systemd-resolved;
         if [ ! -L /etc/resolv.conf ] || ! readlink /etc/resolv.conf | grep -q stub-resolv; then
             sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf;
         fi;
+        sudo systemctl restart NetworkManager 2>/dev/null;
         echo '';
         echo 'Done! DNS-over-TLS enabled.';
         read -p 'Press Enter to close...'"
+        tnotify "Security" "DNS Privacy enabled"
     elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         CONFIRM=$(echo -e "No, keep auto-updates\nYes, disable auto-updates" | tfuzzel -d --match-mode=exact -p " ⚠️ Disable auto security updates? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
@@ -304,28 +360,97 @@ SYSEOF
             echo '';
             echo 'Auto-updates disabled. Run System Update manually.';
             read -p 'Press Enter to close...'"
-            tlog "Auto security updates disabled"
+            tnotify "Security" "Auto security updates disabled"
         fi
     elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]]; then
         $TERM_CMD bash -c "echo 'Enabling automatic security updates...';
         echo '';
-        echo 'This will automatically install critical security patches.';
-        echo 'No reboots unless kernel updates require it.';
-        echo '';
         sudo apt update && sudo apt install -y unattended-upgrades;
-        sudo dpkg-reconfigure -plow unattended-upgrades;
+        # Non-interactive configuration
+        sudo mkdir -p /etc/apt/apt.conf.d;
+        printf 'APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades;
         echo '';
         echo 'Auto-updates enabled! Security patches will install automatically.';
         read -p 'Press Enter to close...'"
-        tlog "Auto security updates enabled"
+        tnotify "Security" "Auto security updates enabled"
     elif [[ "$S_CHOICE" =~ "Security Tools" ]]; then
         security_tools_menu
     elif [[ "$S_CHOICE" =~ "View Open Ports" ]]; then
-        $TERM_CMD bash -c "echo '=== Open Ports ==='; echo ''; ss -tulnp; echo ''; read -p 'Press Enter to close...'"
+        $TERM_CMD bash -c "echo '=== Open Ports ==='; echo ''; sudo ss -tulnp; echo ''; read -p 'Press Enter to close...'"
     elif [[ "$S_CHOICE" =~ "View Security Logs" ]]; then
-        $TERM_CMD bash -c "sudo journalctl -u fail2ban --no-pager -n 100; echo ''; read -p 'Press Enter to close...'"
+        security_logs_menu
     fi
     done
+}
+
+apparmor_menu() {
+    local AA_OPTS=""
+    if systemctl is-active --quiet apparmor 2>/dev/null && [ -d /sys/kernel/security/apparmor ]; then
+        if grep -q ' enforce' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+            AA_OPTS="󰒃 Switch to Complain Mode\n󰒃 Disable AppArmor\n󰌍 Back"
+        else
+            AA_OPTS="󰒃 Switch to Enforce Mode\n󰒃 Disable AppArmor\n󰌍 Back"
+        fi
+    else
+        AA_OPTS="󰒃 Enable AppArmor (Enforce)\n󰒃 Enable AppArmor (Complain)\n󰌍 Back"
+    fi
+
+    local AA_CHOICE
+    AA_CHOICE=$(echo -e "$AA_OPTS" | tfuzzel -d -p " 󰒃 AppArmor | ")
+    if [[ "$AA_CHOICE" == *"󰌍 Back"* || -z "$AA_CHOICE" ]]; then return; fi
+
+    if [[ "$AA_CHOICE" =~ "Enforce" ]]; then
+        $TERM_CMD bash -c "echo 'Setting AppArmor to enforce mode...';
+        sudo apt install -y apparmor apparmor-utils 2>/dev/null;
+        sudo systemctl enable --now apparmor 2>/dev/null;
+        sudo aa-enforce /etc/apparmor.d/* 2>/dev/null;
+        echo 'Done! AppArmor set to enforce mode.';
+        read -p 'Press Enter to close...'"
+        tnotify "Security" "AppArmor set to enforce"
+    elif [[ "$AA_CHOICE" =~ "Complain" ]]; then
+        $TERM_CMD bash -c "echo 'Setting AppArmor to complain mode...';
+        sudo apt install -y apparmor apparmor-utils 2>/dev/null;
+        sudo systemctl enable --now apparmor 2>/dev/null;
+        sudo aa-complain /etc/apparmor.d/* 2>/dev/null;
+        echo 'Done! AppArmor set to complain mode (logging only).';
+        read -p 'Press Enter to close...'"
+        tnotify "Security" "AppArmor set to complain"
+    elif [[ "$AA_CHOICE" =~ "Disable" ]]; then
+        $TERM_CMD bash -c "echo 'Disabling AppArmor...';
+        sudo systemctl stop apparmor;
+        sudo systemctl disable apparmor;
+        echo 'Done! AppArmor disabled.';
+        echo 'Reboot may be needed for full effect.';
+        read -p 'Press Enter to close...'"
+        tnotify "Security" "AppArmor disabled"
+    fi
+}
+
+security_logs_menu() {
+    local LOG_OPTS=""
+    # Build list of available log sources
+    systemctl is-active --quiet fail2ban 2>/dev/null && LOG_OPTS+="🛡️ Fail2Ban Logs\n"
+    systemctl is-active --quiet ufw 2>/dev/null && LOG_OPTS+="🔥 Firewall (UFW) Logs\n"
+    systemctl is-active --quiet ssh 2>/dev/null && LOG_OPTS+="🔑 SSH Auth Logs\n"
+    LOG_OPTS+="📋 All Auth Logs\n"
+    systemctl is-active --quiet apparmor 2>/dev/null && LOG_OPTS+="󰒃 AppArmor Denials\n"
+    LOG_OPTS+="󰌍 Back"
+
+    local LOG_CHOICE
+    LOG_CHOICE=$(echo -e "$LOG_OPTS" | tfuzzel -d -p " 󰍉 Security Logs | ")
+    if [[ "$LOG_CHOICE" == *"󰌍 Back"* || -z "$LOG_CHOICE" ]]; then return; fi
+
+    if [[ "$LOG_CHOICE" =~ "Fail2Ban" ]]; then
+        $TERM_CMD bash -c "echo '=== Fail2Ban Logs ==='; echo ''; sudo journalctl -u fail2ban --no-pager -n 100; echo ''; read -p 'Press Enter to close...'"
+    elif [[ "$LOG_CHOICE" =~ "Firewall" ]]; then
+        $TERM_CMD bash -c "echo '=== UFW Firewall Logs ==='; echo ''; sudo journalctl -k --no-pager -n 200 | grep -i UFW | tail -50; echo ''; read -p 'Press Enter to close...'"
+    elif [[ "$LOG_CHOICE" =~ "SSH Auth" ]]; then
+        $TERM_CMD bash -c "echo '=== SSH Auth Logs ==='; echo ''; sudo journalctl -u ssh --no-pager -n 100; echo ''; read -p 'Press Enter to close...'"
+    elif [[ "$LOG_CHOICE" =~ "All Auth" ]]; then
+        $TERM_CMD bash -c "echo '=== Auth Logs ==='; echo ''; sudo tail -100 /var/log/auth.log 2>/dev/null || sudo journalctl -t sshd -t sudo --no-pager -n 100; echo ''; read -p 'Press Enter to close...'"
+    elif [[ "$LOG_CHOICE" =~ "AppArmor" ]]; then
+        $TERM_CMD bash -c "echo '=== AppArmor Denials ==='; echo ''; sudo journalctl -k --no-pager -n 200 | grep -i apparmor | tail -50; echo ''; read -p 'Press Enter to close...'"
+    fi
 }
 
 security_tools_menu() {
@@ -337,15 +462,13 @@ security_tools_menu() {
 󰌆 Password Cracking
 󰈈 Forensics & Recovery
 󰛃 Sniffing & Spoofing
-─────────────────────────────────
 󰣖 Install Kali Container
 󰣖 Install Parrot Container
-─────────────────────────────────
 󰌍 Back"
 
-    ST_CHOICE=$(echo -e "$ST_OPTS" | tfuzzel -d -p " 󰒃 Security Tools |")
+    ST_CHOICE=$(echo -e "$ST_OPTS" | tfuzzel -d -p " 󰒃 Security Tools | ")
 
-    if [[ "$ST_CHOICE" =~ "Back" || -z "$ST_CHOICE" ]]; then return; fi
+    if [[ "$ST_CHOICE" == *"󰌍 Back"* || -z "$ST_CHOICE" ]]; then return; fi
 
     if [[ "$ST_CHOICE" =~ "Recon" ]]; then
         sec_tool_install_menu "Recon & Scanning" \
@@ -455,12 +578,12 @@ sec_tool_install_menu() {
             fi
         fi
     done
-    MENU_ITEMS+="\n─────────────────────────────────\n󰌍 Back"
+    MENU_ITEMS+="\n󰌍 Back"
 
     local CHOICE
-    CHOICE=$(echo -e "$MENU_ITEMS" | tfuzzel -d -p " 󰒃 $CATEGORY |")
+    CHOICE=$(echo -e "$MENU_ITEMS" | tfuzzel -d -p " 󰒃 $CATEGORY | ")
 
-    if [[ "$CHOICE" =~ "Back" || -z "$CHOICE" ]]; then return; fi
+    if [[ "$CHOICE" == *"󰌍 Back"* || -z "$CHOICE" ]]; then return; fi
 
     # Find which tool was selected
     for TOOL_SPEC in "${TOOLS[@]}"; do
@@ -534,9 +657,7 @@ secure_workspace_menu() {
         GW_STATE=$(virsh domstate tebian-gateway 2>/dev/null || echo "unknown")
 
         SW_OPTS="󰋽 Gateway: $GW_STATE
-󰋽 Workstation: $WS_STATE
-─────────────────────────────────
-󰌍 Back"
+󰋽 Workstation: $WS_STATE"
         if [[ "$WS_STATE" == "running" ]]; then
             SW_OPTS+="\n🛑 Stop Workspace
 󰍹 Open Workstation (virt-viewer)"
@@ -544,21 +665,19 @@ secure_workspace_menu() {
             SW_OPTS+="\n▶️ Start Workspace"
         fi
         SW_OPTS+="\n󰩈 Destroy Workspace (delete everything)"
+        SW_OPTS+="\n󰌍 Back"
     else
-        SW_OPTS="─────────────────────────────────
-☠️ Setup Secure Workspace
-─────────────────────────────────
+        SW_OPTS="☠️ Setup Secure Workspace
 Architecture:
   Workstation ──▶ Gateway ──▶ Tor ──▶ Internet
   (your work)    (Tor proxy)
   Can't leak IP. Even if compromised.
-─────────────────────────────────
 󰌍 Back"
     fi
 
     SW_CHOICE=$(echo -e "$SW_OPTS" | tfuzzel -d -p " ☠️ Secure Workspace | ")
 
-    if [[ -z "$SW_CHOICE" || "$SW_CHOICE" =~ "Back" ]]; then return; fi
+    if [[ -z "$SW_CHOICE" || "$SW_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
     if [[ "$SW_CHOICE" =~ "Setup Secure Workspace" ]]; then
         $TERM_CMD bash -c "
@@ -585,4 +704,3 @@ Architecture:
     fi
     done
 }
-

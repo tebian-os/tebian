@@ -1,9 +1,12 @@
-#!/bin/bash
+#!/bin/sh
 # Tebian session wrapper for greetd
 # Sets up proper environment before launching sway
 
-# Source profile for PATH (~/.local/bin) and other env
-[ -f "$HOME/.profile" ] && . "$HOME/.profile"
+# Clear the VT to prevent text flash between greeter and sway
+printf '\033[2J\033[H\033[?25l' 2>/dev/null
+
+# Set PATH directly (avoid sourcing .bashrc which flashes colored text)
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 
 # Wayland session environment
 export XDG_SESSION_TYPE=wayland

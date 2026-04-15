@@ -72,5 +72,5 @@ esac
 # 4. Launch terminal in that directory
 case "$TERM_APP" in
     kitty) kitty --directory "$TARGET" ;;
-    *) $TERM_APP -e bash -c "cd '$TARGET' && exec bash" ;;
+    *) "$TERM_APP" -e bash -c "cd '$TARGET' && exec bash" ;;
 esac

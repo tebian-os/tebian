@@ -6,122 +6,101 @@ window {
 }
 
 #form-wrapper {
-    background-color: transparent;
+    background: transparent;
     border: none;
-    padding: 50px;
-}
-
-entry {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #eceff4;
-    border: 1px solid rgba(136, 192, 208, 0.3);
-    border-radius: 24px;
-    padding: 12px 20px;
-    font-family: "JetBrainsMono Nerd Font";
-    font-size: 18px;
-    caret-color: #88c0d0;
-}
-
-entry:focus {
-    background-color: rgba(255, 255, 255, 0.12);
-    border-color: rgba(136, 192, 208, 0.6);
-}
-
-#password-entry {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #eceff4;
-    border: 1px solid rgba(136, 192, 208, 0.3);
-    border-radius: 24px;
-    padding: 12px 20px;
-    font-family: "JetBrainsMono Nerd Font";
-    font-size: 18px;
-    caret-color: #88c0d0;
-}
-
-button {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: rgba(236, 239, 244, 0.6);
-    border: 1px solid rgba(136, 192, 208, 0.3);
-    border-radius: 20px;
-    padding: 10px 40px;
-    font-family: "JetBrainsMono Nerd Font";
-    font-size: 14px;
-    font-weight: bold;
-}
-
-button:hover {
-    background-color: rgba(136, 192, 208, 0.2);
-    color: #eceff4;
-    border-color: rgba(136, 192, 208, 0.6);
-}
-
-#login-button {
-    font-size: 0px;
-    min-height: 0px;
-    min-width: 0px;
-    margin: 0px;
-    padding: 0px;
-    opacity: 0;
-    border: none;
-    background: none;
-}
-
-label {
-    color: #eceff4;
-    font-family: "JetBrainsMono Nerd Font";
-    font-size: 16px;
-}
-
-#welcome-label {
-    font-size: 0px;
-    min-height: 0px;
-    opacity: 0;
+    padding: 50px 60px;
 }
 
 #clock-label {
-    color: #eceff4;
+    color: #cdd6f4;
     font-family: "JetBrainsMono Nerd Font";
-    font-size: 120px;
+    font-size: 96px;
     font-weight: bold;
 }
 
 #date-label {
-    color: #d8dee9;
+    color: rgba(205, 214, 244, 0.6);
     font-family: "JetBrainsMono Nerd Font";
-    font-size: 32px;
-    font-weight: bold;
+    font-size: 22px;
 }
 
-/* Hide user/session dropdowns — auto-selects last used.
-   To restore: remove the opacity/size overrides below */
-#form-combo {
-    font-size: 0px;
-    min-height: 0px;
-    min-width: 0px;
-    margin: 0px;
-    padding: 0px;
+#password-entry {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #cdd6f4;
+    border: 1px solid rgba(137, 180, 250, 0.3);
+    border-radius: 16px;
+    padding: 14px 22px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 16px;
+    caret-color: #89b4fa;
+}
+
+#password-entry:focus {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(137, 180, 250, 0.6);
+}
+
+#login-button {
     opacity: 0;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
     border: none;
     background: none;
-}
-
-#form-label {
-    font-size: 0px;
-    min-height: 0px;
-    min-width: 0px;
-    margin: 0px;
-    padding: 0px;
-    opacity: 0;
 }
 
 #power-button {
     background: none;
     border: none;
-    color: rgba(236, 239, 244, 0.4);
+    color: rgba(205, 214, 244, 0.3);
+    font-size: 12px;
 }
 
 #power-button:hover {
-    background-color: rgba(255, 255, 255, 0.1);
-    color: #eceff4;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #cdd6f4;
     border-radius: 12px;
+}
+
+label {
+    color: #cdd6f4;
+    font-family: "JetBrainsMono Nerd Font";
+}
+
+/* Welcome label — hidden */
+#welcome-label {
+    font-size: 0;
+    min-height: 0;
+    opacity: 0;
+    padding: 0;
+    margin: 0;
+}
+
+/* Hide session/user combos and their labels — still functional, just invisible */
+#form-combo {
+    opacity: 0;
+    min-height: 1px;
+    min-width: 1px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+}
+
+#form-label {
+    font-size: 0;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    opacity: 0;
+}
+
+/* Hide show-password checkbox */
+checkbutton {
+    opacity: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
 }

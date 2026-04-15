@@ -99,10 +99,11 @@ sysctl -p /etc/sysctl.d/99-gateway.conf
 
 # iptables: redirect all workstation traffic through Tor
 TOR_UID=$(id -u debian-tor)
-iptables -t nat -A PREROUTING -i enp1s0 -p tcp --syn -j REDIRECT --to-ports 9040
-iptables -t nat -A PREROUTING -i enp1s0 -p udp --dport 53 -j REDIRECT --to-ports 5353
-iptables -A FORWARD -i enp1s0 -j ACCEPT
-iptables -A FORWARD -o enp1s0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+NET_IFACE=\$(ip route show default | awk '{print \$5; exit}')
+iptables -t nat -A PREROUTING -i "\$NET_IFACE" -p tcp --syn -j REDIRECT --to-ports 9040
+iptables -t nat -A PREROUTING -i "\$NET_IFACE" -p udp --dport 53 -j REDIRECT --to-ports 5353
+iptables -A FORWARD -i "\$NET_IFACE" -j ACCEPT
+iptables -A FORWARD -o "\$NET_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 # Save iptables
 apt-get install -y iptables-persistent

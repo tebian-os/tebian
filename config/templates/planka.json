@@ -6,6 +6,6 @@
   "volumes": ["/opt/data/planka:/app/public/user-avatars"],
   "env": {
     "BASE_URL": "http://localhost:3000",
-    "SECRET_KEY": "changeme123"
+    "SECRET_KEY": "__GENERATE__"
   }
 }

@@ -14,8 +14,7 @@ fi
 # ==============================================================================
 
 # 1. Get processes (user-only, exclude background fluff, sort by CPU)
-PROCS=$(ps -u $USER -o pid,comm,%cpu,%mem --sort=-%cpu | tail -n +2 | awk '{printf "󰆴 %s (CPU: %s%%, MEM: %s%%) | PID: %s
-", $2, $3, $4, $1}')
+PROCS=$(ps -u "$USER" -o pid,comm,%cpu,%mem --sort=-%cpu | tail -n +2 | awk '{printf "󰆴 %s (CPU: %s%%, MEM: %s%%) | PID: %s\n", $2, $3, $4, $1}')
 
 # 2. Select Process
 CHOICE=$(echo -e "$PROCS" | tfuzzel -d -p " 󰆴 Kill | " --width 50)

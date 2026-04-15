@@ -1,0 +1,16 @@
+# Greeter sway config for nwg-hello
+# Runs as the 'greeter' user via greetd
+
+# Accept any seat/input configuration
+seat seat0 xcursor_theme default 24
+
+# Black background while nwg-hello loads
+output * bg #1e1e2e solid_color
+
+exec "nwg-hello >/tmp/nwg-hello.log 2>&1 || sleep 3; swaymsg -q exit >/dev/null 2>&1 || true"
+
+bindsym Mod4+shift+e exec swaynag \
+	-t warning \
+	-m 'What do you want to do?' \
+	-b 'Poweroff' 'systemctl poweroff' \
+	-b 'Reboot' 'systemctl reboot'

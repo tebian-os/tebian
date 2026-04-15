@@ -1,0 +1,84 @@
+// Tebian Plymouth Boot Theme
+// Dark background with centered text and a subtle progress spinner
+
+// Background
+Window.SetBackgroundTopColor(0.12, 0.12, 0.18);    // #1e1e2e
+Window.SetBackgroundBottomColor(0.07, 0.07, 0.11);  // #11111b
+
+// Screen dimensions
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+// Title text
+title_sprite = Sprite();
+title_image = Image.Text("T E B I A N", 0.80, 0.84, 0.96, 1, "Sans Bold 36");  // #cdd6f4
+title_sprite.SetImage(title_image);
+title_sprite.SetX(screen_width / 2 - title_image.GetWidth() / 2);
+title_sprite.SetY(screen_height / 2 - 50);
+
+// Progress dots
+NUM_DOTS = 5;
+DOT_SPACING = 26;
+dot_sprites = [];
+dot_opacity = [];
+
+for (i = 0; i < NUM_DOTS; i++) {
+    dot_sprites[i] = Sprite();
+    dot_image = Image.Text("●", 0.54, 0.71, 0.98, 1, "Sans 16");  // #89b4fa
+    dot_sprites[i].SetImage(dot_image);
+    dot_sprites[i].SetX(screen_width / 2 - (NUM_DOTS * DOT_SPACING) / 2 + i * DOT_SPACING);
+    dot_sprites[i].SetY(screen_height / 2 + 20);
+    dot_opacity[i] = 0.2;
+    dot_sprites[i].SetOpacity(0.2);
+}
+
+// Animation counter
+counter = 0;
+
+fun refresh_callback() {
+    counter++;
+    active = Math.Int(counter / 8) % NUM_DOTS;
+
+    for (i = 0; i < NUM_DOTS; i++) {
+        if (i == active)
+            target = 1.0;
+        else if (i == (active + NUM_DOTS - 1) % NUM_DOTS)
+            target = 0.5;
+        else
+            target = 0.2;
+
+        dot_opacity[i] = dot_opacity[i] * 0.7 + target * 0.3;
+        dot_sprites[i].SetOpacity(dot_opacity[i]);
+    }
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+// Password prompt
+fun display_password_callback(prompt, bullets) {
+    pass_sprite = Sprite();
+    pass_label = Image.Text(prompt, 0.80, 0.84, 0.96, 1, "Sans 16");
+    pass_sprite.SetImage(pass_label);
+    pass_sprite.SetX(screen_width / 2 - pass_label.GetWidth() / 2);
+    pass_sprite.SetY(screen_height / 2 + 80);
+
+    bullet_str = "";
+    for (i = 0; i < bullets; i++)
+        bullet_str += "● ";
+
+    if (bullet_str != "") {
+        bullet_sprite.SetImage(Image.Text(bullet_str, 0.54, 0.71, 0.98, 1, "Sans 18"));
+        bullet_sprite.SetX(screen_width / 2 - bullet_sprite.GetImage().GetWidth() / 2);
+        bullet_sprite.SetY(screen_height / 2 + 115);
+    }
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+bullet_sprite = Sprite();
+
+// Hide messages/details
+fun message_callback(text) {
+    // Suppress boot messages for clean look
+}
+
+Plymouth.SetMessageFunction(message_callback);

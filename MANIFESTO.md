@@ -1,4 +1,4 @@
-# THE TEBIAN MANIFESTO (v3.1)
+# THE TEBIAN MANIFESTO (v0.1)
 
 > "Sovereignty through minimalism. Power through the Fleet."
 
@@ -38,7 +38,7 @@ Every script, every config, and every architectural decision is documented and a
 
 ---
 
-## Current Reality (v3.1)
+## Current Reality (v0.1)
 
 What Tebian is today:
 - **Minimal base**: 3 packages (sway + fuzzel + network-manager)
@@ -67,4 +67,4 @@ What Tebian is not (yet):
 
 *Updated: Feb 19, 2026*
 *Architecture: Tyler (Tebian)*
-*Version: 3.1 - Minimal Release*
+*Version: 0.1 - Early Release*

@@ -5,6 +5,6 @@
   "ports": ["3000:3000"],
   "volumes": ["/opt/data/grafana:/var/lib/grafana"],
   "env": {
-    "GF_SECURITY_ADMIN_PASSWORD": "admin"
+    "GF_SECURITY_ADMIN_PASSWORD": "__GENERATE__"
   }
 }

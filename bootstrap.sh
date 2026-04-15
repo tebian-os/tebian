@@ -98,7 +98,7 @@ case "$choice" in
             echo "  Installing Server Essentials (SSH, UFW, Core Utils)..."
             sudo apt update && sudo apt install -y \
                 openssh-server ufw fail2ban \
-                curl wget git htop btop bash-completion unzip
+                curl wget git btop bash-completion unzip
             
             # Secure SSH
             sudo ufw default deny incoming

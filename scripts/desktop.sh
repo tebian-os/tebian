@@ -40,17 +40,22 @@ if ! sudo apt update; then
 fi
 
 # Base packages — minimum needed to boot sway + show onboard fuzzel menu
-# Desktop extras (pcmanfm, mako, grim, bluetooth, etc.) are installed by
+# Desktop extras (thunar, mako, grim, bluetooth, etc.) are installed by
 # tebian-onboard if the user picks "Desktop (Familiar)"
 PACKAGES=(
-    sway swaybg
+    sway swaybg swayidle gtklock
     fuzzel
     kitty
-    pipewire wireplumber pipewire-pulse
-    fonts-noto fonts-jetbrains-mono
+    pipewire-audio libspa-0.2-libcamera
+    fonts-noto-core fonts-noto-color-emoji fonts-jetbrains-mono
     network-manager
     curl
-    greetd nwg-hello libnotify-bin
+    greetd nwg-hello
+    libnotify-bin mako-notifier
+    grim slurp wl-clipboard
+    brightnessctl wob
+    xdg-desktop-portal-wlr
+    lxpolkit
 )
 
 # Optional packages (don't fail if missing)
@@ -112,6 +117,10 @@ log_info "Setting up configs..."
 
 mkdir -p "$CONFIG_DIR"
 
+# Default bar stats to OFF (user can enable in Settings > Screen > Bar Stats)
+mkdir -p "$CONFIG_DIR/tebian"
+touch "$CONFIG_DIR/tebian/bar_perf_off"
+
 # Sway
 mkdir -p "$CONFIG_DIR/sway"
 if [ ! -f "$TEBIAN_DIR/configs/sway/config" ]; then
@@ -134,6 +143,13 @@ if [ ! -f "$CONFIG_DIR/sway/config.user" ]; then
         touch "$CONFIG_DIR/sway/config.user"
     fi
 fi
+
+# Create empty outputs file (sway config includes it for dynamic display settings)
+touch "$CONFIG_DIR/sway/outputs"
+
+# Remove stale hardcoded laptop outputs from both default and user overrides.
+sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config" 2>/dev/null || true
+sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config.user" 2>/dev/null || true
 
 # Kitty
 mkdir -p "$CONFIG_DIR/kitty"
@@ -170,6 +186,17 @@ if [ -d "$TEBIAN_DIR/scripts" ]; then
     fi
 fi
 
+# Add t-fetch to .bashrc (with tty7 guard to prevent flash during greetd login)
+if ! grep -q "t-fetch" "$HOME/.bashrc" 2>/dev/null; then
+    cat >> "$HOME/.bashrc" << 'FETCH'
+
+# Tebian Startup Fetch (skip during greetd→sway transition on tty7)
+if [ -t 1 ] && command -v t-fetch >/dev/null && [ "$(tty)" != "/dev/tty7" ]; then
+    t-fetch
+fi
+FETCH
+fi
+
 log_info "Setting up wallpaper..."
 
 if [ -f "$TEBIAN_DIR/assets/wallpapers/glass.jpg" ]; then
@@ -198,19 +225,61 @@ if ! id greeter &>/dev/null; then
 fi
 sudo usermod -aG video,input,render greeter 2>/dev/null || true
 
+# Ensure greeter home directory exists (prevents "unable to set working directory")
+sudo mkdir -p /home/greeter/.local/state/wireplumber
+sudo chown -R greeter:greeter /home/greeter
+sudo chmod 700 /home/greeter
+
 # Install greetd config files
 sudo mkdir -p /etc/greetd
 sudo cp "$TEBIAN_DIR/configs/greetd/config.toml" /etc/greetd/config.toml
-sudo cp "$TEBIAN_DIR/configs/greetd/style.css" /etc/greetd/style.css
 sudo cp "$TEBIAN_DIR/configs/greetd/environments" /etc/greetd/environments
 
 # nwg-hello login screen config
 sudo mkdir -p /etc/nwg-hello
 sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.json" /etc/nwg-hello/nwg-hello.json
 sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.css" /etc/nwg-hello/nwg-hello.css
+sudo cp "$TEBIAN_DIR/configs/nwg-hello/tebian.glade" /etc/nwg-hello/tebian.glade
+sudo cp "$TEBIAN_DIR/configs/nwg-hello/sway-config" /etc/nwg-hello/sway-config
+
+# Initialize greeter cache (preselect Tebian session for first login)
+sudo mkdir -p /var/cache/nwg-hello
+if [ ! -f /var/cache/nwg-hello/cache.json ]; then
+    echo '{}' | sudo tee /var/cache/nwg-hello/cache.json >/dev/null
+fi
+sudo chown greeter:greeter /var/cache/nwg-hello/cache.json 2>/dev/null || true
+
+# Fix nwg-hello upstream bug: session combo uses name instead of exec as ID
+NWG_UI="/usr/lib/python3/dist-packages/nwg_hello/ui.py"
+if [ -f "$NWG_UI" ] && grep -q 'sessions\[0\]\["name"\]' "$NWG_UI"; then
+    sudo sed -i 's/sessions\[0\]\["name"\]/sessions[0]["exec"]/' "$NWG_UI"
+    log_info "Patched nwg-hello session selection bug"
+fi
+
+# Clean greetd PAM config (remove gnome-keyring/kwallet which cause auth failures)
+if [ -f /etc/pam.d/greetd ]; then
+    sudo sed -i '/pam_gnome_keyring/d; /pam_kwallet/d' /etc/pam.d/greetd
+fi
 
 # Enable greetd (replaces getty on tty7)
 sudo systemctl enable greetd
+
+# Smooth Plymouth→greeter transition (retain splash until greeter draws)
+sudo mkdir -p /etc/systemd/system/greetd.service.d
+sudo tee /etc/systemd/system/greetd.service.d/plymouth.conf > /dev/null << 'PLYDROP'
+[Service]
+ExecStartPre=-/usr/bin/plymouth deactivate
+ExecStartPre=-/usr/bin/plymouth quit --retain-splash
+# Fallback: force-quit plymouth if retain-splash hangs
+ExecStartPre=-/bin/sh -c 'sleep 2 && /usr/bin/plymouth quit 2>/dev/null || true'
+PLYDROP
+
+# Dark VT colors (prevents visible text flash during plymouth→greetd transition)
+# Color slots: 0=bg, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=fg
+# Slot 0 is black (invisible bg), slot 7 is dim gray (readable if user drops to TTY)
+if [ -f /etc/default/grub ] && ! grep -q "vt.default_red" /etc/default/grub; then
+    sudo sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 vt.default_red=30,243,166,249,137,203,148,205 vt.default_grn=30,139,227,226,180,166,226,214 vt.default_blu=46,168,161,175,250,227,213,244"/' /etc/default/grub
+fi
 
 # Set GRUB wallpaper to system path
 if [ -f /etc/default/grub ]; then

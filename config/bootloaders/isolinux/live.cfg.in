@@ -1,18 +1,12 @@
 label live-normal
   menu label Tebian OS
   menu default
-  linux @KERNEL_LIVE@
-  append @APPEND_LIVE@
-  initrd @INITRD_LIVE@
+  linux /live/vmlinuz
+  append boot=live components toram quiet splash loglevel=0 vt.global_cursor_default=0 cfg80211.ieee80211_regdom=00
+  initrd /live/initrd.img
 
 label live-failsafe
   menu label Tebian OS (safe graphics)
-  linux @KERNEL_LIVE@
-  append @APPEND_LIVE@ nomodeset
-  initrd @INITRD_LIVE@
-
-label live-toram
-  menu label Tebian OS (load to RAM)
-  linux @KERNEL_LIVE@
-  append @APPEND_LIVE@ toram
-  initrd @INITRD_LIVE@
+  linux /live/vmlinuz
+  append boot=live components toram nomodeset cfg80211.ieee80211_regdom=00
+  initrd /live/initrd.img

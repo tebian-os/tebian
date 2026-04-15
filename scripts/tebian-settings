@@ -20,13 +20,20 @@ get_term() {
 
 TERM_CMD=$(get_term)
 
-# Ensure only one instance runs at a time
+# Ensure only one instance runs at a time (PID-based — fd locks leak to
+# child processes like swaybg, preventing settings from reopening)
 LOCK_FILE="/tmp/tebian-settings.lock"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-    notify-send "Settings" "Already running" 2>/dev/null
-    exit 0
+if [ -f "$LOCK_FILE" ]; then
+    lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null &&
+       grep -q "tebian-settings" "/proc/$lock_pid/cmdline" 2>/dev/null; then
+        # Kill stale instance and take over (user explicitly re-launched)
+        kill "$lock_pid" 2>/dev/null
+        sleep 0.2
+    fi
 fi
+echo $$ > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
 
 # Transaction log — records installs, config changes, toggles
 TEBIAN_LOG="$HOME/.local/share/tebian-settings.log"
@@ -52,22 +59,20 @@ unset _mod
 
 show_main_menu() {
     while true; do
-        OPTIONS="󰖩 WiFi\0icon\x1fnetwork-wireless
-󰂯 Bluetooth\0icon\x1fbluetooth
-󰔡 Audio\0icon\x1faudio-speakers
-󰌢 Screen (Print: screenshot)\0icon\x1fvideo-display
-󰏘 Themes\0icon\x1fpreferences-desktop-theme
-󰚰 System Update\0icon\x1fsystem-software-update
-󰐥 Power\0icon\x1fsystem-shutdown
-─────────────────────────────────
-󰇄 More\0icon\x1fapplications-system
-─────────────────────────────────
+        OPTIONS="󰖩 WiFi
+󰂯 Bluetooth
+󰔡 Audio
+󰌢 Screen (Print: screenshot)
+󰏘 Themes
+󰚰 System Update
+󰐥 Power
+󰇄 More
 󰌍 Back (Mod+D: app launcher)"
 
         CHOICE=$(echo -e "$OPTIONS" | tfuzzel -d -p " 󰀻 Settings | ")
 
-        if [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]]; then
-            tebian-menu &
+        if [ -z "$CHOICE" ] || [[ "$CHOICE" == *"󰌍 Back"* ]]; then
+            tebian-menu 9>&- &
             return
         fi
 
@@ -94,6 +99,7 @@ show_main_menu() {
 # --- Flag Handling ---
 if [[ "$1" == "--power" ]]; then
     power_menu
+    tebian-menu &
 elif [[ "$1" == "--ui" ]]; then
     ui_menu
 elif [[ "$1" == "--lock" ]]; then
