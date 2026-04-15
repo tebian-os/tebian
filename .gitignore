@@ -3,5 +3,4 @@ node_modules/
 tebian-site/
 ._*
 .vm/
-.vm/
-*.iso
+.DS_Store

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# TEBIAN OS BOOTSTRAP (V2.2)
+# TEBIAN OS BOOTSTRAP (v0.1.0)
 # Runs on first boot or manual install
 # Philosophy: One question. Sane defaults.
 # ==============================================================================

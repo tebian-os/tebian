@@ -65,6 +65,6 @@ What Tebian is not (yet):
 
 ---
 
-*Updated: Feb 19, 2026*
+*Updated: April 15, 2026*
 *Architecture: Tyler (Tebian)*
 *Version: 0.1 - Early Release*

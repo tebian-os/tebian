@@ -3,7 +3,7 @@
 # TEBIAN REMOTE INSTALLER
 # Usage: curl -sL tebian.org/install | bash
 # Local: bash install.sh --local
-# Fleet: curl -sL tebian.org/install | bash -s -- --repo https://git.company.com/org/tebian.git
+# Fleet: curl -sL tebian.org/install | bash -s -- --repo https://your-git-host/org/tebian.git
 # Works on: Debian, Raspberry Pi OS, Armbian, Ubuntu (any Debian-based distro)
 # ==============================================================================
 
