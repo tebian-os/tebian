@@ -1,4 +1,6 @@
-# Nord Theme - Mako Notifications
+# Tebian default mako config (overwritten by tebian-theme on first run).
+# These defaults are picked so notifications still look reasonable if a
+# user invokes mako before any theme has been applied.
 font=JetBrainsMono Nerd Font 11
 background-color=#2E3440
 text-color=#ECEFF4
@@ -7,3 +9,15 @@ border-size=2
 padding=12
 margin=8
 default-timeout=5000
+
+# Position + layer — without these, mako can hide behind fullscreen apps
+# or anchor to bottom-left on some compositors.
+anchor=top-right
+layer=overlay
+
+[urgency=low]
+default-timeout=3000
+
+[urgency=critical]
+border-color=#BF616A
+default-timeout=0

@@ -2,6 +2,13 @@
 # Sourced by tebian-settings — do not run directly
 
 wifi_menu() {
+    # Bail early if no WiFi adapter is present — otherwise the menu shows
+    # an empty list with just "Turn WiFi OFF" and confuses the user.
+    if ! nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep -q ':wifi$'; then
+        tnotify "WiFi" "No WiFi adapter detected"
+        return
+    fi
+
     while true; do
         # Get current WiFi state
         WIFI_STATE=$(nmcli radio wifi)
@@ -97,13 +104,15 @@ $WIFI_LIST
             else
                 # Connect to selected network
                 SSID=$(echo "$SSID_RAW" | sed 's/^[^ ]* //;s/ ([0-9]\{1,3\}%)$//')
-                # Note: fuzzel doesn't support password masking — input is visible
-                PASS=$(echo "" | tfuzzel -d -p " 󰷦 Password for $SSID | ")
+                PASS=$(echo "" | tfuzzel -d --password='*' -p " 󰷦 Password for $SSID | ")
 
                 if [ -n "$PASS" ]; then
-                    # Create temporary connection file to avoid password in ps aux
-                    CONN_FILE=$(mktemp /tmp/tebian-wifi-XXXXXX)
-                    chmod 600 "$CONN_FILE"
+                    # Temp file in $XDG_RUNTIME_DIR (per-user tmpfs, 0700) — keeps
+                    # the PSK off /tmp and out of `ps aux` (passing via nmcli args
+                    # would expose it in the process list).
+                    RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+                    mkdir -p "$RUNTIME_DIR"
+                    CONN_FILE=$(mktemp "$RUNTIME_DIR/tebian-wifi-XXXXXX")
                     cat > "$CONN_FILE" <<WIFIEOF
 [connection]
 id=$SSID

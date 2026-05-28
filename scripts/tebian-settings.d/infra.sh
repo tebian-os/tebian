@@ -1081,11 +1081,16 @@ $TL_ACTION
     if [[ "$TL_CHOICE" == *"󰌍 Back"* || -z "$TL_CHOICE" ]]; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Install Tailscale" ]]; then
+        # Detect Debian codename so we pick the right Tailscale repo —
+        # hardcoding bookworm would fail on trixie+ (Tailscale publishes
+        # per-codename repos).
+        local codename
+        codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-trixie}")
         $TERM_CMD bash -c "echo 'Installing Tailscale via apt repository...'
         echo ''
         # Add Tailscale apt repo (signed with their GPG key)
-        curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-        curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+        curl -fsSL https://pkgs.tailscale.com/stable/debian/${codename}.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+        curl -fsSL https://pkgs.tailscale.com/stable/debian/${codename}.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
         sudo apt update
         sudo apt install -y tailscale
         echo ''

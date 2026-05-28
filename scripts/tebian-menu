@@ -13,7 +13,9 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
-DESKTOP_DIRS="/usr/share/applications $HOME/.local/share/applications /var/lib/flatpak/exports/share/applications $HOME/.local/share/flatpak/exports/share/applications"
+# XDG override order: user dirs first so user .desktop files override system stubs
+# (e.g., user's "Steam" hides /usr/share/applications/ "Install Steam" stub)
+DESKTOP_DIRS="$HOME/.local/share/applications $HOME/.local/share/flatpak/exports/share/applications /var/lib/flatpak/exports/share/applications /usr/share/applications"
 
 # Create default pins on first run
 if [ ! -f "$PIN_FILE" ]; then
@@ -80,29 +82,37 @@ CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰀻 Tebian | " --width 30)
 [ -z "$CHOICE" ] && exit 0
 
 # Handle system entries
+# Background all of them for consistent handoff — otherwise menu blocks
+# waiting on settings to exit, creating a brief double-menu overlap when
+# settings's "Back" spawns a new menu instance.
 case "$CHOICE" in
     *"App Drawer"*)
         tebian-drawer &
         exit 0
         ;;
     *"System Settings"*)
-        tebian-settings
+        tebian-settings &
         exit 0
         ;;
     *"Power Options"*)
-        tebian-settings --power
+        tebian-settings --power &
         exit 0
         ;;
 esac
 
 # Find and launch the selected pinned app
+# Prefer gtk-launch (handles XDG field codes, DBus activation, Terminal=true,
+# StartupNotify correctly). Fall back to swaymsg exec if gtk-launch fails.
 for dir in $DESKTOP_DIRS; do
     [ -d "$dir" ] || continue
     for desktop in "$dir"/*.desktop; do
         [ -f "$desktop" ] || continue
         if grep -qxF "Name=$CHOICE" "$desktop" 2>/dev/null; then
-            exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
-            swaymsg exec -- "$exec_cmd"
+            bname=$(basename "$desktop" .desktop)
+            gtk-launch "$bname" 2>/dev/null || {
+                exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
+                swaymsg exec -- "$exec_cmd"
+            }
             exit 0
         fi
     done

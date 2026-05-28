@@ -12,7 +12,11 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
-DESKTOP_DIRS="/usr/share/applications $HOME/.local/share/applications /var/lib/flatpak/exports/share/applications $HOME/.local/share/flatpak/exports/share/applications"
+# XDG override order: user dirs first, system dirs last.
+# A .desktop file with the same filename in a higher-priority dir overrides
+# the lower one (this is what hides the "Install Steam" stub once Steam writes
+# its own steam.desktop to ~/.local/share/applications/).
+DESKTOP_DIRS="$HOME/.local/share/applications $HOME/.local/share/flatpak/exports/share/applications /var/lib/flatpak/exports/share/applications /usr/share/applications"
 
 mkdir -p "$HOME/.config/tebian"
 [ -f "$PIN_FILE" ] || touch "$PIN_FILE"
@@ -21,26 +25,53 @@ is_pinned() {
     grep -qxF "$1" "$PIN_FILE" 2>/dev/null
 }
 
+# Atomic toggle. flock prevents two drawers from racing on PIN_FILE;
+# mktemp gives each invocation a unique tempfile so the rename can't
+# pick up a half-written file from another process.
+# Echoes "pinned" or "unpinned" to stdout.
+toggle_pin() {
+    local bname="$1"
+    (
+        flock 200
+        if grep -qxF "$bname" "$PIN_FILE" 2>/dev/null; then
+            local tmp
+            tmp=$(mktemp "$PIN_FILE.XXXXXX")
+            grep -vxF "$bname" "$PIN_FILE" > "$tmp"
+            mv "$tmp" "$PIN_FILE"
+            echo "unpinned"
+        else
+            echo "$bname" >> "$PIN_FILE"
+            echo "pinned"
+        fi
+    ) 200>"$PIN_FILE.lock"
+}
+
 # Edit Pins mode — show all apps with pin status, toggle on select
 edit_pins() {
     while true; do
         local MENU=""
         declare -A SEEN=()
+        declare -A SEEN_BNAME=()
         declare -A NAME_TO_DESKTOP=()
 
         for dir in $DESKTOP_DIRS; do
             [ -d "$dir" ] || continue
             for desktop in "$dir"/*.desktop; do
                 [ -f "$desktop" ] || continue
+                local bname
+                bname=$(basename "$desktop")
+                # XDG override: if higher-priority dir already had this filename, skip
+                [ -n "${SEEN_BNAME[$bname]}" ] && continue
+                SEEN_BNAME[$bname]=1
+
                 grep -q "^NoDisplay=true" "$desktop" 2>/dev/null && continue
                 grep -q "^Hidden=true" "$desktop" 2>/dev/null && continue
                 local tryexec
                 tryexec=$(grep -m1 "^TryExec=" "$desktop" | cut -d= -f2-)
                 [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && continue
 
-                local name bname
+                local name
                 name=$(grep -m1 "^Name=" "$desktop" | cut -d= -f2-)
-                bname=$(basename "$desktop")
                 [ -z "$name" ] && continue
                 [ -n "${SEEN[$name]}" ] && continue
                 SEEN[$name]=1
@@ -73,13 +104,10 @@ edit_pins() {
         local bname="${NAME_TO_DESKTOP[$app_name]}"
 
         if [ -n "$bname" ]; then
-            if is_pinned "$bname"; then
-                grep -vxF "$bname" "$PIN_FILE" > "$PIN_FILE.tmp"
-                mv "$PIN_FILE.tmp" "$PIN_FILE"
-                notify-send "Menu" "Unpinned: $app_name" 2>/dev/null
-            else
-                echo "$bname" >> "$PIN_FILE"
+            if [ "$(toggle_pin "$bname")" = "pinned" ]; then
                 notify-send "Menu" "Pinned: $app_name" 2>/dev/null
+            else
+                notify-send "Menu" "Unpinned: $app_name" 2>/dev/null
             fi
         fi
         # Loop continues — re-shows edit menu with updated pin status
@@ -88,12 +116,18 @@ edit_pins() {
 
 # Main drawer — collect apps as "name|icon" pairs, sort by name, then format for fuzzel
 declare -A SEEN
+declare -A SEEN_BNAME
 ENTRIES=()
 
 for dir in $DESKTOP_DIRS; do
     [ -d "$dir" ] || continue
     for desktop in "$dir"/*.desktop; do
         [ -f "$desktop" ] || continue
+        bname=$(basename "$desktop")
+        # XDG override: if higher-priority dir already had this filename, skip
+        [ -n "${SEEN_BNAME[$bname]}" ] && continue
+        SEEN_BNAME[$bname]=1
+
         grep -q "^NoDisplay=true" "$desktop" 2>/dev/null && continue
         grep -q "^Hidden=true" "$desktop" 2>/dev/null && continue
         tryexec=$(grep -m1 "^TryExec=" "$desktop" | cut -d= -f2-)
@@ -127,8 +161,10 @@ MENU+="󰌍 Back"
 
 CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 📂 Apps | " --width 40)
 
+# ESC (empty selection) = close cleanly. Only explicit Back launches the
+# menu — otherwise pressing Mod+A then ESC would unexpectedly pop the
+# menu instead of returning to the desktop.
 if [ -z "$CHOICE" ]; then
-    tebian-menu &
     exit 0
 fi
 

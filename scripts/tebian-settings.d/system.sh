@@ -111,13 +111,13 @@ backup_menu() {
         echo "Tebian Backup - $TIMESTAMP" > "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
         echo "Hostname: $(hostname)" >> "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
         
-        notify-send "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
+        tnotify "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
         
     elif [[ "$B_CHOICE" =~ "Restore" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
         
         if [ ! -d "$BACKUP_DIR" ]; then
-            notify-send "Restore" "No backups found"
+            tnotify "Restore" "No backups found"
             continue
         fi
         
@@ -139,14 +139,14 @@ backup_menu() {
         if [ -f "$RESTORE_DIR/.bashrc" ]; then cp "$RESTORE_DIR/.bashrc" ~/; fi
         
         swaymsg reload 2>/dev/null &
-        notify-send "Restore Complete" "Restored from $R_CHOICE"
+        tnotify "Restore Complete" "Restored from $R_CHOICE"
         
     elif [[ "$B_CHOICE" =~ "View Current" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
         if [ -d "$BACKUP_DIR" ]; then
             $TERM_CMD bash -c "ls -la $BACKUP_DIR; echo ''; ls -la $BACKUP_DIR/$(ls -1t $BACKUP_DIR | head -1) 2>/dev/null; read -p 'Press Enter...'"
         else
-            notify-send "Backup" "No backups found"
+            tnotify "Backup" "No backups found"
         fi
     fi
     done
@@ -291,7 +291,7 @@ power_menu() {
 
 notification_history_menu() {
     if ! command -v makoctl &>/dev/null; then
-        notify-send "Notifications" "mako not installed"
+        tnotify "Notifications" "mako not installed"
         return
     fi
     # Get notification history from mako (JSON) and format for fuzzel

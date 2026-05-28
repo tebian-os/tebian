@@ -94,7 +94,10 @@ custom_wallpaper_menu() {
             return
         fi
         
-        [[ "$W_CHOICE" =~ "Wallpapers" || "$W_CHOICE" =~ "───" ]] && continue
+        # Skip the section headers (exact match — a regex like =~ "Wallpapers"
+        # would also silently swallow any wallpaper file whose name happens
+        # to contain that word).
+        [[ "$W_CHOICE" == "󰏘 Tebian Wallpapers" || "$W_CHOICE" == "󰋩 My Wallpapers" ]] && continue
         
         if [ -f "$SHIPPED_DIR/$W_CHOICE" ]; then
             SELECTED="$SHIPPED_DIR/$W_CHOICE"
@@ -237,7 +240,7 @@ font_menu() {
         sed -i "s/^font_family.*/font_family $font_name/" ~/.config/kitty/kitty.conf
         sed -i "s/^font=.*/font=$font_name:size=$font_size/" ~/.config/fuzzel/fuzzel.ini
 
-        notify-send "Font" "$font_name applied" 2>/dev/null
+        tnotify "Font" "$font_name applied"
         swaymsg reload 2>/dev/null &
     }
 

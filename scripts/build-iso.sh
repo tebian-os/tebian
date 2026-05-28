@@ -153,7 +153,38 @@ EOF
 
 # ── Copy Tebian repo into live filesystem ──
 mkdir -p config/includes.chroot/home/user/Tebian
-rsync -a --exclude='node_modules' --exclude='dist' --exclude='.astro' --exclude='.git' "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
+# Anything matching these patterns must NEVER end up in the ISO. The
+# previous build accidentally embedded a 1GB stale ISO because *.iso
+# wasn't excluded — that's why this list is paranoid.
+rsync -a \
+    `# Repo metadata + JS/Python/Rust/Go build artifacts` \
+    --exclude='.git/' --exclude='node_modules/' --exclude='dist/' \
+    --exclude='build/' --exclude='target/' --exclude='.astro/' \
+    --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='.mypy_cache/' \
+    `# Other ISOs / disk images — must NEVER recurse` \
+    --exclude='*.iso' --exclude='*.qcow2' --exclude='*.img' --exclude='*.vmdk' \
+    --exclude='*.raw' --exclude='*.vdi' \
+    `# Live-build artifact dirs from previous runs` \
+    --exclude='iso-build/' --exclude='chroot/' --exclude='cache/' --exclude='binary/' \
+    `# Editor / IDE / OS junk` \
+    --exclude='*.swp' --exclude='*.swo' --exclude='*~' --exclude='.#*' \
+    --exclude='*.bak' --exclude='*.orig' --exclude='.DS_Store' --exclude='Thumbs.db' \
+    --exclude='.vscode/' --exclude='.idea/' --exclude='.vs/' \
+    `# Secrets — defensive; the repo shouldn't have these but never trust` \
+    --exclude='.env' --exclude='.env.*' --exclude='credentials*' \
+    --exclude='*.key' --exclude='*.pem' --exclude='id_rsa*' --exclude='id_ed25519*' \
+    `# Logs` \
+    --exclude='*.log' \
+    "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
+
+# Sanity check — warn if the embedded Tebian is larger than expected.
+# A clean repo is well under 50MB; anything bigger means something leaked.
+embed_size_mb=$(du -sm config/includes.chroot/home/user/Tebian/ | awk '{print $1}')
+if [ "$embed_size_mb" -gt 50 ]; then
+    echo -e "${YELLOW}[iso] WARNING: embedded Tebian repo is ${embed_size_mb}MB — expected <50MB.${NC}"
+    echo -e "${YELLOW}      Check for stray binary files in $TEBIAN_SRC:${NC}"
+    find config/includes.chroot/home/user/Tebian/ -type f -size +5M 2>/dev/null | sed 's|^|        |'
+fi
 
 # Install tebian-installer system-wide
 mkdir -p config/includes.chroot/usr/local/bin
@@ -252,7 +283,9 @@ sudo lb chroot
 KVER=$(ls chroot/boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|.*/vmlinuz-||')
 if [ -n "$KVER" ]; then
     echo -e "${GREEN}[iso]${NC} Kernel version: $KVER"
-    find config/bootloaders -name 'grub.cfg' -o -name 'loopback.cfg' | xargs sed -i "s/@@KERNEL_VERSION@@/$KVER/g"
+    # Use | as sed delimiter so any future kernel version containing /
+    # (unusual but theoretically possible) won't break the substitution.
+    find config/bootloaders -name 'grub.cfg' -o -name 'loopback.cfg' | xargs sed -i "s|@@KERNEL_VERSION@@|$KVER|g"
 else
     echo -e "${YELLOW}[iso]${NC} Warning: could not detect kernel version for grub.cfg"
 fi

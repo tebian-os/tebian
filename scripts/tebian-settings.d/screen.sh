@@ -50,7 +50,7 @@ $PERF_LABEL
 $NIGHT_LABEL
 󰌍 Back"
 
-        S_CHOICE=$(echo -e "$S_OPTS" | tfuzzel -d -p " Screen | ")
+        S_CHOICE=$(echo -e "$S_OPTS" | tfuzzel -d -p " 󰌢 Screen | ")
 
         if [[ -z "$S_CHOICE" ]] || [[ "$S_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
@@ -171,7 +171,7 @@ screen_menu() {
         if command -v wdisplays &>/dev/null; then
             wdisplays &
         else
-            notify-send "Display" "wdisplays not installed. Install via More > Software."
+            tnotify "Display" "wdisplays not installed. Install via More > Software."
         fi
     fi
     done
@@ -459,7 +459,7 @@ for o in json.load(sys.stdin):
 
 screenshot_menu() {
     if ! command -v grim &>/dev/null; then
-        notify-send "Screenshots" "Not installed. Use Install Essentials menu."
+        tnotify "Screenshots" "Not installed. Use Install Essentials menu."
         return
     fi
     
@@ -474,16 +474,16 @@ screenshot_menu() {
     if [[ "$S_CHOICE" =~ "Region" ]]; then
         mkdir -p ~/Pictures/Screenshots
         FILE=~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied to clipboard"
+        grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && tnotify "Screenshot" "Saved & copied to clipboard"
     elif [[ "$S_CHOICE" =~ "Full Screen" ]]; then
         mkdir -p ~/Pictures/Screenshots
         grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"
+        tnotify "Screenshot" "Saved to ~/Pictures/Screenshots/"
     elif [[ "$S_CHOICE" =~ "Open Screenshots" ]]; then
         if command -v thunar &>/dev/null; then
             thunar ~/Pictures/Screenshots &
         else
-            notify-send "File Manager" "Not installed"
+            tnotify "File Manager" "Not installed"
         fi
     fi
 }

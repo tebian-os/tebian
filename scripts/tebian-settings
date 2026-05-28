@@ -20,9 +20,12 @@ get_term() {
 
 TERM_CMD=$(get_term)
 
-# Ensure only one instance runs at a time (PID-based — fd locks leak to
-# child processes like swaybg, preventing settings from reopening)
-LOCK_FILE="/tmp/tebian-settings.lock"
+# Ensure only one instance runs at a time. PID-based, not flock — flock
+# leaks via inherited fds into backgrounded children (tebian-menu &,
+# status.sh kill, swaymsg reload) which would block settings from
+# reopening until those children exit.
+# Lock lives in $XDG_RUNTIME_DIR (per-user, 0700) not /tmp (world-listable).
+LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/tebian-settings.lock"
 if [ -f "$LOCK_FILE" ]; then
     lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
     if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null &&
@@ -36,8 +39,10 @@ echo $$ > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # Transaction log — records installs, config changes, toggles
-TEBIAN_LOG="$HOME/.local/share/tebian-settings.log"
-mkdir -p "$HOME/.local/share"
+TEBIAN_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/tebian-settings.log"
+mkdir -p "$(dirname "$TEBIAN_LOG")"
+# Migrate from old location (pre-XDG-state)
+[ -f "$HOME/.local/share/tebian-settings.log" ] && mv "$HOME/.local/share/tebian-settings.log" "$TEBIAN_LOG" 2>/dev/null || true
 tlog() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$TEBIAN_LOG"
 }
@@ -62,7 +67,7 @@ show_main_menu() {
         OPTIONS="󰖩 WiFi
 󰂯 Bluetooth
 󰔡 Audio
-󰌢 Screen (Print: screenshot)
+󰌢 Screen
 󰏘 Themes
 󰚰 System Update
 󰐥 Power
@@ -71,8 +76,14 @@ show_main_menu() {
 
         CHOICE=$(echo -e "$OPTIONS" | tfuzzel -d -p " 󰀻 Settings | ")
 
-        if [ -z "$CHOICE" ] || [[ "$CHOICE" == *"󰌍 Back"* ]]; then
-            tebian-menu 9>&- &
+        # ESC (empty) = close cleanly. Only explicit Back launches the
+        # menu — otherwise pressing Mod+S then ESC would unexpectedly
+        # pop the menu instead of returning to the desktop.
+        if [ -z "$CHOICE" ]; then
+            return
+        fi
+        if [[ "$CHOICE" == *"󰌍 Back"* ]]; then
+            tebian-menu &
             return
         fi
 

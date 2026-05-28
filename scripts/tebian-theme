@@ -41,8 +41,13 @@ apply_theme() {
         mkdir -p "$wallpaper_dir"
         cp "$wallpaper_src" "$wallpaper_dir/default.jpg"
         pkill swaybg 2>/dev/null; sleep 0.1
-        swaybg -i "$wallpaper_dir/default.jpg" -m fill &
-        disown
+        # Spawn via `swaymsg exec` (not bare `&`) so swaybg becomes a child
+        # of sway with no controlling TTY. Otherwise — when tebian-theme is
+        # called from inside the onboard `$TERM_CMD bash -c '...'` block —
+        # the new swaybg inherits the kitty terminal's TTY, and when that
+        # terminal closes the user gets SIGHUP'd into a black wallpaper.
+        # `disown` is not enough; the controlling TTY is the issue.
+        swaymsg exec -- "swaybg -i '$wallpaper_dir/default.jpg' -m fill" 2>/dev/null
     fi
     
     # 7. GTK theme (dark/light based on theme)
@@ -182,8 +187,11 @@ CSSEOF
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then
         swaymsg reload 2>/dev/null
-        pkill mako 2>/dev/null; sleep 0.1; mako &
-        disown
+        # Spawn mako via sway so it survives if tebian-theme was invoked
+        # from inside a terminal subshell (e.g. onboarding) that may exit.
+        # See the swaybg note above — same SIGHUP issue.
+        pkill mako 2>/dev/null; sleep 0.1
+        swaymsg exec -- mako 2>/dev/null
         notify-send "Tebian Theme" "$theme theme applied"
     fi
 

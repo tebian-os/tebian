@@ -99,7 +99,7 @@ $AUTOUPDATE_LABEL
 󰍉 View Security Logs
 󰌍 Back"
 
-    S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " Security | ")
+    S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " 󰒃 Security | ")
 
     if [[ "$S_CHOICE" == *"󰌍 Back"* || -z "$S_CHOICE" ]]; then return; fi
 

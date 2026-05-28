@@ -1,0 +1,87 @@
+#!/bin/bash
+# Tebian — keep $HOME tidy by pre-symlinking known XDG-violating apps
+# to their proper location under ~/.local/share/
+#
+# Runs once on first login (idempotent — safe to re-run).
+#
+# How it works: before an app like Steam first runs, we create
+#   ~/.local/share/steam/   (real dir)
+#   ~/.steam -> ~/.local/share/steam   (symlink)
+# Steam writes "to" ~/.steam, transparently follows the symlink, and
+# the user's home stays clean. The app never knows the difference.
+#
+# Safety: if a real directory already exists at the offender path,
+# we leave it alone — auto-migrating Steam's 35GB or someone's
+# Minecraft saves is too risky. User can migrate manually.
+
+set -euo pipefail
+
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+mkdir -p "$DATA_DIR"
+
+# Each entry: <dotpath in $HOME>:<dirname under $XDG_DATA_HOME>
+# Only include apps that:
+#   - Don't respect XDG_DATA_HOME
+#   - Don't respect a specific env var override (those go in environment.d)
+#   - Are safe to redirect (no sockets, no security implications)
+OFFENDERS=(
+    ".steam:steam"
+    ".minecraft:minecraft"
+    ".mozilla:mozilla"
+    ".thunderbird:thunderbird"
+    ".tor-browser:tor-browser"
+    ".vscode:vscode"
+    ".vscode-oss:vscode-oss"
+    ".discord:discord"
+    ".element:element"
+    ".dropbox:dropbox"
+    ".dropbox-dist:dropbox-dist"
+    ".wine:wine"
+    ".PlayOnLinux:playonlinux"
+    ".lutris:lutris"
+    ".godot:godot"
+    ".unity3d:unity3d"
+    ".docker:docker"
+    ".kube:kube"
+    ".aws:aws"
+    ".gcloud:gcloud"
+    ".azure:azure"
+    ".terraform.d:terraform"
+    ".vagrant.d:vagrant"
+)
+
+linked=0
+skipped=0
+
+for entry in "${OFFENDERS[@]}"; do
+    src="$HOME/${entry%%:*}"
+    dst="$DATA_DIR/${entry##*:}"
+
+    # Already a symlink? skip
+    if [ -L "$src" ]; then
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # Real directory exists with content? leave it alone
+    if [ -d "$src" ]; then
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # Real file (not dir, not symlink)? skip — unexpected
+    if [ -e "$src" ]; then
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # Pre-create target dir and symlink
+    mkdir -p "$dst"
+    ln -s "$dst" "$src"
+    linked=$((linked + 1))
+done
+
+# Only print when work was actually done (script runs every login as safety net)
+if [ "$linked" -gt 0 ]; then
+    echo "tebian-tidy-home: $linked symlinks created"
+fi

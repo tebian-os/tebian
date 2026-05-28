@@ -49,7 +49,7 @@ assets/             # wallpapers, plymouth splash
 
 ## Uninstall
 
-If you decide to return to pure Debian, delete `~/.config/tebian/`, remove `~/Tebian/`, and reboot. Full manual procedure is documented at [tebian.org/docs/un-tebian-guide](https://tebian.org/docs/un-tebian-guide).
+If you decide to return to pure Debian, run `bash ~/Tebian/bootstrap.sh` and pick **[2] Server** — it strips all Tebian scripts, configs, state, and environment files. Or do it manually: remove `~/.config/tebian/`, `~/Tebian/`, `~/.local/bin/tebian-*`, `~/.local/state/tebian-*`, `~/.config/environment.d/tebian-*.conf`. Full manual procedure: [tebian.org/docs/un-tebian-guide](https://tebian.org/docs/un-tebian-guide).
 
 ## Source
 

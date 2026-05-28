@@ -59,7 +59,6 @@ bindsym $mod+Shift+e exec swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg e
 
 # WOB (Wayland Overlay Bar) Setup - optional
 set $wob_sock $XDG_RUNTIME_DIR/wob.sock
-set $wob_vol ~/.local/bin/wob-vol
 exec_always bash -c 'command -v wob && rm -f $XDG_RUNTIME_DIR/wob.sock && mkfifo $XDG_RUNTIME_DIR/wob.sock && tail -f $XDG_RUNTIME_DIR/wob.sock 2>/dev/null | wob &'
 
 # Media Keys with WOB Feedback (using awk for proper decimal handling)

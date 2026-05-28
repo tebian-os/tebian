@@ -22,19 +22,36 @@ get_term() {
 }
 TERM_CMD=$(get_term)
 
-ONBOARD_FILE="$HOME/.config/tebian-onboarded"
-LOG_FILE="$HOME/.local/share/tebian-onboard.log"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
+mkdir -p "$STATE_DIR"
+ONBOARD_FILE="$STATE_DIR/tebian-onboarded"
+LOG_FILE="$STATE_DIR/tebian-onboard.log"
+
+# Migrate from old locations (pre-XDG-state versions of Tebian)
+[ -f "$HOME/.config/tebian-onboarded" ] && mv "$HOME/.config/tebian-onboarded" "$ONBOARD_FILE"
+[ -f "$HOME/.local/share/tebian-onboard.log" ] && mv "$HOME/.local/share/tebian-onboard.log" "$LOG_FILE"
 
 log() {
     echo "[$(date)] $1" >> "$LOG_FILE"
 }
+
+# Pre-symlink known XDG-violating apps so they write to ~/.local/share
+# from day 1 instead of cluttering $HOME (Steam, Minecraft, .mozilla, etc.)
+if command -v tebian-tidy-home >/dev/null 2>&1; then
+    tebian-tidy-home >> "$LOG_FILE" 2>&1 || true
+fi
 
 if [ -f "$ONBOARD_FILE" ]; then
     log "Already onboarded, exiting"
     exit 0
 fi
 
-PROGRESS_FILE="$HOME/.config/tebian/.onboard_in_progress"
+PROGRESS_FILE="$STATE_DIR/tebian-onboard.in_progress"
+DISMISS_FILE="$STATE_DIR/tebian-onboard.dismissed"
+
+# Migrate old in-config locations to state dir (pre-XDG-state versions)
+[ -f "$HOME/.config/tebian/.onboard_in_progress" ] && mv "$HOME/.config/tebian/.onboard_in_progress" "$PROGRESS_FILE"
+[ -f "$HOME/.config/tebian/.onboard_dismissed" ] && mv "$HOME/.config/tebian/.onboard_dismissed" "$DISMISS_FILE"
 
 mkdir -p "$HOME/.local/share"
 mkdir -p "$HOME/.config/environment.d"
@@ -72,8 +89,9 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         sudo -v || { echo "Authentication failed. Exiting."; read -p "Press Enter..."; exit 1; }
         echo ""
 
-        # Check network connectivity
-        if ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+        # Check network connectivity (curl, not ping — ICMP is blocked
+        # in QEMU SLIRP and on many corporate networks)
+        if ! curl -sfm5 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
             echo "⚠️  No network connection detected."
             echo "   Connect to WiFi first (Super+D > WiFi)."
             read -p "Press Enter to exit..."
@@ -320,10 +338,10 @@ elif [[ "$CHOICE" =~ "Base" ]]; then
     echo "base" > "$ONBOARD_FILE"
     rm -f "$PROGRESS_FILE"
     notify-send "Tebian" "Base mode selected. Install what you need via fuzzel." 2>/dev/null || true
-    
+
+
 elif [ -z "$CHOICE" ]; then
-    # Track dismissals - after 3, stop asking
-    DISMISS_FILE="$HOME/.config/tebian/.onboard_dismissed"
+    # Track dismissals - after 3, stop asking. DISMISS_FILE defined at top.
     DISMISS_COUNT=0
     [ -f "$DISMISS_FILE" ] && DISMISS_COUNT=$(cat "$DISMISS_FILE" 2>/dev/null)
     DISMISS_COUNT=$((DISMISS_COUNT + 1))
@@ -338,3 +356,12 @@ elif [ -z "$CHOICE" ]; then
 fi
 
 log "Onboarding complete"
+
+# Welcome / keybinding hint — sticky (-t 0) and high urgency so it stays
+# pinned in mako until the user actively dismisses it. Without this,
+# first-time users see an empty desktop and don't know how to open
+# anything (the core complaint we hit during testing).
+notify-send -u critical -t 0 "Welcome to Tebian" \
+    "Press Super+D to open the menu
+Press Super+A for all apps
+Press Super+Enter for a terminal" 2>/dev/null || true

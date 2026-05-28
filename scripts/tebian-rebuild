@@ -56,9 +56,12 @@ if [ -d "$TEBIAN_DIR/configs/sway" ]; then
             touch "$CONFIG_DIR/sway/config.user"
         fi
     fi
-    # Remove stale hardcoded laptop outputs from both default and user overrides.
+    # Remove stale hardcoded laptop outputs from the Tebian-owned config.
+    # NOTE: do NOT touch config.user — it's user-owned, and stripping it
+    # every rebuild would delete user eDP customizations like
+    # `output eDP-1 scale 1.5`. desktop.sh handles the first-install
+    # cleanup of config.user on its own.
     sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config" 2>/dev/null || true
-    sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$/d' "$CONFIG_DIR/sway/config.user" 2>/dev/null || true
     log_info "Sway config synced"
 fi
 

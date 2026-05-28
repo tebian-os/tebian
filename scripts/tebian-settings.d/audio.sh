@@ -8,7 +8,7 @@ audio_menu() {
 󰔡 Switch Output
 󰌍 Back"
 
-        A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " Audio | ")
+        A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 󰕾 Audio | ")
 
         if [[ -z "$A_CHOICE" ]] || [[ "$A_CHOICE" == *"󰌍 Back"* ]]; then return; fi
 
@@ -29,7 +29,7 @@ audio_output_menu() {
     SINKS=$(wpctl status 2>/dev/null | awk '/Sinks:/,/^$/' | grep -E '^\s+[0-9]+\.' | sed 's/^\s*//')
 
     if [ -z "$SINKS" ]; then
-        notify-send "Audio" "No audio outputs found"
+        tnotify "Audio" "No audio outputs found"
         return
     fi
 

@@ -434,10 +434,15 @@ select_partition_mode() {
     local has_linux=false
     local existing_os=""
 
-    # Build a summary of current partitions on this drive
+    # Build a summary of current partitions on this drive.
+    # lsblk -lnpo NAME lists the disk and its partitions one per line;
+    # skip the disk itself. This is safer than globbing ${DISK}*[0-9],
+    # which would incorrectly match other namespaces (e.g. /dev/nvme0n10
+    # when DISK is /dev/nvme0n1, or /dev/sdaa1 when DISK is /dev/sda).
     local part_summary=""
-    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
+    while read -r part; do
         [ -b "$part" ] || continue
+        [ "$part" = "$DISK" ] && continue
         local fstype size label
         fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
         size=$(lsblk -dnpo SIZE "$part" 2>/dev/null | xargs)
@@ -463,7 +468,7 @@ select_partition_mode() {
             [ -n "$label" ] && desc="$size $fstype ($label)"
             part_summary+="  ${part##*/}: ${desc}\n"
         fi
-    done
+    done < <(lsblk -lnpo NAME "$DISK" 2>/dev/null)
 
     local options=()
 
@@ -1226,7 +1231,7 @@ KBEOF
                 blueman mako-notifier grim slurp wl-clipboard \
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop python3-i3ipc \
-                pavucontrol adwaita-qt \
+                pavucontrol adwaita-qt libgtk-3-bin \
                 xdg-desktop-portal-wlr xdg-desktop-portal-gtk
 
             echo 88; echo "# Installing audio system..."
@@ -1613,7 +1618,11 @@ else
     echo "Connect via: ssh ${USERNAME}@<ip-address>"
 fi)
 
-Remove the installation media and press OK to reboot." $WT_HEIGHT $WT_WIDTH
+Press OK to reboot into your new system." $WT_HEIGHT $WT_WIDTH
+
+    # Eject live media so VMs boot from the installed disk
+    # (works in VirtualBox, VMware, QEMU — harmless on bare metal USB)
+    eject /dev/sr0 2>/dev/null || eject /dev/cdrom 2>/dev/null || true
 
     reboot
 }

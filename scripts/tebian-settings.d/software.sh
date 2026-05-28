@@ -203,10 +203,13 @@ $cosmic_status
             echo 'Sway remains your default — pick COSMIC at login.'
             echo ''
             # Add System76 COSMIC repo if not present
+            # Detect Debian codename — Pop publishes per-codename suites,
+            # hardcoding 'trixie' would break on future Debian releases.
+            codename=\$(. /etc/os-release && echo \${VERSION_CODENAME:-trixie})
             if [ ! -f /etc/apt/sources.list.d/system76-cosmic.list ]; then
                 echo 'Adding COSMIC repository...'
                 curl -fsSL https://apt.pop-os.org/key/cosmic-archive-keyring.gpg | sudo tee /usr/share/keyrings/cosmic-archive-keyring.gpg > /dev/null
-                echo 'deb [signed-by=/usr/share/keyrings/cosmic-archive-keyring.gpg] https://apt.pop-os.org/release trixie main' | sudo tee /etc/apt/sources.list.d/system76-cosmic.list > /dev/null
+                echo \"deb [signed-by=/usr/share/keyrings/cosmic-archive-keyring.gpg] https://apt.pop-os.org/release \$codename main\" | sudo tee /etc/apt/sources.list.d/system76-cosmic.list > /dev/null
             fi
             sudo apt update
             sudo apt install -y cosmic-desktop 2>&1
@@ -570,7 +573,7 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch Heroic" ]]; then
         ~/Applications/Heroic.AppImage &
     elif [[ "$A_CHOICE" =~ "Uninstall Heroic" ]]; then
-        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && notify-send "Tebian" "Heroic removed."
+        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && tnotify "Tebian" "Heroic removed."
 
     elif [[ "$A_CHOICE" =~ "Install Minecraft" ]]; then
         $TERM_CMD bash -c "
@@ -625,7 +628,7 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch PokeMMO" ]]; then
         bash -c "cd ~/Games/PokeMMO && ./PokeMMO.sh" &
     elif [[ "$A_CHOICE" =~ "Uninstall PokeMMO" ]]; then
-        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && notify-send "Tebian" "PokeMMO removed."
+        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && tnotify "Tebian" "PokeMMO removed."
     
     elif [[ "$A_CHOICE" =~ "Install Lutris" ]]; then
         $TERM_CMD bash -c "echo 'Installing Lutris...'; sudo apt update && sudo apt install -y lutris; echo 'Done!'; read -p 'Press Enter to close...'"
@@ -668,12 +671,12 @@ apt_search() {
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null || echo 0)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        notify-send "Package Browser" "No results for: $QUERY"
+        tnotify "Package Browser" "No results for: $QUERY"
         return
     fi
 
     if [[ "$COUNT" -gt 200 ]]; then
-        notify-send "Package Browser" "$COUNT results — showing first 50. Try a more specific search."
+        tnotify "Package Browser" "$COUNT results — showing first 50. Try a more specific search."
     fi
 
     # Get first 50 results
@@ -760,7 +763,7 @@ apt_installed_browser() {
         COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null || echo 0)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            notify-send "Package Browser" "No manually installed packages found."
+            tnotify "Package Browser" "No manually installed packages found."
             return
         fi
 
@@ -797,7 +800,7 @@ flatpak_search() {
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null || echo 0)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        notify-send "Package Browser" "No Flatpak results for: $QUERY"
+        tnotify "Package Browser" "No Flatpak results for: $QUERY"
         return
     fi
 
@@ -874,7 +877,7 @@ flatpak_installed_browser() {
         COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null || echo 0)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            notify-send "Package Browser" "No Flatpak apps installed."
+            tnotify "Package Browser" "No Flatpak apps installed."
             return
         fi
 
