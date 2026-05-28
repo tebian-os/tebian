@@ -13,7 +13,7 @@ A usability layer for Debian. One ISO. One menu. Desktop, server, gaming, or sec
 Download the latest ISO and flash it to a USB drive:
 
 ```
-https://github.com/tebian-os/tebian/releases/latest/download/tebian-pc.iso
+https://github.com/tebian-os/tebian/releases/latest/download/tebian.iso
 ```
 
 Boot, follow the installer, done.
