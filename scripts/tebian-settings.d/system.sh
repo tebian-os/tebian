@@ -89,7 +89,7 @@ backup_menu() {
     
     B_CHOICE=$(echo -e "$BACKUP_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
     
-    if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
+    if is_back "$B_CHOICE"; then return; fi
 
     if [[ "$B_CHOICE" =~ "Backup Configs" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
@@ -111,13 +111,13 @@ backup_menu() {
         echo "Tebian Backup - $TIMESTAMP" > "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
         echo "Hostname: $(hostname)" >> "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
         
-        tnotify "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
+        notify-send "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
         
     elif [[ "$B_CHOICE" =~ "Restore" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
         
         if [ ! -d "$BACKUP_DIR" ]; then
-            tnotify "Restore" "No backups found"
+            notify-send "Restore" "No backups found"
             continue
         fi
         
@@ -125,28 +125,37 @@ backup_menu() {
         BACKUPS=$(ls -1t "$BACKUP_DIR" | head -10)
         R_CHOICE=$(echo -e "󰌍 Back\n$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
         
-        if [[ -z "$R_CHOICE" ]] || [[ "$R_CHOICE" == *"󰌍 Back"* ]]; then
+        if is_back "$R_CHOICE"; then
             continue
         fi
         
         RESTORE_DIR="$BACKUP_DIR/$R_CHOICE"
-        
+
+        # Stray files in ~/Tebian-Backup show up in the list — don't "restore"
+        # from something that isn't a backup directory
+        if [ ! -d "$RESTORE_DIR" ]; then
+            notify-send "Restore" "Not a backup: $R_CHOICE"
+            continue
+        fi
+
         if [ -d "$RESTORE_DIR/sway" ]; then cp -r "$RESTORE_DIR/sway" ~/.config/; fi
         if [ -d "$RESTORE_DIR/kitty" ]; then cp -r "$RESTORE_DIR/kitty" ~/.config/; fi
         if [ -d "$RESTORE_DIR/fuzzel" ]; then cp -r "$RESTORE_DIR/fuzzel" ~/.config/; fi
         if [ -d "$RESTORE_DIR/mako" ]; then cp -r "$RESTORE_DIR/mako" ~/.config/; fi
         if [ -d "$RESTORE_DIR/gtklock" ]; then cp -r "$RESTORE_DIR/gtklock" ~/.config/; fi
         if [ -f "$RESTORE_DIR/.bashrc" ]; then cp "$RESTORE_DIR/.bashrc" ~/; fi
+        if [ -f "$RESTORE_DIR/.bash_profile" ]; then cp "$RESTORE_DIR/.bash_profile" ~/; fi
+        if [ -f "$RESTORE_DIR/.profile" ]; then cp "$RESTORE_DIR/.profile" ~/; fi
         
         swaymsg reload 2>/dev/null &
-        tnotify "Restore Complete" "Restored from $R_CHOICE"
+        notify-send "Restore Complete" "Restored from $R_CHOICE"
         
     elif [[ "$B_CHOICE" =~ "View Current" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
         if [ -d "$BACKUP_DIR" ]; then
             $TERM_CMD bash -c "ls -la $BACKUP_DIR; echo ''; ls -la $BACKUP_DIR/$(ls -1t $BACKUP_DIR | head -1) 2>/dev/null; read -p 'Press Enter...'"
         else
-            tnotify "Backup" "No backups found"
+            notify-send "Backup" "No backups found"
         fi
     fi
     done
@@ -186,7 +195,7 @@ config_menu() {
 
     C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | ")
 
-    if [[ -z "$C_CHOICE" || "$C_CHOICE" == *"󰌍 Back"* ]]; then return; fi
+    if is_back "$C_CHOICE"; then return; fi
 
     if [[ "$C_CHOICE" =~ "Update Tebian" ]]; then
         $TERM_CMD bash -c "
@@ -276,7 +285,7 @@ power_menu() {
 󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
     
-    if [[ "$P_CHOICE" == *"󰌍 Back"* || -z "$P_CHOICE" ]]; then return; fi
+    if is_back "$P_CHOICE"; then return; fi
 
     if [[ "$P_CHOICE" =~ "Reboot" || "$P_CHOICE" =~ "Shutdown" ]]; then
         # Blank display before shutdown to prevent visible Sway→Plymouth transition
@@ -291,7 +300,7 @@ power_menu() {
 
 notification_history_menu() {
     if ! command -v makoctl &>/dev/null; then
-        tnotify "Notifications" "mako not installed"
+        notify-send "Notifications" "mako not installed"
         return
     fi
     # Get notification history from mako (JSON) and format for fuzzel
@@ -318,7 +327,11 @@ except:
 󰌍 Back"
     H_CHOICE=$(echo -e "$HIST_OPTS" | tfuzzel -d -p " 󰍡 Notifications | ")
     if [[ "$H_CHOICE" =~ "Clear All" ]]; then
-        makoctl dismiss --all 2>/dev/null
+        # Dismiss visible notifications AND history entries (-h) — a plain
+        # dismiss only hides visible ones and adds them to history. Restart
+        # mako to flush what remains.
+        makoctl dismiss -a -h 2>/dev/null || makoctl dismiss --all 2>/dev/null
+        systemctl --user restart mako 2>/dev/null || { pkill mako; (mako &) }
         tnotify "Notifications" "History cleared"
     fi
 }
@@ -339,7 +352,7 @@ more_menu() {
 
     M_CHOICE=$(echo -e "$M_OPTS" | tfuzzel -d -p " More | ")
 
-    if [[ -z "$M_CHOICE" ]] || [[ "$M_CHOICE" == *"󰌍 Back"* ]]; then return; fi
+    if is_back "$M_CHOICE"; then return; fi
 
     if [[ "$M_CHOICE" =~ "Desktop & UI" ]]; then
         ui_menu

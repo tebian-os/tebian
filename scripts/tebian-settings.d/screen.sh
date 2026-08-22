@@ -50,9 +50,9 @@ $PERF_LABEL
 $NIGHT_LABEL
 󰌍 Back"
 
-        S_CHOICE=$(echo -e "$S_OPTS" | tfuzzel -d -p " 󰌢 Screen | ")
+        S_CHOICE=$(echo -e "$S_OPTS" | tfuzzel -d -p " Screen | ")
 
-        if [[ -z "$S_CHOICE" ]] || [[ "$S_CHOICE" == *"󰌍 Back"* ]]; then return; fi
+        if is_back "$S_CHOICE"; then return; fi
 
         if [[ "$S_CHOICE" =~ "Brightness" ]]; then
             screen_menu
@@ -111,42 +111,52 @@ Current: ${TEMP}K
 󰌍 Back"
         NL_CHOICE=$(echo -e "$NL_OPTS" | tfuzzel -d -p " 󰖔 Night Light | ")
 
-        if [[ -z "$NL_CHOICE" ]] || [[ "$NL_CHOICE" == *"󰌍 Back"* ]] || [[ "$NL_CHOICE" =~ "Current" ]]; then return; fi
+        if is_back "$NL_CHOICE" || [[ "$NL_CHOICE" =~ "Current" ]]; then return; fi
 
         if [[ "$NL_CHOICE" =~ "Turn Off" ]]; then
             pkill wlsunset
             tnotify "Night Light" "Disabled"
         elif [[ "$NL_CHOICE" =~ "Turn On" ]]; then
             pkill wlsunset 2>/dev/null
-            wlsunset -t "$TEMP" -T 6500 &
+            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
+            # the display would stay at the 6500K day temp during computed daytime
+            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
             tnotify "Night Light" "Enabled (${TEMP}K)"
         elif [[ "$NL_CHOICE" =~ "Low" ]]; then
             TEMP=4500
             echo "$TEMP" > "$CONF"
             pkill wlsunset 2>/dev/null
-            wlsunset -t "$TEMP" -T 6500 &
+            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
+            # the display would stay at the 6500K day temp during computed daytime
+            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
             tnotify "Night Light" "Low warmth (4500K)"
         elif [[ "$NL_CHOICE" =~ "Medium" ]]; then
             TEMP=3500
             echo "$TEMP" > "$CONF"
             pkill wlsunset 2>/dev/null
-            wlsunset -t "$TEMP" -T 6500 &
+            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
+            # the display would stay at the 6500K day temp during computed daytime
+            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
             tnotify "Night Light" "Medium warmth (3500K)"
         elif [[ "$NL_CHOICE" =~ "High" ]]; then
             TEMP=2500
             echo "$TEMP" > "$CONF"
             pkill wlsunset 2>/dev/null
-            wlsunset -t "$TEMP" -T 6500 &
+            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
+            # the display would stay at the 6500K day temp during computed daytime
+            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
             tnotify "Night Light" "High warmth (2500K)"
         elif [[ "$NL_CHOICE" =~ "Max" ]]; then
             TEMP=1500
             echo "$TEMP" > "$CONF"
             pkill wlsunset 2>/dev/null
-            wlsunset -t "$TEMP" -T 6500 &
+            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
+            # the display would stay at the 6500K day temp during computed daytime
+            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
             tnotify "Night Light" "Max warmth (1500K)"
         fi
@@ -162,7 +172,7 @@ screen_menu() {
 󰌍 Back"
     S_CHOICE=$(echo -e "$SCREEN_OPTS" | tfuzzel -d -p " 󰌢 Screen | ")
 
-    if [[ "$S_CHOICE" == *"󰌍 Back"* || -z "$S_CHOICE" ]]; then return; fi
+    if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Brightness Up" ]]; then brightnessctl set +10%
     elif [[ "$S_CHOICE" =~ "Brightness Down" ]]; then brightnessctl set 10%-
@@ -171,7 +181,7 @@ screen_menu() {
         if command -v wdisplays &>/dev/null; then
             wdisplays &
         else
-            tnotify "Display" "wdisplays not installed. Install via More > Software."
+            notify-send "Display" "wdisplays not installed. Install via More > Software."
         fi
     fi
     done
@@ -224,26 +234,19 @@ print(len([o for o in json.load(sys.stdin) if o.get('active')]))
     D_OPTS+="\n󰌍 Back"
 
     D_CHOICE=$(echo -e "$D_OPTS" | tfuzzel -d -p " 󰍹 Displays | ")
-    if [[ "$D_CHOICE" == *"󰌍 Back"* || -z "$D_CHOICE" ]]; then return; fi
+    if is_back "$D_CHOICE"; then return; fi
 
     if [[ "$D_CHOICE" =~ "Mirror All" ]]; then
-        local primary
-        primary=$(echo "$output_json" | python3 -c "
-import json, sys
-outputs = json.load(sys.stdin)
-if outputs: print(outputs[0]['name'])
-" 2>/dev/null)
-        if [ -n "$primary" ]; then
-            echo "$output_json" | python3 -c "
+        # Every active output to 0,0 — including the primary, which may not be there
+        echo "$output_json" | python3 -c "
 import json, sys
 for o in json.load(sys.stdin):
-    print(o['name'])
+    if o.get('active'): print(o['name'])
 " 2>/dev/null | while read -r out; do
-                [ "$out" != "$primary" ] && swaymsg "output $out pos 0 0"
-            done
-            tnotify "Display" "Mirrored all outputs"
-            save_display_layout
-        fi
+            swaymsg "output $out pos 0 0"
+        done
+        tnotify "Display" "Mirrored all outputs"
+        save_display_layout
 
     elif [[ "$D_CHOICE" =~ "Extend Right" ]]; then
         local pos=0
@@ -280,13 +283,15 @@ for o in json.load(sys.stdin):
 " 2>/dev/null | while read -r name width; do
             if [ "$name" = "$pname" ]; then
                 # Primary goes on the right — calculate total external width first
-                local total_ext=0
-                echo "$output_json" | python3 -c "
+                # (command substitution, not `| read` — that runs in a subshell
+                # and the variable would stay empty)
+                local total_ext
+                total_ext=$(echo "$output_json" | python3 -c "
 import json, sys
 t = sum(o.get('current_mode',{}).get('width',1920) for o in json.load(sys.stdin) if o.get('active') and o['name'] != '$pname')
 print(t)
-" 2>/dev/null | read -r total_ext
-                swaymsg "output $name pos $total_ext 0"
+" 2>/dev/null)
+                swaymsg "output $name pos ${total_ext:-0} 0"
             else
                 swaymsg "output $name pos $ext_offset 0"
                 ext_offset=$((ext_offset + width))
@@ -302,17 +307,23 @@ import json, sys
 outputs = [o for o in json.load(sys.stdin) if o.get('active')]
 if outputs: print(outputs[0]['name'], outputs[0].get('current_mode',{}).get('height',1080))
 " 2>/dev/null)
-        local pname pheight
+        local pname ext_h
         pname=$(echo "$primary" | cut -d' ' -f1)
-        pheight=$(echo "$primary" | cut -d' ' -f2)
+        # Primary sits below the externals, so offset it by the tallest
+        # EXTERNAL height — not its own
+        ext_h=$(echo "$output_json" | python3 -c "
+import json, sys
+hs = [o.get('current_mode',{}).get('height',1080) for o in json.load(sys.stdin) if o.get('active') and o['name'] != '$pname']
+print(max(hs) if hs else 0)
+" 2>/dev/null)
         echo "$output_json" | python3 -c "
 import json, sys
 for o in json.load(sys.stdin):
     if o.get('active'):
-        print(o['name'], o.get('current_mode',{}).get('height',1080))
-" 2>/dev/null | while read -r name height; do
+        print(o['name'])
+" 2>/dev/null | while read -r name; do
             if [ "$name" = "$pname" ]; then
-                swaymsg "output $name pos 0 $height"
+                swaymsg "output $name pos 0 ${ext_h:-0}"
             else
                 swaymsg "output $name pos 0 0"
             fi
@@ -381,7 +392,7 @@ for o in json.load(sys.stdin):
 
     local pick
     pick=$(echo -e "$output_list\n󰌍 Back" | tfuzzel -d -p " Which monitor to move? | ")
-    if [[ "$pick" == *"󰌍 Back"* || -z "$pick" ]]; then return; fi
+    if is_back "$pick"; then return; fi
 
     local move_name
     move_name=$(echo "$pick" | awk '{print $1}')
@@ -400,7 +411,7 @@ for o in json.load(sys.stdin):
 
     local anchor
     anchor=$(echo -e "$others\n󰌍 Back" | tfuzzel -d -p " Relative to which monitor? | ")
-    if [[ "$anchor" == *"󰌍 Back"* || -z "$anchor" ]]; then return; fi
+    if is_back "$anchor"; then return; fi
 
     local anchor_name
     anchor_name=$(echo "$anchor" | awk '{print $1}')
@@ -412,7 +423,7 @@ for o in json.load(sys.stdin):
 ⬆️  Above $anchor_name
 ⬇️  Below $anchor_name
 󰌍 Back" | tfuzzel -d -p " Position $move_name | ")
-    if [[ "$dir" == *"󰌍 Back"* || -z "$dir" ]]; then return; fi
+    if is_back "$dir"; then return; fi
 
     # Get anchor dimensions and position
     local anchor_info
@@ -459,7 +470,7 @@ for o in json.load(sys.stdin):
 
 screenshot_menu() {
     if ! command -v grim &>/dev/null; then
-        tnotify "Screenshots" "Not installed. Use Install Essentials menu."
+        notify-send "Screenshots" "Not installed. Use Install Essentials menu."
         return
     fi
     
@@ -469,21 +480,21 @@ screenshot_menu() {
 󰌍 Back"
     S_CHOICE=$(echo -e "$SCR_OPTS" | tfuzzel -d -p " 󰄀 Snaps | ")
 
-    if [[ "$S_CHOICE" == *"󰌍 Back"* || -z "$S_CHOICE" ]]; then return; fi
+    if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Region" ]]; then
         mkdir -p ~/Pictures/Screenshots
         FILE=~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && tnotify "Screenshot" "Saved & copied to clipboard"
+        grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied to clipboard"
     elif [[ "$S_CHOICE" =~ "Full Screen" ]]; then
         mkdir -p ~/Pictures/Screenshots
         grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        tnotify "Screenshot" "Saved to ~/Pictures/Screenshots/"
+        notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"
     elif [[ "$S_CHOICE" =~ "Open Screenshots" ]]; then
         if command -v thunar &>/dev/null; then
             thunar ~/Pictures/Screenshots &
         else
-            tnotify "File Manager" "Not installed"
+            notify-send "File Manager" "Not installed"
         fi
     fi
 }
@@ -518,7 +529,7 @@ $KEY_LABEL
 󰌍 Back"
     L_CHOICE=$(echo -e "$LOCK_OPTS" | tfuzzel -d -p " 󰌾 Lock | ")
 
-    if [[ "$L_CHOICE" == *"󰌍 Back"* || -z "$L_CHOICE" ]]; then return; fi
+    if is_back "$L_CHOICE"; then return; fi
 
     if [[ "$L_CHOICE" =~ "Lock Now" ]]; then
         gtklock -d
@@ -561,7 +572,7 @@ lock_timeout_menu() {
 󰌍 Back"
     T_CHOICE=$(echo -e "$TO_OPTS" | tfuzzel -d -p " 󰔛 Timeout | ")
 
-    if [[ "$T_CHOICE" == *"󰌍 Back"* || -z "$T_CHOICE" ]]; then return; fi
+    if is_back "$T_CHOICE"; then return; fi
 
     # Extract number of minutes (first number in the string)
     MINS=$(echo "$T_CHOICE" | sed 's/[^0-9]*//' | grep -oE '^[0-9]+')

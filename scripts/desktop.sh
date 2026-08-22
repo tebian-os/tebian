@@ -56,7 +56,6 @@ PACKAGES=(
     brightnessctl wob
     xdg-desktop-portal-wlr
     lxpolkit
-    libgtk-3-bin
 )
 
 # Optional packages (don't fail if missing)

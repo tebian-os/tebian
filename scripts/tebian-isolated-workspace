@@ -39,6 +39,21 @@ ensure_kvm() {
     fi
 }
 
+# The gateway's external NIC rides libvirt's built-in 'default' NAT network for
+# its internet uplink. On a fresh libvirt install that network exists but is
+# inactive and not autostarted, so the gateway VM would fail to start with
+# "network 'default' is not active". Make sure it's up and stays up.
+ensure_default_network() {
+    if ! virsh net-info default &>/dev/null; then
+        log_warn "libvirt 'default' network missing — the gateway needs it for internet."
+        log_warn "Recreate it with: virsh net-define /usr/share/libvirt/networks/default.xml"
+        return
+    fi
+    virsh net-start default 2>/dev/null || true       # no-op if already active
+    virsh net-autostart default 2>/dev/null || true
+    log_info "Default NAT network active (gateway uplink)"
+}
+
 create_isolated_network() {
     if virsh net-info "$NET_NAME" &>/dev/null; then
         log_info "Isolated network already exists"
@@ -46,21 +61,23 @@ create_isolated_network() {
     fi
 
     log_info "Creating isolated network ($NET_NAME)..."
+    # TRUE isolation: no <forward> (can't reach the LAN/internet) and, crucially,
+    # NO <ip>/<dhcp>. Giving a libvirt network an <ip> puts the HOST on the bridge
+    # at that address and runs host dnsmasq — which would (a) collide with the
+    # gateway VM's 10.66.0.1 and (b) hand the workstation the HOST as its router,
+    # bypassing Tor entirely. Without <ip> this is a pure L2 switch the host is
+    # not on: the only route off it is through the gateway VM. Addressing/DHCP is
+    # provided by the gateway VM itself (see gateway-setup.sh).
     cat <<EOF > "$WORKSPACE_DIR/isolated-net.xml"
 <network>
   <name>$NET_NAME</name>
   <bridge name="virbr-tebian" stp="on" delay="0"/>
-  <ip address="$GW_IP" netmask="255.255.255.0">
-    <dhcp>
-      <range start="10.66.0.100" end="10.66.0.200"/>
-    </dhcp>
-  </ip>
 </network>
 EOF
     virsh net-define "$WORKSPACE_DIR/isolated-net.xml"
     virsh net-start "$NET_NAME"
     virsh net-autostart "$NET_NAME"
-    log_info "Isolated network created"
+    log_info "Isolated network created (L2-only, host not present)"
 }
 
 build_gateway_image() {
@@ -73,41 +90,93 @@ build_gateway_image() {
     log_info "Building gateway VM image..."
     qemu-img create -f qcow2 "$img" 4G
 
-    # Create gateway setup script (runs on first boot inside the VM)
+    # Create gateway setup script (runs once inside the gateway VM after install)
     cat <<'GWSCRIPT' > "$WORKSPACE_DIR/gateway-setup.sh"
 #!/bin/bash
-# Gateway VM setup — runs inside the VM
+# ==============================================================================
+# Tebian gateway setup — run once inside the gateway VM (as root)
+# Turns this VM into a Whonix-style Tor gateway:
+#   EXTERNAL nic (default route, NAT'd to the internet)  -> Tor's uplink
+#   INTERNAL nic (isolated segment, faces the workstation) -> 10.66.0.1
+# The workstation gets its address/route/DNS from THIS VM (dnsmasq below), so it
+# can only reach the internet through Tor. Fail-closed: if Tor is down, nothing
+# leaks — FORWARD defaults to DROP and non-Tor traffic is never forwarded.
+# ==============================================================================
+set -euo pipefail
+
+GW_ADDR="10.66.0.1"
+GW_CIDR="10.66.0.1/24"
+
+# --- Identify the two interfaces ---------------------------------------------
+# External = whichever carries the default route (DHCP'd from libvirt's NAT net).
+# Internal = the other wired interface (the isolated segment, no DHCP yet).
+EXT_IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+if [ -z "$EXT_IF" ]; then
+    echo "ERROR: no default route — is the external NIC up? Aborting." >&2
+    exit 1
+fi
+INT_IF=$(for i in /sys/class/net/*; do n=$(basename "$i"); \
+    [ "$n" = "lo" ] && continue; [ "$n" = "$EXT_IF" ] && continue; \
+    case "$n" in en*|eth*) echo "$n"; break;; esac; done)
+if [ -z "$INT_IF" ]; then
+    echo "ERROR: could not find the internal (isolated) NIC. Aborting." >&2
+    exit 1
+fi
+echo "External (internet) NIC: $EXT_IF"
+echo "Internal (workstation) NIC: $INT_IF -> $GW_ADDR"
+
+# --- Static address on the internal NIC (persist via ifupdown) ---------------
+cat > /etc/network/interfaces.d/tebian-isolated <<IFACE
+auto $INT_IF
+iface $INT_IF inet static
+    address $GW_CIDR
+IFACE
+ip addr replace "$GW_CIDR" dev "$INT_IF"
+ip link set "$INT_IF" up
+
 apt-get update
-apt-get install -y tor iptables
+apt-get install -y tor dnsmasq iptables iptables-persistent
 
-# Configure Tor as transparent proxy
-cat >> /etc/tor/torrc <<TORCONF
-
-# Tebian gateway transparent proxy
+# --- Tor transparent proxy (bound to the internal IP only) -------------------
+cat > /etc/tor/torrc.d/tebian-gateway.conf <<TORCONF
 VirtualAddrNetworkIPv4 10.192.0.0/10
 AutomapHostsOnResolve 1
-TransPort 0.0.0.0:9040
-DNSPort 0.0.0.0:5353
+TransPort ${GW_ADDR}:9040
+DNSPort ${GW_ADDR}:5353
 TORCONF
-
+grep -q '^%include /etc/tor/torrc.d' /etc/tor/torrc || echo '%include /etc/tor/torrc.d/*.conf' >> /etc/tor/torrc
 systemctl enable tor
-systemctl start tor
+systemctl restart tor
 
-# Enable IP forwarding
-echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-gateway.conf
-sysctl -p /etc/sysctl.d/99-gateway.conf
+# --- dnsmasq: DHCP-only for the workstation (DNS disabled; Tor handles DNS) ---
+cat > /etc/dnsmasq.d/tebian-isolated.conf <<DNSMASQ
+interface=$INT_IF
+bind-interfaces
+port=0
+dhcp-range=10.66.0.10,10.66.0.50,255.255.255.0,12h
+dhcp-option=3,$GW_ADDR
+dhcp-option=6,$GW_ADDR
+DNSMASQ
+systemctl enable dnsmasq
+systemctl restart dnsmasq
 
-# iptables: redirect all workstation traffic through Tor
-TOR_UID=$(id -u debian-tor)
-NET_IFACE=\$(ip route show default | awk '{print \$5; exit}')
-iptables -t nat -A PREROUTING -i "\$NET_IFACE" -p tcp --syn -j REDIRECT --to-ports 9040
-iptables -t nat -A PREROUTING -i "\$NET_IFACE" -p udp --dport 53 -j REDIRECT --to-ports 5353
-iptables -A FORWARD -i "\$NET_IFACE" -j ACCEPT
-iptables -A FORWARD -o "\$NET_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-
-# Save iptables
-apt-get install -y iptables-persistent
+# --- Firewall: redirect the workstation's traffic into Tor, fail closed ------
+iptables -F
+iptables -t nat -F
+# The workstation's DNS and TCP get REDIRECTed into Tor locally on this VM.
+iptables -t nat -A PREROUTING -i "$INT_IF" -p udp --dport 53 -j REDIRECT --to-ports 5353
+iptables -t nat -A PREROUTING -i "$INT_IF" -p tcp --syn -j REDIRECT --to-ports 9040
+# Nothing from the workstation is allowed to forward out untouched — this is the
+# leak guard. Only established replies flow back; raw eth->eth forwarding is denied.
+iptables -P FORWARD DROP
+iptables -A FORWARD -i "$EXT_IF" -o "$INT_IF" -m state --state ESTABLISHED,RELATED -j ACCEPT
+# Tor itself (running on this VM) reaches the internet via the OUTPUT chain on EXT_IF.
 netfilter-persistent save
+
+echo ""
+echo "Gateway ready. Start the workstation VM — it will DHCP from $GW_ADDR and"
+echo "route all traffic through Tor. Verify inside the workstation with:"
+echo "    curl https://check.torproject.org/api/ip   (should report IsTor:true)"
 GWSCRIPT
     chmod +x "$WORKSPACE_DIR/gateway-setup.sh"
     log_info "Gateway image created (4GB)"
@@ -142,10 +211,15 @@ setup_workspace() {
     local iso="$WORKSPACE_DIR/debian-netinst.iso"
     if [ ! -f "$iso" ]; then
         log_info "Downloading Debian netinst ISO..."
-        local arch
+        local arch iso_url
         arch=$(dpkg --print-architecture)
-        curl -fSL "https://cdimage.debian.org/debian-cd/current/${arch}/iso-cd/debian-13.2.0-${arch}-netinst.iso" \
-            -o "$iso" || {
+        # Resolve the current point-release filename from the directory listing —
+        # a hardcoded version 404s the moment Debian ships the next point release
+        local iso_dir="https://cdimage.debian.org/debian-cd/current/${arch}/iso-cd/"
+        local iso_name
+        iso_name=$(curl -fsSL "$iso_dir" 2>/dev/null | grep -oE "debian-[0-9.]+-${arch}-netinst\.iso" | head -1)
+        iso_url="${iso_dir}${iso_name:-debian-${arch}-netinst.iso}"
+        curl -fSL "$iso_url" -o "$iso" || {
             log_error "Failed to download Debian ISO."
             echo "Download manually and place at: $iso"
             return 1
@@ -153,6 +227,7 @@ setup_workspace() {
     fi
 
     # Create network and disk images
+    ensure_default_network
     create_isolated_network
     build_gateway_image
     build_workstation_image
@@ -199,28 +274,34 @@ setup_workspace() {
     echo ""
     echo "  Next steps:"
     echo "  1. Start Gateway:     tebian-isolated-workspace start"
-    echo "  2. Install Debian on Gateway VM (minimal, no desktop)"
-    echo "  3. Run gateway-setup.sh inside Gateway VM"
-    echo "  4. Install Debian on Workstation VM (with desktop)"
-    echo "  5. Workstation traffic automatically routes through Tor"
+    echo "  2. Install Debian on the Gateway VM (minimal, no desktop)."
+    echo "     During install let the FIRST (internet) NIC use DHCP; leave the"
+    echo "     second (isolated) NIC unconfigured — the setup script addresses it."
+    echo "  3. Copy in and run gateway-setup.sh inside the Gateway VM (as root)."
+    echo "  4. Install Debian on the Workstation VM (with desktop). Its single NIC"
+    echo "     should use DHCP — it will lease from the gateway automatically."
+    echo "  5. All workstation traffic then routes through Tor (fail-closed)."
     echo ""
     echo "  Gateway setup script: $WORKSPACE_DIR/gateway-setup.sh"
-    echo "  Copy it into the Gateway VM after Debian install."
     echo ""
     echo "  Architecture:"
     echo "  ┌──────────────┐     ┌──────────────┐     ┌─────────┐"
     echo "  │ Workstation  │────▶│   Gateway     │────▶│   Tor   │──▶ Internet"
     echo "  │ (your work)  │     │ (Tor proxy)   │     │ Network │"
     echo "  └──────────────┘     └──────────────┘     └─────────┘"
-    echo "    10.66.0.x            10.66.0.1"
-    echo "    isolated net only    isolated + default net"
+    echo "   DHCP 10.66.0.x       $GW_IP (internal)"
+    echo "   isolated net only    isolated + NAT net"
+    echo ""
+    echo "  Verify (inside workstation): curl https://check.torproject.org/api/ip"
     echo ""
 }
 
 start_workspace() {
     log_info "Starting Isolated Workspace..."
 
-    # Start network
+    # Start networks — both the isolated segment AND the default NAT net the
+    # gateway uses for its uplink (either may be down after a host reboot)
+    ensure_default_network
     virsh net-start "$NET_NAME" 2>/dev/null || true
 
     # Start gateway first

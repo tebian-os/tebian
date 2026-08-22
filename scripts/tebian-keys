@@ -37,7 +37,16 @@ CHOICE=$(echo -e "$KEYBINDS" | tfuzzel -d -p " 󰌌 Keys | " --width 35)
 [ -z "$CHOICE" ] && exit 0
 
 case "$CHOICE" in
-    *"Terminal"*) swaymsg exec \$term ;;
+    *"Terminal"*)
+        # sway doesn't expand config variables like $term in IPC commands —
+        # resolve the real terminal from the config, falling back to detection
+        term=$(awk '/^set \$term[[:space:]]/{print $3; exit}' ~/.config/sway/config 2>/dev/null)
+        if [ -z "$term" ] || ! command -v "$term" &>/dev/null; then
+            for t in kitty foot alacritty; do
+                command -v "$t" &>/dev/null && term="$t" && break
+            done
+        fi
+        [ -n "$term" ] && swaymsg exec -- "$term" ;;
     *"App Menu"*) tebian-menu & ;;
     *"App Drawer"*) tebian-drawer & ;;
     *"Clipboard"*) cliphist list | tfuzzel -d | cliphist decode | wl-copy ;;
@@ -48,6 +57,6 @@ case "$CHOICE" in
     *"Settings"*) tebian-settings & ;;
     *"Lock Screen"*) gtklock -d ;;
     *"Screenshot Region"*) mkdir -p ~/Pictures/Screenshots && FILE=~/Pictures/Screenshots/screenshot-$(date +%Y%m%d_%H%M%S).png && grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied" ;;
-    *"Screenshot Save"*) mkdir -p ~/Pictures/Screenshots && grim "$HOME/Pictures/Screenshots/$(date +%Y%m%d_%H%M%S).png" && notify-send "Screenshot" "Saved" ;;
+    *"Screenshot Save"*) mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/$(date +%Y%m%d_%H%M%S).png && notify-send "Screenshot" "Saved" ;;
     *"Exit Sway"*) swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit" ;;
 esac

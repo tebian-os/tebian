@@ -23,7 +23,8 @@ if [ -z "$CHOICE" ]; then exit 0; fi
 
 # 3. Extract PID and Kill
 PID=$(echo "$CHOICE" | awk -F'PID: ' '{print $2}')
-NAME=$(echo "$CHOICE" | awk '{print $2}')
+# Parse by pattern, not field position — the 󰆴 icon is stripped in no_icons mode
+NAME=$(echo "$CHOICE" | sed 's/^󰆴 //; s/ (CPU:.*//')
 
 if [ -n "$PID" ]; then
     # Double check choice

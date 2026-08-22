@@ -54,10 +54,17 @@ while True:
         if prev is None or prev == pos:
             continue
 
-        # Position changed — if this was a snapped window being dragged away, clear it
-        if cid == last_snapped_id and pos != last_snapped_pos:
-            last_snapped_id = None
-            last_snapped_pos = None
+        # If this is the snapped window, only release it once it's been dragged
+        # clearly away (beyond THRESHOLD from where we snapped it). Clearing on
+        # any tiny movement makes it re-snap every poll and fight the drag.
+        if cid == last_snapped_id and last_snapped_pos is not None:
+            moved = abs(x - last_snapped_pos[0]) + abs(y - last_snapped_pos[1])
+            if moved > THRESHOLD:
+                last_snapped_id = None
+                last_snapped_pos = None
+            else:
+                # Still parked at/near the snap position — leave it alone
+                continue
 
         out = get_output_for(x, y, w, h)
         if not out:
@@ -69,10 +76,6 @@ while True:
         rel_y = y - oy
         right_gap = (ox + ow) - (x + w)
         bottom_gap = (oy + oh) - (y + h)
-
-        # Skip if already at snap dimensions
-        if cid == last_snapped_id:
-            continue
 
         cmd = None
 

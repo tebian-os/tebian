@@ -10,7 +10,7 @@ infra_menu() {
 
     INF_CHOICE=$(echo -e "$INF_OPTS" | tfuzzel -d -p " 󰡨 Infrastructure | ")
 
-    if [[ "$INF_CHOICE" == *"󰌍 Back"* || -z "$INF_CHOICE" ]]; then return; fi
+    if is_back "$INF_CHOICE"; then return; fi
 
     if [[ "$INF_CHOICE" =~ "Containers" ]]; then
         containers_menu
@@ -32,7 +32,7 @@ containers_menu() {
 
         C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰡨 Containers | ")
 
-        if [[ "$C_CHOICE" == *"󰌍 Back"* || -z "$C_CHOICE" ]]; then return; fi
+        if is_back "$C_CHOICE"; then return; fi
 
         if [[ "$C_CHOICE" =~ "Setup Containers" ]]; then
             $TERM_CMD bash -c "echo 'Installing Distrobox + Podman...';
@@ -108,7 +108,7 @@ containers_menu() {
 
     C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰡨 Containers | ")
 
-    if [[ "$C_CHOICE" == *"󰌍 Back"* || -z "$C_CHOICE" ]]; then return; fi
+    if is_back "$C_CHOICE"; then return; fi
 
     if [[ "$C_CHOICE" =~ "New Docker Container" ]]; then
         docker_create_menu
@@ -124,14 +124,18 @@ containers_menu() {
             sudo apparmor_parser -r /etc/apparmor.d/crun 2>/dev/null;
         fi;
         echo 'Done!'; read -p 'Press Enter...'"
-    elif [[ "$C_CHOICE" =~ ^🐳 ]]; then
+    else
+        # Container entry — emoji prefixes are (partially) stripped in no_icons
+        # mode, so extract the name and route by membership, not icon prefix
         local sel_name
-        sel_name=$(echo "$C_CHOICE" | sed 's/^🐳 [^ ]* //;s/ (.*//')
-        docker_action_menu "$sel_name"
-    elif [[ "$C_CHOICE" =~ ^🟢 ]] || [[ "$C_CHOICE" =~ ^⚪ ]]; then
-        local sel_name
-        sel_name=$(echo "$C_CHOICE" | sed 's/^[^ ]* //;s/ (.*//')
-        container_action_menu "$sel_name"
+        sel_name=$(echo "$C_CHOICE" | sed -E 's/^(🐳 |🟢 |⚪ )*//; s/ \(.*//')
+        if [ -n "$sel_name" ]; then
+            if command -v docker &>/dev/null && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qxF "$sel_name"; then
+                docker_action_menu "$sel_name"
+            elif command -v distrobox &>/dev/null && distrobox list --no-color 2>/dev/null | awk -F'|' 'NR>1 {t=$2; gsub(/^ +| +$/,"",t); print t}' | grep -qxF "$sel_name"; then
+                container_action_menu "$sel_name"
+            fi
+        fi
     fi
     done
 }
@@ -150,7 +154,7 @@ container_create_menu() {
     local CR_CHOICE
     CR_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 󰐊 New Container | ")
 
-    if [[ "$CR_CHOICE" == *"󰌍 Back"* || -z "$CR_CHOICE" ]]; then return; fi
+    if is_back "$CR_CHOICE"; then return; fi
 
     local image="" box_name=""
     if [[ "$CR_CHOICE" =~ "Arch" ]]; then
@@ -175,8 +179,9 @@ container_create_menu() {
 
     [ -z "$image" ] && return
 
-    # Check if name already exists
-    if distrobox list --no-color 2>/dev/null | grep -qw "$box_name"; then
+    # Check if name already exists (match the NAME column only — a plain grep
+    # would also hit the IMAGE column, e.g. "ubuntu" matching ubuntu:latest)
+    if distrobox list --no-color 2>/dev/null | awk -F'|' 'NR>1 {t=$2; gsub(/^ +| +$/,"",t); print t}' | grep -qxF "$box_name"; then
         tnotify "Containers" "$box_name already exists"
         return
     fi
@@ -202,7 +207,7 @@ container_create_menu() {
 container_action_menu() {
     local name="$1"
     local status
-    status=$(distrobox list --no-color 2>/dev/null | grep -w "$name" | awk -F'|' '{print $3}' | xargs)
+    status=$(distrobox list --no-color 2>/dev/null | awk -F'|' -v n="$name" 'NR>1 {t=$2; gsub(/^ +| +$/,"",t); if (t==n) print $3}' | xargs)
     local is_running=false
     [[ "$status" == *"Up"* ]] && is_running=true
 
@@ -219,11 +224,11 @@ container_action_menu() {
     local A_CHOICE
     A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 󰡨 $name | ")
 
-    if [[ "$A_CHOICE" == *"󰌍 Back"* || -z "$A_CHOICE" ]]; then return; fi
+    if is_back "$A_CHOICE"; then return; fi
 
     if [[ "$A_CHOICE" =~ "Enter" ]]; then
         local image
-        image=$(distrobox list --no-color 2>/dev/null | grep -w "$name" | awk -F'|' '{print $4}' | xargs)
+        image=$(distrobox list --no-color 2>/dev/null | awk -F'|' -v n="$name" 'NR>1 {t=$2; gsub(/^ +| +$/,"",t); if (t==n) print $4}' | xargs)
         $TERM_CMD bash -c "
             echo '┌─────────────────────────────────────┐'
             echo '│  Entering container: $name'
@@ -267,7 +272,7 @@ container_export_menu() {
     local APP_CHOICE
     APP_CHOICE=$(echo -e "$APP_OPTS" | tfuzzel -d -p " 📤 Export from $name | ")
 
-    if [[ "$APP_CHOICE" == *"󰌍 Back"* || -z "$APP_CHOICE" ]]; then return; fi
+    if is_back "$APP_CHOICE"; then return; fi
 
     # Find the .desktop file matching the selected app name
     local desktop_file
@@ -322,7 +327,7 @@ docker_action_menu() {
     local A_CHOICE
     A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 🐳 $name | ")
 
-    if [[ "$A_CHOICE" == *"󰌍 Back"* || -z "$A_CHOICE" ]]; then return; fi
+    if is_back "$A_CHOICE"; then return; fi
 
     if [[ "$A_CHOICE" =~ "Enter" ]]; then
         $TERM_CMD bash -c "
@@ -361,7 +366,7 @@ docker_create_menu() {
     local CR_CHOICE
     CR_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 🐳 New Docker Container | ")
 
-    if [[ "$CR_CHOICE" == *"󰌍 Back"* || -z "$CR_CHOICE" ]]; then return; fi
+    if is_back "$CR_CHOICE"; then return; fi
 
     local image="" cname="" docker_cmd=""
     if [[ "$CR_CHOICE" =~ "Alpine SSH" ]]; then
@@ -460,7 +465,7 @@ vm_config_menu() {
     local CFG_CHOICE
     CFG_CHOICE=$(echo -e "$CFG_OPTS" | tfuzzel -d -p " $vm_name Config | ")
 
-    if [[ "$CFG_CHOICE" == *"󰌍 Back"* || -z "$CFG_CHOICE" ]]; then return; fi
+    if is_back "$CFG_CHOICE"; then return; fi
 
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
         local new_cores
@@ -510,7 +515,7 @@ container_config_menu() {
     local CFG_CHOICE
     CFG_CHOICE=$(echo -e "$CFG_OPTS" | tfuzzel -d -p " $name Config | ")
 
-    if [[ "$CFG_CHOICE" == *"󰌍 Back"* || -z "$CFG_CHOICE" ]]; then return; fi
+    if is_back "$CFG_CHOICE"; then return; fi
 
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
         local new_cores
@@ -597,7 +602,7 @@ vm_menu() {
 
     V_CHOICE=$(echo -e "$VM_OPTS" | tfuzzel -d -p " 󰾵 VMs | ")
 
-    if [[ "$V_CHOICE" == *"󰌍 Back"* || -z "$V_CHOICE" ]]; then return; fi
+    if is_back "$V_CHOICE"; then return; fi
 
     if [[ "$V_CHOICE" =~ "Install KVM Core" ]]; then
         vm_install_kvm
@@ -702,6 +707,11 @@ vm_install_windows() {
         return
     fi
 
+    if ! command -v swtpm &>/dev/null; then
+        tnotify "VM" "swtpm missing (Win11 needs TPM) — sudo apt install swtpm"
+        return
+    fi
+
     # Create disk if it doesn't exist
     [ -f "$VM_DIR/windows.qcow2" ] || qemu-img create -f qcow2 "$VM_DIR/windows.qcow2" 64G
 
@@ -754,6 +764,11 @@ vm_launch_windows() {
 
     if [ ! -f "$VM_DIR/windows.qcow2" ]; then
         tnotify "VM" "No Windows VM found. Run Setup first."
+        return
+    fi
+
+    if ! command -v swtpm &>/dev/null; then
+        tnotify "VM" "swtpm missing (Win11 needs TPM) — sudo apt install swtpm"
         return
     fi
 
@@ -948,7 +963,7 @@ tlink_menu() {
 
     TL_CHOICE=$(echo -e "$TL_OPTS" | tfuzzel -d -p " 󰌄 T-Link | ")
 
-    if [[ "$TL_CHOICE" == *"󰌍 Back"* || -z "$TL_CHOICE" ]]; then return; fi
+    if is_back "$TL_CHOICE"; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Fleet Management" ]]; then
         tebian-tlink
@@ -966,7 +981,9 @@ vpn_menu() {
     while true; do
     # Detect WireGuard state
     if command -v wg &>/dev/null; then
-        WG_IFACE=$(sudo -n wg show 2>/dev/null | head -1 | awk '{print $2}')
+        # Detect the active tunnel without root — `sudo -n wg show` fails
+        # whenever sudo creds aren't cached (the normal fuzzel-launched case)
+        WG_IFACE=$(ip -o link show type wireguard 2>/dev/null | head -1 | awk -F': ' '{print $2}')
         if [ -n "$WG_IFACE" ]; then
             WG_LABEL="✅ WireGuard Active ($WG_IFACE)"
         else
@@ -984,8 +1001,14 @@ vpn_menu() {
         if [ -n "$WG_IFACE" ]; then
             VPN_OPTS+="\n🛑 Disconnect ($WG_IFACE)"
         fi
-        # List available configs
-        WG_CONFIGS=$(ls /etc/wireguard/*.conf 2>/dev/null | xargs -I{} basename {} .conf)
+        # List available configs — /etc/wireguard is root-only (0700), so merge
+        # a direct listing (if readable), a cached-sudo listing, and the names
+        # recorded at import time in the user-readable list
+        WG_CONFIGS=$({
+            ls /etc/wireguard/*.conf 2>/dev/null | xargs -n1 basename 2>/dev/null
+            sudo -n find /etc/wireguard -maxdepth 1 -name '*.conf' -printf '%f\n' 2>/dev/null
+            cat "$HOME/.config/tebian/wireguard.list" 2>/dev/null
+        } | sed 's/\.conf$//' | sort -u)
         if [ -n "$WG_CONFIGS" ]; then
             for cfg in $WG_CONFIGS; do
                 VPN_OPTS+="\n🚀 Connect: $cfg"
@@ -999,7 +1022,7 @@ vpn_menu() {
 
     VP_CHOICE=$(echo -e "$VPN_OPTS" | tfuzzel -d -p " 🔒 VPN | ")
 
-    if [[ "$VP_CHOICE" == *"󰌍 Back"* || -z "$VP_CHOICE" ]]; then return; fi
+    if is_back "$VP_CHOICE"; then return; fi
 
     if [[ "$VP_CHOICE" =~ "Install WireGuard" ]]; then
         $TERM_CMD bash -c "echo 'Installing WireGuard...';
@@ -1032,6 +1055,8 @@ vpn_menu() {
             CONF_NAME=\$(basename \"\$CONF_PATH\");
             sudo cp \"\$CONF_PATH\" /etc/wireguard/;
             sudo chmod 600 /etc/wireguard/\"\$CONF_NAME\";
+            mkdir -p \"\$HOME/.config/tebian\";
+            grep -qxF \"\${CONF_NAME%.conf}\" \"\$HOME/.config/tebian/wireguard.list\" 2>/dev/null || echo \"\${CONF_NAME%.conf}\" >> \"\$HOME/.config/tebian/wireguard.list\";
             echo \"✅ Imported \$CONF_NAME\";
         else
             echo '✗ File not found.';
@@ -1055,7 +1080,7 @@ vpn_menu() {
 tlink_network_menu() {
     while true; do
     if command -v tailscale >/dev/null; then
-        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"' && echo "Active" || echo "Inactive")
+        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' && echo "Active" || echo "Inactive")
         TS_IP=$(tailscale ip -4 2>/dev/null)
         
         if [ "$TS_STATUS" == "Active" ]; then
@@ -1078,19 +1103,15 @@ $TL_ACTION
 
     TL_CHOICE=$(echo -e "$TL_OPTS" | tfuzzel -d -p " 🌐 Network | ")
 
-    if [[ "$TL_CHOICE" == *"󰌍 Back"* || -z "$TL_CHOICE" ]]; then return; fi
+    if is_back "$TL_CHOICE"; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Install Tailscale" ]]; then
-        # Detect Debian codename so we pick the right Tailscale repo —
-        # hardcoding bookworm would fail on trixie+ (Tailscale publishes
-        # per-codename repos).
-        local codename
-        codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-trixie}")
         $TERM_CMD bash -c "echo 'Installing Tailscale via apt repository...'
         echo ''
-        # Add Tailscale apt repo (signed with their GPG key)
-        curl -fsSL https://pkgs.tailscale.com/stable/debian/${codename}.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-        curl -fsSL https://pkgs.tailscale.com/stable/debian/${codename}.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+        # Add Tailscale apt repo (signed with their GPG key) for this release
+        CODENAME=\$(. /etc/os-release && echo \"\${VERSION_CODENAME:-trixie}\")
+        curl -fsSL \"https://pkgs.tailscale.com/stable/debian/\$CODENAME.noarmor.gpg\" | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+        curl -fsSL \"https://pkgs.tailscale.com/stable/debian/\$CODENAME.tailscale-keyring.list\" | sudo tee /etc/apt/sources.list.d/tailscale.list
         sudo apt update
         sudo apt install -y tailscale
         echo ''
@@ -1118,7 +1139,7 @@ tlink_status() {
 Network:"
     
     if command -v tailscale >/dev/null; then
-        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"' && echo "✅ Connected" || echo "⚠️ Inactive")
+        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' && echo "✅ Connected" || echo "⚠️ Inactive")
         TS_IP=$(tailscale ip -4 2>/dev/null)
         STATUS+="
   Tailscale: $TS_STATUS"

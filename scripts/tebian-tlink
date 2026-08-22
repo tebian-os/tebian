@@ -95,8 +95,13 @@ tlink_menu() {
         update_all_servers
     elif [[ "$CHOICE" =~ "SERVERS" ]]; then
         tlink_menu
+    elif [[ "$CHOICE" =~ "No servers" ]]; then
+        add_server
     elif [[ "$CHOICE" =~ "●" ]] || [[ "$CHOICE" =~ "○" ]]; then
         server_detail "$CHOICE"
+    else
+        # Separator/header rows — redisplay instead of silently exiting
+        tlink_menu
     fi
 }
 
@@ -255,7 +260,8 @@ setup_alpine() {
 
 server_detail() {
     SERVER_LINE="$1"
-    SERVER=$(echo "$SERVER_LINE" | grep -oP '\w+\s*$' | tr -d ' ')
+    # Strip the status icon, keep the full name (names may contain - or .)
+    SERVER=$(echo "$SERVER_LINE" | sed 's/^[[:space:]]*[●○][[:space:]]*//; s/[[:space:]]*$//')
     IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
     
     # Get containers
@@ -300,9 +306,13 @@ server_detail() {
     elif [[ "$CHOICE" =~ "Restart" ]]; then
         ssh root@$IP "reboot"
         notify-send "T-Link" "$SERVER rebooting"
+        # Server is rebooting — don't recurse into a dead detail menu
+        tlink_menu; return
     elif [[ "$CHOICE" =~ "Remove" ]]; then
         sed -i "/^$SERVER=/d" "$SERVERS_FILE"
         notify-send "T-Link" "$SERVER removed"
+        # Server is gone — back to the main list
+        tlink_menu; return
     fi
     server_detail "$SERVER_LINE"
 }
@@ -484,10 +494,15 @@ zero_downtime_deploy() {
         echo '════════════════════════════════════════'
         echo ''
         
-        # Get current port
-        CURRENT_PORT=\$(ssh root@$IP 'docker inspect --format=\"{{.HostPort}}\" \$1' $APP 2>/dev/null | head -1)
+        # Get current host + container ports ('docker port' → '3000/tcp -> 0.0.0.0:3000')
+        PORT_LINE=\$(ssh root@$IP \"docker port $APP 2>/dev/null\" | head -1)
+        CURRENT_PORT=\$(echo \"\$PORT_LINE\" | sed 's/.*://')
+        CONTAINER_PORT=\$(echo \"\$PORT_LINE\" | cut -d/ -f1)
         if [ -z \"\$CURRENT_PORT\" ]; then
             CURRENT_PORT=3000
+        fi
+        if [ -z \"\$CONTAINER_PORT\" ]; then
+            CONTAINER_PORT=\$CURRENT_PORT
         fi
         NEW_PORT=\$((CURRENT_PORT == 3000 ? 3001 : 3000))
         
@@ -509,7 +524,7 @@ zero_downtime_deploy() {
         echo ''
         
         echo '[3/5] Starting new version...'
-        ssh root@$IP \"docker run -d --name $APP-v2 --restart unless-stopped -p \$NEW_PORT:\$CURRENT_PORT $APP:latest\"
+        ssh root@$IP \"docker run -d --name $APP-v2 --restart unless-stopped -p \$NEW_PORT:\$CONTAINER_PORT $APP:latest\"
         echo '✓ New version running'
         echo ''
         
@@ -525,8 +540,11 @@ zero_downtime_deploy() {
         fi
         echo ''
         
-        echo '[5/5] Switching traffic...'
-        ssh root@$IP \"docker stop $APP && docker rm $APP && docker rename $APP-v2 $APP\"
+        echo '[5/5] Cutting over to new version on port '\$CURRENT_PORT'...'
+        # The v2 container validated the image on the staging port; the real
+        # cutover re-runs it on the original port (brief stop/start gap —
+        # a rename alone would leave the app listening on the wrong port)
+        ssh root@$IP \"docker rm -f $APP-v2 && docker stop $APP && docker rm $APP && docker run -d --name $APP --restart unless-stopped -p \$CURRENT_PORT:\$CONTAINER_PORT $APP:latest\"
         echo '✓ Swapped'
         echo ''
         
@@ -582,8 +600,9 @@ Available Apps:"
     
     [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && return
     
-    # Extract app name
-    APP=$(echo "$CHOICE" | cut -d'-' -f1 | tr -d ' ')
+    # Extract app name — split on the " - " separator, not bare '-',
+    # so hyphenated templates like uptime-kuma survive
+    APP=$(echo "$CHOICE" | sed 's/^[[:space:]]*//; s/ - .*$//; s/[[:space:]]*$//')
     TEMPLATE="$TEMPLATES_DIR/$APP.json"
     
     if [ ! -f "$TEMPLATE" ]; then

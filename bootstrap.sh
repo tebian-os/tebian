@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# TEBIAN OS BOOTSTRAP (v0.1.0)
+# TEBIAN OS BOOTSTRAP (V2.2)
 # Runs on first boot or manual install
 # Philosophy: One question. Sane defaults.
 # ==============================================================================
@@ -17,10 +17,8 @@ if [ -f "$SCRIPT_DIR/scripts/tebian-common" ]; then
 fi
 
 # Transaction log
-BOOTSTRAP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/tebian-bootstrap.log"
-mkdir -p "$(dirname "$BOOTSTRAP_LOG")"
-# Migrate from old location (pre-XDG-state)
-[ -f "$HOME/.local/share/tebian-bootstrap.log" ] && mv "$HOME/.local/share/tebian-bootstrap.log" "$BOOTSTRAP_LOG" 2>/dev/null || true
+BOOTSTRAP_LOG="$HOME/.local/share/tebian-bootstrap.log"
+mkdir -p "$HOME/.local/share"
 blog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$BOOTSTRAP_LOG"; }
 
 # Colors
@@ -55,10 +53,8 @@ case "$choice" in
         # Pre-flight checks
         echo ""
         echo "  Running pre-flight checks..."
-        # curl, not ping — ICMP is blocked in QEMU SLIRP and on many corporate
-        # networks. Hit the repo we actually need, over HTTPS, with a real timeout.
-        if ! curl -sfm5 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
-            echo -e "${RED}  ✗ Cannot reach deb.debian.org. Check your network connection.${NC}"
+        if ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+            echo -e "${RED}  ✗ No internet connection. Connect to a network first.${NC}"
             exit 1
         fi
         echo -e "${GREEN}  ✓ Internet connection${NC}"
@@ -129,11 +125,7 @@ case "$choice" in
         rm -f ~/.local/bin/tebian-* 2>/dev/null || true
         rm -f ~/.local/bin/status.sh 2>/dev/null || true
         rm -f ~/.local/bin/update-all 2>/dev/null || true
-        # State/logs/config (XDG-compliant locations Tebian populates)
-        rm -rf ~/.local/state/tebian-* 2>/dev/null || true
-        rm -rf ~/.config/tebian 2>/dev/null || true
-        rm -f ~/.config/environment.d/tebian-*.conf 2>/dev/null || true
-
+        
         echo ""
         echo -e "${GREEN}✅ Pure Debian.${NC}"
         ;;

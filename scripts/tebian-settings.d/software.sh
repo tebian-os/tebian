@@ -12,7 +12,7 @@ software_hub() {
 
     SH_CHOICE=$(echo -e "$SH_OPTS" | tfuzzel -d -p " 󰏗 Software | ")
 
-    if [[ "$SH_CHOICE" == *"󰌍 Back"* || -z "$SH_CHOICE" ]]; then return; fi
+    if is_back "$SH_CHOICE"; then return; fi
 
     if [[ "$SH_CHOICE" =~ "Package Browser" ]]; then
         package_browser
@@ -31,7 +31,10 @@ software_hub() {
 de_menu() {
     while true; do
     # Detect installed DEs
-    local gnome_status kde_status cinnamon_status cosmic_status
+    # NOTE: COSMIC was removed — it isn't in Debian trixie's repos and the only
+    # install paths are fragile third-party/Ubuntu-built repos. Re-add here once
+    # Debian ships cosmic-session (trixie-backports or Debian 14), no repo needed.
+    local gnome_status kde_status cinnamon_status
 
     if dpkg -l gnome-shell 2>/dev/null | grep -q '^ii'; then
         gnome_status="🟢 GNOME (Installed — Remove)"
@@ -51,23 +54,16 @@ de_menu() {
         cinnamon_status="⚪ Cinnamon (Install)"
     fi
 
-    if dpkg -l cosmic-desktop 2>/dev/null | grep -q '^ii' || [ -f /usr/bin/cosmic-session ]; then
-        cosmic_status="🟢 COSMIC (Installed — Remove)"
-    else
-        cosmic_status="⚪ COSMIC (Install)"
-    fi
-
     DE_OPTS="󰍹 Desktop Environments
 $gnome_status
 $kde_status
 $cinnamon_status
-$cosmic_status
  Sway is always available at login
 󰌍 Back"
 
     DE_CHOICE=$(echo -e "$DE_OPTS" | tfuzzel -d -p " 󰍹 DEs | ")
 
-    if [[ "$DE_CHOICE" == *"󰌍 Back"* || -z "$DE_CHOICE" ]]; then return; fi
+    if is_back "$DE_CHOICE"; then return; fi
 
     # GNOME
     if [[ "$DE_CHOICE" =~ "GNOME" ]] && [[ "$DE_CHOICE" =~ "Remove" ]]; then
@@ -178,49 +174,6 @@ $cosmic_status
             read -p 'Press Enter to close...'
         "
         tnotify "Desktop" "Cinnamon installed — select it at login"
-
-    # COSMIC
-    elif [[ "$DE_CHOICE" =~ "COSMIC" ]] && [[ "$DE_CHOICE" =~ "Remove" ]]; then
-        CONFIRM=$(echo -e "Yes, remove COSMIC\n󰌍 Cancel" | tfuzzel -d -p " Remove COSMIC? | ")
-        if [[ "$CONFIRM" =~ "Yes" ]]; then
-            $TERM_CMD bash -c "
-                echo 'Removing COSMIC...'
-                sudo apt remove -y cosmic-desktop cosmic-session cosmic-greeter 2>/dev/null
-                sudo apt autoremove -y 2>/dev/null
-                echo ''
-                echo 'COSMIC removed. Your files are untouched.'
-                read -p 'Press Enter to close...'
-            "
-            tnotify "Desktop" "COSMIC removed"
-        fi
-    elif [[ "$DE_CHOICE" =~ "COSMIC" ]] && [[ "$DE_CHOICE" =~ "Install" ]]; then
-        $TERM_CMD bash -c "
-            echo '========================================='
-            echo '  Installing COSMIC Desktop'
-            echo '========================================='
-            echo ''
-            echo 'COSMIC requires the System76 repository.'
-            echo 'Sway remains your default — pick COSMIC at login.'
-            echo ''
-            # Add System76 COSMIC repo if not present
-            # Detect Debian codename — Pop publishes per-codename suites,
-            # hardcoding 'trixie' would break on future Debian releases.
-            codename=\$(. /etc/os-release && echo \${VERSION_CODENAME:-trixie})
-            if [ ! -f /etc/apt/sources.list.d/system76-cosmic.list ]; then
-                echo 'Adding COSMIC repository...'
-                curl -fsSL https://apt.pop-os.org/key/cosmic-archive-keyring.gpg | sudo tee /usr/share/keyrings/cosmic-archive-keyring.gpg > /dev/null
-                echo \"deb [signed-by=/usr/share/keyrings/cosmic-archive-keyring.gpg] https://apt.pop-os.org/release \$codename main\" | sudo tee /etc/apt/sources.list.d/system76-cosmic.list > /dev/null
-            fi
-            sudo apt update
-            sudo apt install -y cosmic-desktop 2>&1
-            # Prevent cosmic-greeter from taking over — keep greetd
-            sudo systemctl disable cosmic-greeter 2>/dev/null || true
-            sudo systemctl enable greetd 2>/dev/null || true
-            echo ''
-            echo 'Done! Select COSMIC at the login screen.'
-            read -p 'Press Enter to close...'
-        "
-        tnotify "Desktop" "COSMIC installed — select it at login"
     fi
     done
 }
@@ -241,19 +194,19 @@ Install Legacy System Utils (man, locate...)
     
     E_CHOICE=$(echo -e "$E_OPTS" | tfuzzel -d -p " 󰑓 Essentials | ")
 
-    if [[ "$E_CHOICE" == *"󰌍 Back"* || -z "$E_CHOICE" ]]; then return; fi
+    if is_back "$E_CHOICE"; then return; fi
 
     if [[ "$E_CHOICE" =~ "Legacy System Utils" ]]; then
         $TERM_CMD bash -c "
             echo 'Installing Full Debian Standard Utilities...'
             echo 'This restores all tools usually found in a standard Debian install.'
-            echo 'Packages: man-db info texinfo mlocate nfs-common bind9-host dnsutils'
+            echo 'Packages: man-db info texinfo plocate nfs-common bind9-host dnsutils'
             echo '          telnet ftp netcat-openbsd traceroute whois lsof strace time'
             echo '          bc dc file tree rsync'
             echo ''
             sudo apt update
             sudo apt install -y \
-                man-db info texinfo mlocate nfs-common \
+                man-db info texinfo plocate nfs-common \
                 bind9-host dnsutils telnet ftp netcat-openbsd \
                 traceroute whois lsof strace time \
                 bc dc file tree rsync
@@ -297,8 +250,8 @@ Install Legacy System Utils (man, locate...)
 vt = 7
 
 [default_session]
-command = "sway --config /etc/nwg-hello/sway-config"
-user = "greeter"
+command = \"sway --config /etc/nwg-hello/sway-config\"
+user = \"greeter\"
 GREETDCFG
             fi
             echo ''
@@ -310,7 +263,7 @@ GREETDCFG
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y thunar thunar-archive-plugin file-roller; echo 'Done!'; read -p 'Press Enter...'"
     elif [[ "$E_CHOICE" =~ "Notifications" ]]; then
         $TERM_CMD bash -c "
-            sudo apt update && sudo apt install -y mako
+            sudo apt update && sudo apt install -y mako-notifier
             mkdir -p ~/.config/mako
             [ -f ~/.config/mako/config ] || echo 'default-timeout=5000' > ~/.config/mako/config
             echo 'Done! Run: mako & to start'; read -p 'Press Enter...'
@@ -353,7 +306,9 @@ Current default: ${DEFAULT_TERM:-kitty}
 
     T_CHOICE=$(echo -e "$TERM_OPTS" | tfuzzel -d -p " 󰆍 Terminal | ")
 
-    if [[ "$T_CHOICE" == *"󰌍 Back"* || -z "$T_CHOICE" ]]; then return; fi
+    if is_back "$T_CHOICE"; then return; fi
+    # Informational row — contains a terminal name, don't treat as an install pick
+    if [[ "$T_CHOICE" =~ "Current default" ]]; then continue; fi
 
     if [[ "$T_CHOICE" =~ "kitty" ]]; then
         $TERM_CMD bash -c "
@@ -498,7 +453,7 @@ software_menu() {
 
     A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | ")
     
-    if [[ "$A_CHOICE" == *"󰌍 Back"* || -z "$A_CHOICE" ]]; then return; fi
+    if is_back "$A_CHOICE"; then return; fi
 
     # Action Handlers
     if [[ "$A_CHOICE" =~ "Install Flatpak" ]]; then
@@ -556,7 +511,13 @@ software_menu() {
     elif [[ "$A_CHOICE" =~ "Install Heroic" ]]; then
         $TERM_CMD bash -c "
             mkdir -p ~/Applications
-            curl -L -o ~/Applications/Heroic.AppImage https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest/download/Heroic-\$(curl -s https://api.github.com/repos/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest | grep -oP '\"tag_name\": \"v\K[^\"]*')-x86_64.AppImage && chmod +x ~/Applications/Heroic.AppImage
+            HEROIC_VER=\$(curl -s https://api.github.com/repos/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest | grep -oP '\"tag_name\": \"v\K[^\"]*')
+            if curl -fL -o ~/Applications/Heroic.AppImage \"https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest/download/Heroic-\${HEROIC_VER}-linux-x86_64.AppImage\"; then
+                chmod +x ~/Applications/Heroic.AppImage
+            else
+                rm -f ~/Applications/Heroic.AppImage
+                echo 'Download failed — check your connection or the release page.'; read -p 'Press Enter...'; exit 1
+            fi
             mkdir -p ~/.local/share/applications
             cat > ~/.local/share/applications/heroic.desktop << DESKEOF
 [Desktop Entry]
@@ -573,7 +534,7 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch Heroic" ]]; then
         ~/Applications/Heroic.AppImage &
     elif [[ "$A_CHOICE" =~ "Uninstall Heroic" ]]; then
-        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && tnotify "Tebian" "Heroic removed."
+        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && notify-send "Tebian" "Heroic removed."
 
     elif [[ "$A_CHOICE" =~ "Install Minecraft" ]]; then
         $TERM_CMD bash -c "
@@ -616,7 +577,7 @@ DESKEOF
 [Desktop Entry]
 Name=PokeMMO
 Comment=Free Pokemon MMO
-Exec=bash -c "cd \\\$HOME/Games/PokeMMO && ./PokeMMO.sh"
+Exec=bash -c \"cd \\\$HOME/Games/PokeMMO && ./PokeMMO.sh\"
 Icon=applications-games
 Type=Application
 Categories=Game;
@@ -628,7 +589,7 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch PokeMMO" ]]; then
         bash -c "cd ~/Games/PokeMMO && ./PokeMMO.sh" &
     elif [[ "$A_CHOICE" =~ "Uninstall PokeMMO" ]]; then
-        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && tnotify "Tebian" "PokeMMO removed."
+        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && notify-send "Tebian" "PokeMMO removed."
     
     elif [[ "$A_CHOICE" =~ "Install Lutris" ]]; then
         $TERM_CMD bash -c "echo 'Installing Lutris...'; sudo apt update && sudo apt install -y lutris; echo 'Done!'; read -p 'Press Enter to close...'"
@@ -646,7 +607,7 @@ package_browser() {
 
     PB_CHOICE=$(echo -e "$PB_OPTS" | tfuzzel -d -p " 󰏗 Packages | ")
 
-    if [[ "$PB_CHOICE" == *"󰌍 Back"* || -z "$PB_CHOICE" ]]; then return; fi
+    if is_back "$PB_CHOICE"; then return; fi
 
     if [[ "$PB_CHOICE" =~ "Search APT" ]]; then
         apt_search
@@ -668,15 +629,15 @@ apt_search() {
     local RESULTS
     RESULTS=$(apt-cache search "$QUERY" 2>/dev/null)
     local COUNT
-    COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null || echo 0)
+    COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        tnotify "Package Browser" "No results for: $QUERY"
+        notify-send "Package Browser" "No results for: $QUERY"
         return
     fi
 
     if [[ "$COUNT" -gt 200 ]]; then
-        tnotify "Package Browser" "$COUNT results — showing first 50. Try a more specific search."
+        notify-send "Package Browser" "$COUNT results — showing first 50. Try a more specific search."
     fi
 
     # Get first 50 results
@@ -704,11 +665,13 @@ apt_search() {
     local SEL
     SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Results ($COUNT) | ")
 
-    if [[ "$SEL" == *"󰌍 Back"* || -z "$SEL" ]]; then return; fi
+    if is_back "$SEL"; then return; fi
 
-    # Extract package name — strip leading emoji + space, get first word
+    # Extract package name — strip only the known status icons (in no_icons
+    # mode the icon is already gone, so a blanket "delete first word" would
+    # eat the package name itself), then take the first field
     local SEL_PKG
-    SEL_PKG=$(echo "$SEL" | sed 's/^[^ ]* //' | awk '{print $1}')
+    SEL_PKG=$(echo "$SEL" | sed -E 's/^[[:space:]]*[󰄬󰄰✓✗] *//; s/^[[:space:]]+//' | awk '{print $1}')
     apt_package_action "$SEL_PKG"
 }
 
@@ -734,7 +697,7 @@ apt_package_action() {
     local A_CHOICE
     A_CHOICE=$(echo -e "$ACTION_OPTS" | tfuzzel -d -p " 󰏗 $PKG | ")
 
-    if [[ "$A_CHOICE" == *"󰌍 Back"* || -z "$A_CHOICE" ]]; then return; fi
+    if is_back "$A_CHOICE"; then return; fi
 
     if [[ "$A_CHOICE" =~ "Install" ]]; then
         $TERM_CMD bash -c "
@@ -760,10 +723,10 @@ apt_installed_browser() {
         local INSTALLED
         INSTALLED=$(apt-mark showmanual 2>/dev/null | sort)
         local COUNT
-        COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null || echo 0)
+        COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null; true)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            tnotify "Package Browser" "No manually installed packages found."
+            notify-send "Package Browser" "No manually installed packages found."
             return
         fi
 
@@ -776,10 +739,10 @@ apt_installed_browser() {
         local SEL
         SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Installed APT ($COUNT) | ")
 
-        if [[ "$SEL" == *"󰌍 Back"* || -z "$SEL" ]]; then return; fi
+        if is_back "$SEL"; then return; fi
 
         local SEL_PKG
-        SEL_PKG=$(echo "$SEL" | sed 's/^[^ ]* //')
+        SEL_PKG=$(echo "$SEL" | awk '{print $1}')
         apt_package_action "$SEL_PKG"
     done
 }
@@ -797,10 +760,10 @@ flatpak_search() {
     local RESULTS
     RESULTS=$(flatpak search "$QUERY" --columns=application,name,description 2>/dev/null | tail -n +1)
     local COUNT
-    COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null || echo 0)
+    COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        tnotify "Package Browser" "No Flatpak results for: $QUERY"
+        notify-send "Package Browser" "No Flatpak results for: $QUERY"
         return
     fi
 
@@ -823,7 +786,7 @@ flatpak_search() {
     local SEL
     SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Flatpak ($COUNT) | ")
 
-    if [[ "$SEL" == *"󰌍 Back"* || -z "$SEL" ]]; then return; fi
+    if is_back "$SEL"; then return; fi
 
     # Extract app ID from brackets
     local APP_ID
@@ -843,7 +806,7 @@ flatpak_search() {
     local FP_CHOICE
     FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
 
-    if [[ "$FP_CHOICE" == *"󰌍 Back"* || -z "$FP_CHOICE" ]]; then return; fi
+    if is_back "$FP_CHOICE"; then return; fi
 
     if [[ "$FP_CHOICE" =~ "Install" ]]; then
         $TERM_CMD bash -c "
@@ -874,10 +837,10 @@ flatpak_installed_browser() {
         local INSTALLED
         INSTALLED=$(flatpak list --app --columns=application,name 2>/dev/null)
         local COUNT
-        COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null || echo 0)
+        COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null; true)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            tnotify "Package Browser" "No Flatpak apps installed."
+            notify-send "Package Browser" "No Flatpak apps installed."
             return
         fi
 
@@ -890,7 +853,7 @@ flatpak_installed_browser() {
         local SEL
         SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Installed Flatpak ($COUNT) | ")
 
-        if [[ "$SEL" == *"󰌍 Back"* || -z "$SEL" ]]; then return; fi
+        if is_back "$SEL"; then return; fi
 
         local APP_ID
         APP_ID=$(echo "$SEL" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
@@ -902,7 +865,7 @@ flatpak_installed_browser() {
         local FP_CHOICE
         FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
 
-        if [[ "$FP_CHOICE" == *"󰌍 Back"* || -z "$FP_CHOICE" ]]; then continue; fi
+        if is_back "$FP_CHOICE"; then continue; fi
 
         if [[ "$FP_CHOICE" =~ "Uninstall" ]]; then
             $TERM_CMD bash -c "

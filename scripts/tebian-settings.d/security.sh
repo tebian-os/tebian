@@ -1,10 +1,22 @@
 # tebian-settings module: security.sh
 # Sourced by tebian-settings — do not run directly
 
+# AppArmor profile mode — /sys/.../profiles is root-readable only and lines
+# look like "name (enforce)". Echoes: enforce | complain | unknown
+# (unknown when sudo creds aren't cached and the file can't be read)
+aa_profile_mode() {
+    local n
+    n=$(sudo -n grep -c '(enforce)' /sys/kernel/security/apparmor/profiles 2>/dev/null)
+    if [ -z "$n" ]; then echo "unknown"
+    elif [ "$n" -gt 0 ]; then echo "enforce"
+    else echo "complain"; fi
+}
+
 security_menu() {
     while true; do
-    # Detect state — use systemctl (no sudo needed) where possible
-    UFW_ACTIVE=$(systemctl is-active --quiet ufw && echo "ON" || echo "OFF")
+    # Detect state without sudo where possible. ufw.service is oneshot and
+    # reports "active" even when ENABLED=no — the conf file is the real state.
+    UFW_ACTIVE=$(grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null && echo "ON" || echo "OFF")
     F2B_ACTIVE=$(systemctl is-active --quiet fail2ban && echo "ON" || echo "OFF")
     SSH_ACTIVE=$(systemctl is-active --quiet ssh && echo "ON" || echo "OFF")
 
@@ -34,13 +46,13 @@ security_menu() {
         KERN_LABEL="🧠 Enable Kernel Hardening"
     fi
 
-    # Detect AppArmor state — three states: Enforcing / Complain / Off
+    # Detect AppArmor state — Enforcing / Complain / Active(unknown) / Off
     if systemctl is-active --quiet apparmor 2>/dev/null && [ -d /sys/kernel/security/apparmor ]; then
-        if grep -q ' enforce' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
-            AA_LABEL="󰒃 AppArmor (Enforcing)"
-        else
-            AA_LABEL="󰒃 AppArmor (Complain)"
-        fi
+        case "$(aa_profile_mode)" in
+            enforce)  AA_LABEL="󰒃 AppArmor (Enforcing)" ;;
+            complain) AA_LABEL="󰒃 AppArmor (Complain)" ;;
+            *)        AA_LABEL="󰒃 AppArmor (Active)" ;;
+        esac
     else
         AA_LABEL="󰒃 AppArmor (OFF)"
     fi
@@ -99,9 +111,9 @@ $AUTOUPDATE_LABEL
 󰍉 View Security Logs
 󰌍 Back"
 
-    S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " 󰒃 Security | ")
+    S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " Security | ")
 
-    if [[ "$S_CHOICE" == *"󰌍 Back"* || -z "$S_CHOICE" ]]; then return; fi
+    if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Paranoid Mode" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
@@ -219,7 +231,11 @@ $AUTOUPDATE_LABEL
                 echo 'Cancelled.';
             fi;
             read -p 'Press Enter to close...'"
-            tnotify "Security" "SSH set to key-only"
+            # Only report success if the user actually confirmed inside the
+            # terminal (the conf file is only written on confirm)
+            if [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
+                tnotify "Security" "SSH set to key-only"
+            fi
         fi
     elif [[ "$S_CHOICE" =~ "Revert SSH to Password" ]]; then
         $TERM_CMD bash -c "echo 'Reverting SSH to allow password auth...';
@@ -253,7 +269,7 @@ SYSEOF
         apparmor_menu
     elif [[ "$S_CHOICE" =~ "Firejail" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         FJ_ACT=$(echo -e "󰈡 Disable Sandboxing (keep Firejail)\n󰆴 Disable & Uninstall Firejail\n󰌍 Back" | tfuzzel -d -p " 󰈡 Firejail | ")
-        if [[ "$FJ_ACT" == *"󰌍 Back"* || -z "$FJ_ACT" ]]; then continue; fi
+        if is_back "$FJ_ACT"; then continue; fi
         if [[ "$FJ_ACT" =~ "Disable Sandboxing" ]] || [[ "$FJ_ACT" =~ "Uninstall" ]]; then
             $TERM_CMD bash -c "echo 'Removing Firejail sandboxing...';
             for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
@@ -293,7 +309,7 @@ SYSEOF
         tnotify "Security" "Firejail sandboxing enabled"
     elif [[ "$S_CHOICE" =~ "Tor" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         TOR_ACT=$(echo -e "󰗹 Disable Tor Service\n󰆴 Disable & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
-        if [[ "$TOR_ACT" == *"󰌍 Back"* || -z "$TOR_ACT" ]]; then continue; fi
+        if is_back "$TOR_ACT"; then continue; fi
         $TERM_CMD bash -c "echo 'Disabling Tor routing...';
         sudo systemctl stop tor;
         sudo systemctl disable tor;
@@ -331,7 +347,7 @@ SYSEOF
         tnotify "Security" "DNS Privacy disabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]]; then
         DNS_PROVIDER=$(echo -e "🛡️ Quad9 (privacy + malware blocking)\n⚡ Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
-        if [[ "$DNS_PROVIDER" == *"󰌍 Back"* || -z "$DNS_PROVIDER" ]]; then continue; fi
+        if is_back "$DNS_PROVIDER"; then continue; fi
         $TERM_CMD bash -c "echo 'Enabling DNS-over-TLS...';
         sudo mkdir -p /etc/systemd/resolved.conf.d;
         if [[ '$DNS_PROVIDER' =~ 'Cloudflare' ]]; then
@@ -386,18 +402,18 @@ SYSEOF
 apparmor_menu() {
     local AA_OPTS=""
     if systemctl is-active --quiet apparmor 2>/dev/null && [ -d /sys/kernel/security/apparmor ]; then
-        if grep -q ' enforce' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
-            AA_OPTS="󰒃 Switch to Complain Mode\n󰒃 Disable AppArmor\n󰌍 Back"
-        else
-            AA_OPTS="󰒃 Switch to Enforce Mode\n󰒃 Disable AppArmor\n󰌍 Back"
-        fi
+        case "$(aa_profile_mode)" in
+            enforce)  AA_OPTS="󰒃 Switch to Complain Mode\n󰒃 Disable AppArmor\n󰌍 Back" ;;
+            complain) AA_OPTS="󰒃 Switch to Enforce Mode\n󰒃 Disable AppArmor\n󰌍 Back" ;;
+            *)        AA_OPTS="󰒃 Switch to Enforce Mode\n󰒃 Switch to Complain Mode\n󰒃 Disable AppArmor\n󰌍 Back" ;;
+        esac
     else
         AA_OPTS="󰒃 Enable AppArmor (Enforce)\n󰒃 Enable AppArmor (Complain)\n󰌍 Back"
     fi
 
     local AA_CHOICE
     AA_CHOICE=$(echo -e "$AA_OPTS" | tfuzzel -d -p " 󰒃 AppArmor | ")
-    if [[ "$AA_CHOICE" == *"󰌍 Back"* || -z "$AA_CHOICE" ]]; then return; fi
+    if is_back "$AA_CHOICE"; then return; fi
 
     if [[ "$AA_CHOICE" =~ "Enforce" ]]; then
         $TERM_CMD bash -c "echo 'Setting AppArmor to enforce mode...';
@@ -438,7 +454,7 @@ security_logs_menu() {
 
     local LOG_CHOICE
     LOG_CHOICE=$(echo -e "$LOG_OPTS" | tfuzzel -d -p " 󰍉 Security Logs | ")
-    if [[ "$LOG_CHOICE" == *"󰌍 Back"* || -z "$LOG_CHOICE" ]]; then return; fi
+    if is_back "$LOG_CHOICE"; then return; fi
 
     if [[ "$LOG_CHOICE" =~ "Fail2Ban" ]]; then
         $TERM_CMD bash -c "echo '=== Fail2Ban Logs ==='; echo ''; sudo journalctl -u fail2ban --no-pager -n 100; echo ''; read -p 'Press Enter to close...'"
@@ -468,7 +484,7 @@ security_tools_menu() {
 
     ST_CHOICE=$(echo -e "$ST_OPTS" | tfuzzel -d -p " 󰒃 Security Tools | ")
 
-    if [[ "$ST_CHOICE" == *"󰌍 Back"* || -z "$ST_CHOICE" ]]; then return; fi
+    if is_back "$ST_CHOICE"; then return; fi
 
     if [[ "$ST_CHOICE" =~ "Recon" ]]; then
         sec_tool_install_menu "Recon & Scanning" \
@@ -583,7 +599,7 @@ sec_tool_install_menu() {
     local CHOICE
     CHOICE=$(echo -e "$MENU_ITEMS" | tfuzzel -d -p " 󰒃 $CATEGORY | ")
 
-    if [[ "$CHOICE" == *"󰌍 Back"* || -z "$CHOICE" ]]; then return; fi
+    if is_back "$CHOICE"; then return; fi
 
     # Find which tool was selected
     for TOOL_SPEC in "${TOOLS[@]}"; do
@@ -677,7 +693,7 @@ Architecture:
 
     SW_CHOICE=$(echo -e "$SW_OPTS" | tfuzzel -d -p " ☠️ Secure Workspace | ")
 
-    if [[ -z "$SW_CHOICE" || "$SW_CHOICE" == *"󰌍 Back"* ]]; then return; fi
+    if is_back "$SW_CHOICE"; then return; fi
 
     if [[ "$SW_CHOICE" =~ "Setup Secure Workspace" ]]; then
         $TERM_CMD bash -c "

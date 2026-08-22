@@ -77,7 +77,7 @@ ${SNAP_LABEL:+$SNAP_LABEL
     
     U_CHOICE=$(echo -e "$UI_OPTS" | tfuzzel -d -p " 󰇄 UI | ")
 
-    if [[ "$U_CHOICE" == *"󰌍 Back"* || -z "$U_CHOICE" ]]; then return; fi
+    if is_back "$U_CHOICE"; then return; fi
 
     if [[ "$U_CHOICE" =~ "Disable UI Icons" ]]; then
         mkdir -p "$HOME/.config/tebian"
@@ -106,11 +106,11 @@ ${SNAP_LABEL:+$SNAP_LABEL
             tnotify "UI" "Bar moved to top"
             swaymsg reload 2>/dev/null &
         fi
-    elif [[ "$U_CHOICE" =~ "Floating" ]]; then
+    elif [[ "$U_CHOICE" =~ "Switch to Floating" ]]; then
         setup_floating_mode
         tnotify "UI" "Floating mode enabled"
         swaymsg reload 2>/dev/null &
-    elif [[ "$U_CHOICE" =~ "Tiling" ]]; then
+    elif [[ "$U_CHOICE" =~ "Switch to Tiling" ]]; then
         remove_floating_mode
         swaymsg '[app_id=".*"] floating disable' 2>/dev/null
         swaymsg '[class=".*"] floating disable' 2>/dev/null
@@ -219,7 +219,7 @@ for i in json.load(sys.stdin):
 󰌍 Back"
 
     I_CHOICE=$(echo -e "$INPUT_OPTS" | tfuzzel -d -p " 󰍽 Input | ")
-    if [[ "$I_CHOICE" == *"󰌍 Back"* || -z "$I_CHOICE" ]]; then return; fi
+    if is_back "$I_CHOICE"; then return; fi
 
     SWAY_CFG="$HOME/.config/sway/config.user"
 
@@ -274,7 +274,7 @@ jp - Japanese
 kr - Korean
 󰌍 Back"
         KB=$(echo -e "$LAYOUTS" | tfuzzel -d -p " ⌨️ Layout | ")
-        if [[ ! "$KB" == *"󰌍 Back"* ]] && [ -n "$KB" ]; then
+        if ! is_back "$KB"; then
             LAYOUT=$(echo "$KB" | awk '{print $1}')
             swaymsg "input type:keyboard xkb_layout $LAYOUT"
             sed -i '/input type:keyboard.*xkb_layout/d' "$SWAY_CFG" 2>/dev/null
@@ -338,11 +338,14 @@ window_effects_menu() {
 
     FX_CHOICE=$(echo -e "$FX_OPTS" | tfuzzel -d -p " 󰖲 Effects | ")
 
-    if [[ "$FX_CHOICE" == *"󰌍 Back"* || -z "$FX_CHOICE" ]]; then return; fi
+    if is_back "$FX_CHOICE"; then return; fi
 
     if [[ "$FX_CHOICE" =~ "Effects:" ]]; then
         if $blur_on; then
-            # Disable all effects
+            # Disable all effects — remember current values first, the seds
+            # below overwrite them with 0 and re-enable must restore them
+            mkdir -p "$HOME/.config/tebian"
+            printf 'corner=%s\ndim=%s\n' "$cur_corner" "$cur_dim" > "$HOME/.config/tebian/fx-saved"
             sed -i 's/^blur enable # tebian-swayfx/blur disable # tebian-swayfx/' "$cfg"
             sed -i 's/^shadows enable # tebian-swayfx/shadows disable # tebian-swayfx/' "$cfg"
             sed -i 's/^corner_radius [0-9]* # tebian-swayfx/corner_radius 0 # tebian-swayfx/' "$cfg"
@@ -350,7 +353,16 @@ window_effects_menu() {
             swaymsg reload 2>/dev/null &
             tnotify "Effects" "Window effects disabled"
         else
-            # Enable all effects
+            # Enable all effects — restore the values saved at disable time
+            # (cur_corner/cur_dim read "0" from the zeroed config)
+            if [ -f "$HOME/.config/tebian/fx-saved" ]; then
+                saved=$(sed -n 's/^corner=//p' "$HOME/.config/tebian/fx-saved" | head -1)
+                [ -n "$saved" ] && [ "$saved" != "0" ] && cur_corner="$saved"
+                saved=$(sed -n 's/^dim=//p' "$HOME/.config/tebian/fx-saved" | head -1)
+                [ -n "$saved" ] && [ "$saved" != "0" ] && cur_dim="$saved"
+            fi
+            [ "$cur_corner" = "0" ] && cur_corner=8
+            [ "$cur_dim" = "0" ] && cur_dim=0.1
             sed -i 's/^blur disable # tebian-swayfx/blur enable # tebian-swayfx/' "$cfg"
             sed -i 's/^shadows disable # tebian-swayfx/shadows enable # tebian-swayfx/' "$cfg"
             sed -i "s/^corner_radius 0 # tebian-swayfx/corner_radius $cur_corner # tebian-swayfx/" "$cfg"

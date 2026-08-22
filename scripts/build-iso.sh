@@ -5,6 +5,11 @@
 # The live session boots to a whiptail installer (tebian-installer)
 # Requires: sudo apt install live-build
 #
+# Usage: build-iso.sh [debian-version] [--release]
+#   --release  Build from committed git state only (git archive HEAD).
+#              Untracked files and uncommitted edits will NOT ship.
+#              Use this for distribution ISOs; plain mode for dev iteration.
+#
 # For ARM boards (Pi, Armbian, etc.), use the remote installer instead:
 #   curl -sL tebian.org/install | bash
 # ==============================================================================
@@ -17,7 +22,15 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-DEBIAN_VERSION="${1:-trixie}"
+DEBIAN_VERSION="trixie"
+RELEASE_BUILD=""
+EXPORT_DIR=""
+for arg in "$@"; do
+    case "$arg" in
+        --release) RELEASE_BUILD="yes" ;;
+        *) DEBIAN_VERSION="$arg" ;;
+    esac
+done
 OUTPUT_DIR="$(pwd)"
 
 # Auto-detect Tebian source directory
@@ -49,7 +62,32 @@ echo ""
 # Install build dependencies
 echo -e "${YELLOW}Installing build dependencies...${NC}"
 sudo apt update
-sudo apt install -y live-build
+sudo apt install -y live-build ${RELEASE_BUILD:+git}
+
+# ── Release mode: export committed tree and build only from that ──
+# git archive HEAD excludes .git, untracked files, and uncommitted edits,
+# so a release ISO is reproducible from a commit hash.
+if [ -n "$RELEASE_BUILD" ]; then
+    # Container/CI builds run as root on a host-owned mount — git refuses
+    # to read the repo without this
+    git config --global --add safe.directory "$TEBIAN_SRC" 2>/dev/null || true
+
+    if ! git -C "$TEBIAN_SRC" rev-parse HEAD >/dev/null 2>&1; then
+        echo -e "${RED}Error: --release requires $TEBIAN_SRC to be a git repository with at least one commit${NC}"
+        exit 1
+    fi
+
+    COMMIT=$(git -C "$TEBIAN_SRC" rev-parse --short HEAD)
+    if [ -n "$(git -C "$TEBIAN_SRC" status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}Warning: uncommitted changes in $TEBIAN_SRC will NOT be included in the ISO${NC}"
+        git -C "$TEBIAN_SRC" status --short | head -20
+    fi
+
+    EXPORT_DIR=$(mktemp -d /tmp/tebian-release-XXXXXX)
+    git -C "$TEBIAN_SRC" archive HEAD | tar -x -C "$EXPORT_DIR"
+    TEBIAN_SRC="$EXPORT_DIR"
+    echo -e "${GREEN}[release]${NC} Building from commit $COMMIT (clean git export)"
+fi
 
 # Build in Linux-native FS by default (WSL /mnt/* mounts are often nodev/noexec and break debootstrap).
 BUILD_DIR="${TEBIAN_BUILD_DIR:-/tmp/tebian-build-amd64}"
@@ -153,38 +191,9 @@ EOF
 
 # ── Copy Tebian repo into live filesystem ──
 mkdir -p config/includes.chroot/home/user/Tebian
-# Anything matching these patterns must NEVER end up in the ISO. The
-# previous build accidentally embedded a 1GB stale ISO because *.iso
-# wasn't excluded — that's why this list is paranoid.
-rsync -a \
-    `# Repo metadata + JS/Python/Rust/Go build artifacts` \
-    --exclude='.git/' --exclude='node_modules/' --exclude='dist/' \
-    --exclude='build/' --exclude='target/' --exclude='.astro/' \
-    --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='.mypy_cache/' \
-    `# Other ISOs / disk images — must NEVER recurse` \
-    --exclude='*.iso' --exclude='*.qcow2' --exclude='*.img' --exclude='*.vmdk' \
-    --exclude='*.raw' --exclude='*.vdi' \
-    `# Live-build artifact dirs from previous runs` \
-    --exclude='iso-build/' --exclude='chroot/' --exclude='cache/' --exclude='binary/' \
-    `# Editor / IDE / OS junk` \
-    --exclude='*.swp' --exclude='*.swo' --exclude='*~' --exclude='.#*' \
-    --exclude='*.bak' --exclude='*.orig' --exclude='.DS_Store' --exclude='Thumbs.db' \
-    --exclude='.vscode/' --exclude='.idea/' --exclude='.vs/' \
-    `# Secrets — defensive; the repo shouldn't have these but never trust` \
-    --exclude='.env' --exclude='.env.*' --exclude='credentials*' \
-    --exclude='*.key' --exclude='*.pem' --exclude='id_rsa*' --exclude='id_ed25519*' \
-    `# Logs` \
-    --exclude='*.log' \
+rsync -a --exclude='node_modules' --exclude='dist' --exclude='.astro' --exclude='.git' \
+    --exclude='CLAUDE.md' --exclude='.claude' --exclude='MEMORY.md' --exclude='*.iso' --exclude='._*' \
     "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
-
-# Sanity check — warn if the embedded Tebian is larger than expected.
-# A clean repo is well under 50MB; anything bigger means something leaked.
-embed_size_mb=$(du -sm config/includes.chroot/home/user/Tebian/ | awk '{print $1}')
-if [ "$embed_size_mb" -gt 50 ]; then
-    echo -e "${YELLOW}[iso] WARNING: embedded Tebian repo is ${embed_size_mb}MB — expected <50MB.${NC}"
-    echo -e "${YELLOW}      Check for stray binary files in $TEBIAN_SRC:${NC}"
-    find config/includes.chroot/home/user/Tebian/ -type f -size +5M 2>/dev/null | sed 's|^|        |'
-fi
 
 # Install tebian-installer system-wide
 mkdir -p config/includes.chroot/usr/local/bin
@@ -271,6 +280,7 @@ fix_chroot_dev() {
 cleanup_chroot_dev() {
     sudo umount chroot/dev/pts 2>/dev/null || true
     sudo umount chroot/dev 2>/dev/null || true
+    [ -n "$EXPORT_DIR" ] && rm -rf "$EXPORT_DIR"
 }
 
 # Split lb build into stages so we can fix /dev between bootstrap/chroot/binary
@@ -283,9 +293,7 @@ sudo lb chroot
 KVER=$(ls chroot/boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|.*/vmlinuz-||')
 if [ -n "$KVER" ]; then
     echo -e "${GREEN}[iso]${NC} Kernel version: $KVER"
-    # Use | as sed delimiter so any future kernel version containing /
-    # (unusual but theoretically possible) won't break the substitution.
-    find config/bootloaders -name 'grub.cfg' -o -name 'loopback.cfg' | xargs sed -i "s|@@KERNEL_VERSION@@|$KVER|g"
+    find config/bootloaders -name 'grub.cfg' -o -name 'loopback.cfg' | xargs sed -i "s/@@KERNEL_VERSION@@/$KVER/g"
 else
     echo -e "${YELLOW}[iso]${NC} Warning: could not detect kernel version for grub.cfg"
 fi

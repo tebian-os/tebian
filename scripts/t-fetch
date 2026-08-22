@@ -66,7 +66,7 @@ fi
 PROJECT="None"
 if [ -d .git ]; then
     PROJECT=$(basename "$(pwd)")
-    LOC=$(git ls-files | xargs wc -l 2>/dev/null | tail -n 1 | awk '{print $1}')
+    LOC=$(git ls-files -z | xargs -0 cat 2>/dev/null | wc -l)
     PROJECT="$PROJECT ($LOC lines)"
 fi
 

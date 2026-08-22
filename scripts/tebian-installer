@@ -434,15 +434,10 @@ select_partition_mode() {
     local has_linux=false
     local existing_os=""
 
-    # Build a summary of current partitions on this drive.
-    # lsblk -lnpo NAME lists the disk and its partitions one per line;
-    # skip the disk itself. This is safer than globbing ${DISK}*[0-9],
-    # which would incorrectly match other namespaces (e.g. /dev/nvme0n10
-    # when DISK is /dev/nvme0n1, or /dev/sdaa1 when DISK is /dev/sda).
+    # Build a summary of current partitions on this drive
     local part_summary=""
-    while read -r part; do
+    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
         [ -b "$part" ] || continue
-        [ "$part" = "$DISK" ] && continue
         local fstype size label
         fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
         size=$(lsblk -dnpo SIZE "$part" 2>/dev/null | xargs)
@@ -468,7 +463,7 @@ select_partition_mode() {
             [ -n "$label" ] && desc="$size $fstype ($label)"
             part_summary+="  ${part##*/}: ${desc}\n"
         fi
-    done < <(lsblk -lnpo NAME "$DISK" 2>/dev/null)
+    done
 
     local options=()
 
@@ -985,10 +980,35 @@ install_base() {
             echo 100; exit 1
         fi
 
+        # Sync the clock before debootstrap. debootstrap GPG-verifies the Release
+        # file, and a wrong live-session clock makes a valid signature look
+        # "invalid" (no NTP has run yet on a fresh boot). Set the time from the
+        # mirror's HTTP Date header — same HTTP we already use, no NTP needed.
+        echo 3; echo "# Syncing clock for package verification..."
+        # GET (not HEAD) — the mirror CDN strips Date from HEAD responses.
+        _http_date=$(curl -sf -m10 -o /dev/null -D - http://deb.debian.org/debian/ 2>/dev/null | grep -i '^date:' | head -1 | cut -d' ' -f2- | tr -d '\r')
+        if [ -n "$_http_date" ]; then
+            date -s "$_http_date" >> "$INSTALL_LOG" 2>&1 || true
+            hwclock --systohc 2>/dev/null || true
+            echo "Clock set from mirror: $_http_date" >> "$INSTALL_LOG"
+        fi
+
         echo 5; echo "# Bootstrapping Debian base (this is the longest step)..."
         local DEB_ARCH
         DEB_ARCH=$(dpkg --print-architecture)
-        if ! debootstrap --arch="$DEB_ARCH" "$DEBIAN_VERSION" "$TARGET" http://deb.debian.org/debian >> "$INSTALL_LOG" 2>&1; then
+        # Retry debootstrap — a transient network hiccup or corrupted Release
+        # download otherwise fails the whole 10-minute step. The common failure
+        # (a bad-clock signature error) happens before anything is written, so a
+        # plain retry over the pre-mounted target is safe.
+        _dbs_ok=false
+        for _dbs_try in 1 2 3; do
+            if debootstrap --arch="$DEB_ARCH" "$DEBIAN_VERSION" "$TARGET" http://deb.debian.org/debian >> "$INSTALL_LOG" 2>&1; then
+                _dbs_ok=true; break
+            fi
+            echo "debootstrap attempt $_dbs_try failed, retrying..." >> "$INSTALL_LOG"
+            sleep 3
+        done
+        if ! $_dbs_ok; then
             echo "INSTALL_FAILED: debootstrap failed" >> "$INSTALL_LOG"
             echo 100; exit 1
         fi
@@ -1231,7 +1251,7 @@ KBEOF
                 blueman mako-notifier grim slurp wl-clipboard \
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop python3-i3ipc \
-                pavucontrol adwaita-qt libgtk-3-bin \
+                pavucontrol adwaita-qt \
                 xdg-desktop-portal-wlr xdg-desktop-portal-gtk
 
             echo 88; echo "# Installing audio system..."
@@ -1618,11 +1638,7 @@ else
     echo "Connect via: ssh ${USERNAME}@<ip-address>"
 fi)
 
-Press OK to reboot into your new system." $WT_HEIGHT $WT_WIDTH
-
-    # Eject live media so VMs boot from the installed disk
-    # (works in VirtualBox, VMware, QEMU — harmless on bare metal USB)
-    eject /dev/sr0 2>/dev/null || eject /dev/cdrom 2>/dev/null || true
+Remove the installation media and press OK to reboot." $WT_HEIGHT $WT_WIDTH
 
     reboot
 }

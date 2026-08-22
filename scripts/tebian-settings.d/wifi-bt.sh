@@ -2,13 +2,6 @@
 # Sourced by tebian-settings — do not run directly
 
 wifi_menu() {
-    # Bail early if no WiFi adapter is present — otherwise the menu shows
-    # an empty list with just "Turn WiFi OFF" and confuses the user.
-    if ! nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep -q ':wifi$'; then
-        tnotify "WiFi" "No WiFi adapter detected"
-        return
-    fi
-
     while true; do
         # Get current WiFi state
         WIFI_STATE=$(nmcli radio wifi)
@@ -20,7 +13,7 @@ wifi_menu() {
 
             W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰖩 WiFi | ")
 
-            if [[ "$W_CHOICE" == *"󰌍 Back"* || -z "$W_CHOICE" ]]; then return; fi
+            if is_back "$W_CHOICE"; then return; fi
 
             if [[ "$W_CHOICE" =~ "WiFi: OFF" ]]; then
                 nmcli radio wifi on
@@ -57,11 +50,15 @@ wifi_menu() {
             fi
 
             # Get current connection
-            CURRENT_SSID=$(nmcli -t -f ACTIVE,SSID dev wifi | grep "^yes:" | cut -d: -f2)
+            # -f2- keeps SSIDs containing colons intact; terse mode escapes : as \:
+            CURRENT_SSID=$(nmcli -t -f ACTIVE,SSID dev wifi | grep "^yes:" | cut -d: -f2- | sed 's/\\:/:/g')
             [ -n "$CURRENT_SSID" ] && CURRENT_LABEL="󰤨 Connected: $CURRENT_SSID" || CURRENT_LABEL=""
 
             # Get available networks (terse mode handles SSIDs with spaces)
-            WIFI_LIST=$(echo "$scan_result" | sort -rn -t: | while IFS=: read -r signal ssid; do
+            # Dedupe per SSID after the descending signal sort — nmcli emits one
+            # row per BSS, so one network can appear half a dozen times
+            WIFI_LIST=$(echo "$scan_result" | sort -rn -t: | awk -F: '{k=substr($0,index($0,":")+1)} !seen[k]++' | while IFS=: read -r signal ssid; do
+                ssid=${ssid//\\:/:}
                 [ -z "$ssid" ] && continue
                 [ "$ssid" = "--" ] && continue
                 [ "$ssid" = "$CURRENT_SSID" ] && continue
@@ -83,9 +80,10 @@ $CURRENT_LABEL
 $WIFI_LIST
 󰌍 Back"
 
-            SSID_RAW=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰖩 WiFi | ")
+            # sed drops the blank row left by an empty CURRENT_LABEL
+            SSID_RAW=$(echo -e "$W_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰖩 WiFi | ")
 
-            if [[ "$SSID_RAW" == *"󰌍 Back"* || -z "$SSID_RAW" ]]; then return; fi
+            if is_back "$SSID_RAW"; then return; fi
 
             if [[ "$SSID_RAW" =~ "Turn WiFi OFF" ]]; then
                 nmcli radio wifi off
@@ -101,40 +99,22 @@ $WIFI_LIST
                     tnotify "WiFi" "Disconnected from $CURRENT_SSID"
                     pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 fi
+            elif [[ "$SSID_RAW" == *"No networks found"* ]]; then
+                continue
             else
-                # Connect to selected network
-                SSID=$(echo "$SSID_RAW" | sed 's/^[^ ]* //;s/ ([0-9]\{1,3\}%)$//')
-                PASS=$(echo "" | tfuzzel -d --password='*' -p " 󰷦 Password for $SSID | ")
+                # Connect to selected network — strip only known signal icons,
+                # never the SSID's first word (icons are gone in no_icons mode)
+                SSID=$(echo "$SSID_RAW" | sed -E 's/^[󰤨󰤥󰤢󰤟󰤯] //; s/ \([0-9]{1,3}%\)$//')
+                # Note: fuzzel doesn't support password masking — input is visible
+                PASS=$(echo "" | tfuzzel -d -p " 󰷦 Password for $SSID | ")
 
                 if [ -n "$PASS" ]; then
-                    # Temp file in $XDG_RUNTIME_DIR (per-user tmpfs, 0700) — keeps
-                    # the PSK off /tmp and out of `ps aux` (passing via nmcli args
-                    # would expose it in the process list).
-                    RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-                    mkdir -p "$RUNTIME_DIR"
-                    CONN_FILE=$(mktemp "$RUNTIME_DIR/tebian-wifi-XXXXXX")
-                    cat > "$CONN_FILE" <<WIFIEOF
-[connection]
-id=$SSID
-type=wifi
-
-[wifi]
-ssid=$SSID
-
-[wifi-security]
-key-mgmt=wpa-psk
-psk=$PASS
-
-[ipv4]
-method=auto
-
-[ipv6]
-method=auto
-WIFIEOF
+                    # (`nmcli connection load` refuses files outside NM's profile
+                    # dirs, so the old tempfile approach never connected. The
+                    # password is briefly visible in ps — acceptable on a
+                    # single-user desktop, and the tradeoff that actually works.)
+                    nmcli dev wifi connect "$SSID" password "$PASS" 2>/dev/null && tnotify "WiFi" "Connected to $SSID" || tnotify "WiFi" "Connection failed"
                     unset PASS
-                    nmcli connection load "$CONN_FILE" 2>/dev/null
-                    rm -f "$CONN_FILE"
-                    nmcli connection up "$SSID" 2>/dev/null && tnotify "WiFi" "Connected to $SSID" || tnotify "WiFi" "Connection failed"
                 else
                     nmcli dev wifi connect "$SSID" && notify-send "WiFi" "Connected to $SSID" || tnotify "WiFi" "Connection failed"
                 fi
@@ -175,7 +155,7 @@ bluetooth_menu() {
 
             B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
-            if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
+            if is_back "$B_CHOICE"; then return; fi
 
             if [[ "$B_CHOICE" =~ "Bluetooth: OFF" ]]; then
                 bluetoothctl power on
@@ -211,7 +191,7 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
 
             B_CHOICE=$(echo -e "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
-            if [[ "$B_CHOICE" == *"󰌍 Back"* || -z "$B_CHOICE" ]]; then return; fi
+            if is_back "$B_CHOICE"; then return; fi
 
             if [[ "$B_CHOICE" =~ "Turn Bluetooth OFF" ]]; then
                 bluetoothctl power off
@@ -308,7 +288,7 @@ bt_scan_and_pair() {
     # Disable discoverable after scan
     bluetoothctl discoverable off 2>/dev/null
 
-    if [[ "$DEV_CHOICE" == *"󰌍 Back"* || -z "$DEV_CHOICE" ]]; then
+    if is_back "$DEV_CHOICE"; then
         bluetoothctl pairable off 2>/dev/null
         return
     fi

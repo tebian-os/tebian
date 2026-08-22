@@ -20,12 +20,12 @@ $(_tm Everforest "Forest Green")
 $(_tm Material "Modern Blue")
 $(_tm "Rose Pine" "Soft Pink")
 󰇄 Desktop Feel
-🔤 Font Manager
+󰛖 Font Manager
 󰌍 Back"
 
     T_CHOICE=$(echo -e "$THEME_OPTS" | tfuzzel -d -p " 󰏘 Themes | ")
 
-    if [[ "$T_CHOICE" == *"󰌍 Back"* || -z "$T_CHOICE" ]]; then return; fi
+    if is_back "$T_CHOICE"; then return; fi
 
     if [[ "$T_CHOICE" =~ "Custom Wallpaper" ]]; then
         custom_wallpaper_menu
@@ -87,17 +87,14 @@ custom_wallpaper_menu() {
         
         W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰋩 Wallpaper | ")
         
-        if [[ -z "$W_CHOICE" || "$W_CHOICE" == *"󰌍 Back"* ]]; then return; fi
+        if is_back "$W_CHOICE"; then return; fi
         
         if [[ "$W_CHOICE" =~ "Open Wallpaper Folder" ]]; then
             thunar "$WALLPAPER_DIR" &
             return
         fi
         
-        # Skip the section headers (exact match — a regex like =~ "Wallpapers"
-        # would also silently swallow any wallpaper file whose name happens
-        # to contain that word).
-        [[ "$W_CHOICE" == "󰏘 Tebian Wallpapers" || "$W_CHOICE" == "󰋩 My Wallpapers" ]] && continue
+        [[ "$W_CHOICE" =~ "Wallpapers" || "$W_CHOICE" =~ "───" ]] && continue
         
         if [ -f "$SHIPPED_DIR/$W_CHOICE" ]; then
             SELECTED="$SHIPPED_DIR/$W_CHOICE"
@@ -130,16 +127,18 @@ Current: $CURRENT_FEEL
 
     F_CHOICE=$(echo -e "$FEEL_OPTS" | tfuzzel -d -p " 󰇄 Feel | ")
 
-    if [[ "$F_CHOICE" == *"󰌍 Back"* || -z "$F_CHOICE" ]]; then return; fi
+    if is_back "$F_CHOICE"; then return; fi
 
-    if [[ "$F_CHOICE" =~ "Windows" ]]; then
+    # Match on the "<name> - " label prefix — descriptions reuse the words
+    # (e.g. "Minimal - Tiling, no bar" would otherwise hit the Tiling branch)
+    if [[ "$F_CHOICE" =~ "Windows - " ]]; then
         apply_feel "Windows"
-    elif [[ "$F_CHOICE" =~ "macOS" ]]; then
+    elif [[ "$F_CHOICE" =~ "macOS - " ]]; then
         apply_feel "macOS"
-    elif [[ "$F_CHOICE" =~ "Tiling" ]]; then
-        apply_feel "Tiling"
-    elif [[ "$F_CHOICE" =~ "Minimal" ]]; then
+    elif [[ "$F_CHOICE" =~ "Minimal - " ]]; then
         apply_feel "Minimal"
+    elif [[ "$F_CHOICE" =~ "Tiling - " ]]; then
+        apply_feel "Tiling"
     fi
     done
 }
@@ -187,8 +186,9 @@ apply_feel() {
     if [[ "$FEEL" == "Windows" || "$FEEL" == "macOS" ]]; then
         # Enable title bars
         grep -q '# tebian-titlebars' "$config_user" 2>/dev/null || {
-            echo "default_border normal 2 # tebian-titlebars" >> "$config_user"
-            echo "default_floating_border normal 2 # tebian-titlebars" >> "$config_user"
+            # "-on" suffix matters: ui.sh's Title Bars toggle greps for it
+            echo "default_border normal 2 # tebian-titlebars-on" >> "$config_user"
+            echo "default_floating_border normal 2 # tebian-titlebars-on" >> "$config_user"
         }
         swaymsg "default_border normal 2" 2>/dev/null
     else
@@ -215,16 +215,16 @@ apply_feel() {
 
 font_menu() {
     while true; do
-    F_OPTS="🔤 JetBrains Mono (Default/Code)
-🔤 Terminus (Retro/Pixel)
-🔤 Inter (Modern/Clean)
-🔤 Hack (Classic Terminal)
+    F_OPTS="󰛖 JetBrains Mono (Default/Code)
+󰛖 Terminus (Retro/Pixel)
+󰛖 Inter (Modern/Clean)
+󰛖 Hack (Classic Terminal)
 ⚠️  Applies to Sway, Kitty, & Fuzzel
 󰌍 Back"
 
-    F_CHOICE=$(echo -e "$F_OPTS" | tfuzzel -d -p " 🔤 Fonts | ")
+    F_CHOICE=$(echo -e "$F_OPTS" | tfuzzel -d -p " 󰛖 Fonts | ")
 
-    if [[ "$F_CHOICE" == *"󰌍 Back"* || -z "$F_CHOICE" ]]; then return; fi
+    if is_back "$F_CHOICE"; then return; fi
 
     # Helper to apply font
     apply_font() {
@@ -240,7 +240,7 @@ font_menu() {
         sed -i "s/^font_family.*/font_family $font_name/" ~/.config/kitty/kitty.conf
         sed -i "s/^font=.*/font=$font_name:size=$font_size/" ~/.config/fuzzel/fuzzel.ini
 
-        tnotify "Font" "$font_name applied"
+        notify-send "Font" "$font_name applied" 2>/dev/null
         swaymsg reload 2>/dev/null &
     }
 

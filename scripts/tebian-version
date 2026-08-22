@@ -17,7 +17,7 @@ get_version() {
 
 check_scripts() {
     local outdated=0
-    local local_scripts=("tebian-menu" "tebian-settings" "tebian-theme" "tebian-welcome" "status.sh" "update-all")
+    local local_scripts=("tebian-menu" "tebian-settings" "tebian-theme" "tebian-onboard" "status.sh" "update-all")
     
     echo "Checking for script updates..."
     
@@ -35,7 +35,7 @@ check_scripts() {
     
     if [ $outdated -eq 1 ]; then
         echo ""
-        echo "Run: cp $TEBIAN_DIR/scripts/* ~/.local/bin/"
+        echo "Run: cp -r $TEBIAN_DIR/scripts/* ~/.local/bin/"
         return 1
     else
         echo "  ✅ All scripts up to date"

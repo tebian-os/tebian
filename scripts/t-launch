@@ -29,8 +29,8 @@ OPTIONS="🏠 Home
 🆕 New Daily Session
 📂 Scratchpad
 ----------------"
-RECENT_SESSIONS=$(find "$SESSIONS_DIR/Daily" -maxdepth 1 -type d -not -path "$SESSIONS_DIR/Daily" | sort -r | head -n 5 | xargs -n 1 basename)
-PROJECTS=$(find "$SESSIONS_DIR/Projects" -maxdepth 1 -type d -not -path "$SESSIONS_DIR/Projects" | xargs -n 1 basename)
+RECENT_SESSIONS=$(find "$SESSIONS_DIR/Daily" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r | head -n 5)
+PROJECTS=$(find "$SESSIONS_DIR/Projects" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null)
 
 FULL_LIST=$(echo -e "$OPTIONS
 $RECENT_SESSIONS
@@ -38,6 +38,9 @@ $PROJECTS")
 
 # 2. Show the popup and get the choice
 CHOICE=$(echo -e "$FULL_LIST" | tfuzzel -d)
+
+# Esc/no selection — abort instead of falling through to a $HOME terminal
+[ -z "$CHOICE" ] && exit 0
 
 # 3. Logic for the choice
 case "$CHOICE" in

@@ -9,6 +9,12 @@ TEBIAN_SRC="${SCRIPT_DIR%/scripts}"
 ASSETS_DIR="$TEBIAN_SRC/assets/plymouth/tebian"
 THEME_DIR="/usr/share/plymouth/themes/tebian"
 
+# When run from the installed copy in ~/.local/bin, SCRIPT_DIR has no /scripts
+# suffix to strip — fall back to the repo checkout
+if [ ! -d "$ASSETS_DIR" ]; then
+    ASSETS_DIR="${TEBIAN_DIR:-$HOME/Tebian}/assets/plymouth/tebian"
+fi
+
 if [ ! -f "$ASSETS_DIR/tebian.plymouth" ] || [ ! -f "$ASSETS_DIR/tebian.script" ]; then
     echo "Error: Theme assets not found in $ASSETS_DIR"
     exit 1

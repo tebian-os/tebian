@@ -98,7 +98,7 @@ perf_menu() {
 
     P_CHOICE=$(echo -e "$PERF_OPTS" | tfuzzel -d -p " 󰓅 Boost | ")
 
-    if [[ "$P_CHOICE" == *"󰌍 Back"* || -z "$P_CHOICE" ]]; then return; fi
+    if is_back "$P_CHOICE"; then return; fi
 
     # === Handle choices ===
 
@@ -114,11 +114,11 @@ perf_menu() {
         echo 'Done! RAM Boost installed and active.';
         read -p 'Press Enter to close...'"
         tnotify "RAM Boost" "Installed and enabled"
-    elif [[ "$P_CHOICE" == "🚀 RAM Boost (Active)" ]]; then
-        $TERM_CMD bash -c "sudo systemctl stop zramswap && echo 'RAM Boost disabled.' || echo 'Failed to stop.'; read -p 'Press Enter...'"
+    elif [[ "$P_CHOICE" == *"RAM Boost (Active)"* ]]; then
+        $TERM_CMD bash -c "sudo systemctl disable --now zramswap && echo 'RAM Boost disabled.' || echo 'Failed to stop.'; read -p 'Press Enter...'"
         tnotify "RAM Boost" "Disabled"
-    elif [[ "$P_CHOICE" == "󰓅 RAM Boost (Inactive)" ]]; then
-        $TERM_CMD bash -c "sudo systemctl start zramswap && echo 'RAM Boost enabled.' || echo 'Failed to start.'; read -p 'Press Enter...'"
+    elif [[ "$P_CHOICE" == *"RAM Boost (Inactive)"* ]]; then
+        $TERM_CMD bash -c "sudo systemctl enable --now zramswap && echo 'RAM Boost enabled.' || echo 'Failed to start.'; read -p 'Press Enter...'"
         tnotify "RAM Boost" "Enabled"
     elif [[ "$P_CHOICE" =~ "Uninstall RAM Boost" ]]; then
         $TERM_CMD bash -c "echo 'Uninstalling RAM Boost...';
@@ -174,7 +174,7 @@ perf_menu() {
 🚀 Performance (max speed)
 󰌍 Back"
         PP_CHOICE=$(echo -e "$PP_OPTS" | tfuzzel -d -p " 🔋 Power | " --match-mode=exact)
-        if [[ "$PP_CHOICE" == *"󰌍 Back"* || -z "$PP_CHOICE" ]]; then
+        if is_back "$PP_CHOICE"; then
             continue
         elif [[ "$PP_CHOICE" =~ "Battery" ]]; then
             $TERM_CMD bash -c 'sudo tlp bat; echo "Battery Saver enabled."; read -p "Press Enter..."'
@@ -432,7 +432,7 @@ NVEOF
             echo ""
             sed -i "/^# HiDPI scaling$/d" "$HOME/.config/sway/config.user" 2>/dev/null
             sed -i "/^output \* scale 2$/d" "$HOME/.config/sway/config.user" 2>/dev/null
-            sed -i "/^GDK_SCALE=2$/d" "$HOME/.profile" 2>/dev/null
+            sed -i "/^export GDK_SCALE=2$/d; /^GDK_SCALE=2$/d" "$HOME/.profile" 2>/dev/null
             echo "✅ HiDPI scaling removed (reset to 1x)."
             echo "   Reload Sway (Mod+Shift+e) to apply."
             echo ""
@@ -451,7 +451,7 @@ NVEOF
             mkdir -p "$HOME/.config/sway"
             grep -qxF "# HiDPI scaling" "$HOME/.config/sway/config.user" 2>/dev/null || echo "# HiDPI scaling" >> "$HOME/.config/sway/config.user"
             grep -qxF "output * scale 2" "$HOME/.config/sway/config.user" 2>/dev/null || echo "output * scale 2" >> "$HOME/.config/sway/config.user"
-            grep -qxF "GDK_SCALE=2" "$HOME/.profile" 2>/dev/null || echo "GDK_SCALE=2" >> "$HOME/.profile"
+            grep -qxF "export GDK_SCALE=2" "$HOME/.profile" 2>/dev/null || echo "export GDK_SCALE=2" >> "$HOME/.profile"
 
             echo "✅ HiDPI scaling enabled!"
             echo "   Reload Sway (Mod+Shift+e) to apply."

@@ -15,7 +15,7 @@ NC='\033[0m'
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
-log_debug() { [ "${TEBIAN_DEBUG:-0}" = "1" ] && echo -e "${BLUE}[DEBUG]${NC} $1"; }
+log_debug() { [ "${TEBIAN_DEBUG:-0}" != "1" ] || echo -e "${BLUE}[DEBUG]${NC} $1"; }
 
 # Error handling
 tebian_error() {
@@ -73,7 +73,7 @@ check_tebian() {
         log_info "Set TEBIAN_DIR environment variable if installed elsewhere"
         exit 1
     fi
-    export TEBIAN_DIR
+    export TEBIAN_DIR="$tebian_dir"
 }
 
 # Safe copy with backup
@@ -109,6 +109,15 @@ confirm() {
     fi
 }
 
+# True if a tfuzzel selection is empty (Esc) or the Back entry.
+# Must match both icon mode ("󰌍 Back...") and no_icons mode, where tfuzzel
+# strips the glyph and leading space so the entry comes back as "Back...".
+# "Back " prefix (not bare "Back*") so labels like "Backup Configs" don't match.
+is_back() {
+    local c="$1"
+    [[ -z "$c" || "$c" == *"󰌍 Back"* || "$c" == "Back" || "$c" == "Back "* ]]
+}
+
 # Fuzzel Wrapper (Handles Icon Toggling + Separator Filtering)
 tfuzzel() {
     local RESULT
@@ -132,7 +141,7 @@ tfuzzel() {
 # ==============================================================================
 detect_hardware() {
     local quiet="${1:-false}"
-    _hw_msg() { [ "$quiet" != "true" ] && echo "  $1"; }
+    _hw_msg() { [ "$quiet" = "true" ] || echo "  $1"; }
 
     # GPU
     HAS_NVIDIA=$(lspci 2>/dev/null | grep -i nvidia | head -1)
@@ -190,6 +199,7 @@ detect_hardware() {
         IS_HIDPI=false
         _hw_msg "Display: Standard resolution"
     fi
+    return 0
 }
 
 # ==============================================================================

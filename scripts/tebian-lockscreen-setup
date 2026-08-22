@@ -4,12 +4,21 @@
 
 mkdir -p "$HOME/.config/gtklock"
 
+# The userinfo module (avatar + name under the clock) ships as a separate
+# package and gtklock's modules= wants the .so PATH, not the package name.
+# Locate it, installing the package if it isn't present.
+USERINFO_MODULE=$(find /usr/lib -name 'userinfo-module.so' -path '*gtklock*' 2>/dev/null | head -1)
+if [ -z "$USERINFO_MODULE" ]; then
+    sudo apt install -y gtklock-userinfo-module 2>/dev/null
+    USERINFO_MODULE=$(find /usr/lib -name 'userinfo-module.so' -path '*gtklock*' 2>/dev/null | head -1)
+fi
+
 # Config
-cat > "$HOME/.config/gtklock/config.ini" << 'EOF'
+cat > "$HOME/.config/gtklock/config.ini" << EOF
 [main]
 gtk-theme=Adwaita-dark
-style=$HOME_PLACEHOLDER/.config/gtklock/style.css
-modules=gtklock-userinfo-module
+style=$HOME/.config/gtklock/style.css
+${USERINFO_MODULE:+modules=$USERINFO_MODULE}
 time-format=%H:%M
 date-format=%A, %B %d
 
@@ -21,9 +30,6 @@ vertical-layout=true
 font-size=24
 text-color=#eceff4
 EOF
-
-# Fix $HOME path in config
-sed -i "s|\$HOME_PLACEHOLDER|$HOME|g" "$HOME/.config/gtklock/config.ini"
 
 # CSS Style
 cat > "$HOME/.config/gtklock/style.css" << EOF

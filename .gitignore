@@ -4,3 +4,5 @@ tebian-site/
 ._*
 .vm/
 .DS_Store
+__pycache__/
+*.pyc
