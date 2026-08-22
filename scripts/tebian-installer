@@ -1218,11 +1218,22 @@ KBEOF
             network-manager
         chroot "$TARGET" systemctl enable NetworkManager >> "$INSTALL_LOG" 2>&1
 
-        # Carry WiFi credentials from live session to installed system
-        if ls /etc/NetworkManager/system-connections/*.nmconnection &>/dev/null; then
-            mkdir -p "$TARGET/etc/NetworkManager/system-connections"
-            cp /etc/NetworkManager/system-connections/*.nmconnection "$TARGET/etc/NetworkManager/system-connections/"
-            chmod 600 "$TARGET/etc/NetworkManager/system-connections/"*.nmconnection
+        # Carry WiFi credentials from live session to installed system.
+        # Check /run too — NM stores profiles created as "volatile" there
+        # instead of /etc, and a live session profile may land either place.
+        local nm_target="$TARGET/etc/NetworkManager/system-connections"
+        local nm_src
+        for nm_src in /etc/NetworkManager/system-connections /run/NetworkManager/system-connections; do
+            ls "$nm_src"/*.nmconnection &>/dev/null || continue
+            mkdir -p "$nm_target"
+            cp "$nm_src"/*.nmconnection "$nm_target/"
+        done
+        if ls "$nm_target"/*.nmconnection &>/dev/null; then
+            # Strip permissions= lines: profiles created by the live user are
+            # locked to that username, which doesn't exist on the installed
+            # system — NM would refuse to autoconnect them on first boot.
+            sed -i '/^permissions=/d' "$nm_target"/*.nmconnection
+            chmod 600 "$nm_target"/*.nmconnection
         fi
 
         echo 85; echo "# Copying Tebian files..."
