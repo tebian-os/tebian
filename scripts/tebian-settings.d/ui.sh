@@ -71,6 +71,7 @@ $FLOAT_LABEL
 $TITLE_LABEL
 ${SNAP_LABEL:+$SNAP_LABEL
 }$FX_LABEL
+󰛖 Font Rendering
 󰌌 Keybinds (Mod+S: settings, Mod+D: apps)
 󰍽 Input Devices
 󰌍 Back"
@@ -153,6 +154,8 @@ ${SNAP_LABEL:+$SNAP_LABEL
         window_effects_install
     elif [[ "$U_CHOICE" =~ "Window Effects" ]]; then
         window_effects_menu
+    elif [[ "$U_CHOICE" =~ "Font Rendering" ]]; then
+        font_rendering_menu
     elif [[ "$U_CHOICE" =~ "Keybinds" ]]; then
         KEY_LIST="Mod+D ··· App Launcher
 Mod+A ··· All Apps (Drawer)
@@ -448,3 +451,77 @@ Strong (0.35)
     done
 }
 
+
+# ── Font rendering ──
+# Debian's baseline (hintslight + no subpixel) reads soft on 1080p panels
+# next to Windows ClearType. Ubuntu ships RGB subpixel; Fedora ships medium
+# hinting — Tebian defaults to both, and this menu lets users tune it.
+
+# font_rendering_write <slight|medium|full> <rgb|none>
+# User conf.d loads after the system 10-* defaults, so mode="assign" here
+# cleanly overrides them without touching /etc.
+font_rendering_write() {
+    local conf="$HOME/.config/fontconfig/conf.d/50-tebian-font-rendering.conf"
+    mkdir -p "${conf%/*}"
+    cat > "$conf" << FONTEOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<!-- Managed by tebian-settings (UI > Font Rendering) -->
+<fontconfig>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hint${1}</const></edit>
+    <edit name="rgba" mode="assign"><const>${2}</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
+  </match>
+</fontconfig>
+FONTEOF
+}
+
+font_rendering_menu() {
+    local conf="$HOME/.config/fontconfig/conf.d/50-tebian-font-rendering.conf"
+    while true; do
+        # Current state lives in the conf file itself — no separate state file
+        local hint="slight" rgba="none"
+        if [ -f "$conf" ]; then
+            hint=$(grep -oE 'hint(slight|medium|full)' "$conf" | head -1 | sed 's/^hint//')
+            rgba=$(grep -oE '>(rgb|none)<' "$conf" | tr -d '><' | head -1)
+            [ -z "$hint" ] && hint="slight"
+            [ -z "$rgba" ] && rgba="none"
+        fi
+
+        local mark_s="" mark_m="" mark_f="" mark_rgb="" mark_gray=""
+        case "$hint" in
+            slight) mark_s="  ● current" ;;
+            medium) mark_m="  ● current" ;;
+            full)   mark_f="  ● current" ;;
+        esac
+        if [ "$rgba" = "rgb" ]; then mark_rgb="  ● current"; else mark_gray="  ● current"; fi
+
+        FR_OPTS="󰬴 Hinting: Slight — smoothest, best on HiDPI$mark_s
+󰬴 Hinting: Medium — balanced, sharper on 1080p$mark_m
+󰬴 Hinting: Full — sharpest, may distort letter shapes$mark_f
+󰍹 Subpixel: RGB — extra sharpness on LCD panels$mark_rgb
+󰍹 Subpixel: Grayscale — safe on any panel/rotation$mark_gray
+󰑓 Reset to Debian defaults
+󰌍 Back"
+
+        FR_CHOICE=$(echo -e "$FR_OPTS" | tfuzzel -d -p " 󰛖 Fonts | ")
+        if is_back "$FR_CHOICE"; then return; fi
+
+        if [[ "$FR_CHOICE" =~ "Reset" ]]; then
+            rm -f "$conf"
+            tnotify "Fonts" "Debian defaults restored — restart apps to see it"
+            continue
+        fi
+
+        [[ "$FR_CHOICE" =~ "Hinting: Slight" ]] && hint="slight"
+        [[ "$FR_CHOICE" =~ "Hinting: Medium" ]] && hint="medium"
+        [[ "$FR_CHOICE" =~ "Hinting: Full" ]]   && hint="full"
+        [[ "$FR_CHOICE" =~ "Subpixel: RGB" ]]   && rgba="rgb"
+        [[ "$FR_CHOICE" =~ "Grayscale" ]]       && rgba="none"
+
+        font_rendering_write "$hint" "$rgba"
+        tnotify "Fonts" "Hinting: ${hint}, subpixel: ${rgba} — restart apps to see it"
+    done
+}

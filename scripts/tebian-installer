@@ -1430,6 +1430,25 @@ KBSWAY
                 cp "$TEBIAN_SRC/configs/environment.d/"* "$user_home/.config/environment.d/" 2>/dev/null || true
             fi
 
+            # Font rendering: RGB subpixel + medium hinting. Debian's baseline
+            # (hintslight, no subpixel) reads soft on 1080p panels next to
+            # Windows ClearType; Ubuntu ships RGB subpixel and Fedora ships
+            # medium hinting. Tunable later in Settings > UI > Font Rendering.
+            mkdir -p "$user_home/.config/fontconfig/conf.d"
+            cat > "$user_home/.config/fontconfig/conf.d/50-tebian-font-rendering.conf" << 'FONTEOF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<!-- Managed by tebian-settings (UI > Font Rendering) -->
+<fontconfig>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hintmedium</const></edit>
+    <edit name="rgba" mode="assign"><const>rgb</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
+  </match>
+</fontconfig>
+FONTEOF
+
             # GTK3 theme (dark mode + Papirus icons)
             mkdir -p "$user_home/.config/gtk-3.0"
             cat > "$user_home/.config/gtk-3.0/settings.ini" << 'GTKEOF'
