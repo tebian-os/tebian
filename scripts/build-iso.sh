@@ -216,6 +216,25 @@ mkdir -p config/includes.chroot/usr/share/plymouth/themes/tebian
 cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.plymouth" config/includes.chroot/usr/share/plymouth/themes/tebian/
 cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.script" config/includes.chroot/usr/share/plymouth/themes/tebian/
 
+# Font rendering for the live session — same sharp defaults the installer
+# seeds for installed users (RGB subpixel + medium hinting). Numbered 40 so
+# it overrides Debian's 10-* defaults but still loses to 50-user, keeping
+# any per-user toggle authoritative. trixie's fonts.conf does not read
+# /etc/fonts/local.conf, so a conf.d drop-in is the only system-wide hook.
+mkdir -p config/includes.chroot/etc/fonts/conf.d
+cat > config/includes.chroot/etc/fonts/conf.d/40-tebian-font-rendering.conf << 'FONTEOF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hintmedium</const></edit>
+    <edit name="rgba" mode="assign"><const>rgb</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
+  </match>
+</fontconfig>
+FONTEOF
+
 # ── Hooks (chroot hooks go in config/hooks/normal/) ──
 mkdir -p config/hooks/normal
 
