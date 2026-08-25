@@ -451,6 +451,13 @@ software_menu() {
 
     APPS+="\n󰊴 Install Lutris"
 
+    # Graphics driver channel — newer Mesa via backports helps gaming
+    if dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null | grep -q bpo; then
+        APPS+="\n󰢮 Graphics Drivers (Current: Backports)"
+    else
+        APPS+="\n󰢮 Graphics Drivers (Current: Debian Stable)"
+    fi
+
     A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | ")
     
     if is_back "$A_CHOICE"; then return; fi
@@ -593,7 +600,66 @@ DESKEOF
     
     elif [[ "$A_CHOICE" =~ "Install Lutris" ]]; then
         $TERM_CMD bash -c "echo 'Installing Lutris...'; sudo apt update && sudo apt install -y lutris; echo 'Done!'; read -p 'Press Enter to close...'"
+    elif [[ "$A_CHOICE" =~ "Graphics Drivers" ]]; then
+        gfx_drivers_menu
     fi
+    done
+}
+
+# ── Graphics drivers (Mesa channel) ──
+# Debian stable freezes Mesa for ~2 years; trixie-backports tracks a recent
+# series with months of GPU fixes (Intel ANV especially — game artifacts).
+# backports is NotAutomatic, so enabling the repo upgrades nothing by itself;
+# only the Mesa set is pulled from it, explicitly, with -t.
+gfx_drivers_menu() {
+    while true; do
+        local mesa_ver channel
+        mesa_ver=$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null)
+        if echo "$mesa_ver" | grep -q bpo; then channel="Backports"; else channel="Debian Stable"; fi
+
+        G_OPTS="󰋼 Installed: Mesa ${mesa_ver%%-*} (${channel})
+󰢮 Switch to Backports — newer Mesa, fixes game glitches
+󰒙 Switch to Debian Stable — revert to the frozen version
+󰌍 Back"
+
+        G_CHOICE=$(echo -e "$G_OPTS" | tfuzzel -d -p " 󰢮 Graphics | ")
+        if is_back "$G_CHOICE"; then return; fi
+
+        if [[ "$G_CHOICE" =~ "Switch to Backports" ]]; then
+            $TERM_CMD bash -c "
+                echo 'Enabling trixie-backports (NotAutomatic: nothing else will upgrade)...'
+                echo 'deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware' | sudo tee /etc/apt/sources.list.d/tebian-backports.list >/dev/null
+                sudo apt update
+                PKGS='mesa-vulkan-drivers libgl1-mesa-dri'
+                # Steam needs the 32-bit half too — match whatever is installed
+                if dpkg -l mesa-vulkan-drivers:i386 2>/dev/null | grep -q '^ii'; then
+                    PKGS=\"\$PKGS mesa-vulkan-drivers:i386 libgl1-mesa-dri:i386\"
+                fi
+                echo ''
+                echo \"Installing from backports: \$PKGS\"
+                sudo apt install -y -t trixie-backports \$PKGS
+                echo ''
+                echo 'Done — reboot (or log out/in) so everything picks up the new driver.'
+                read -p 'Press Enter...'
+            "
+        elif [[ "$G_CHOICE" =~ "Switch to Debian Stable" ]]; then
+            $TERM_CMD bash -c "
+                # Downgrade the Mesa family back to stable, then drop the repo
+                # file this toggle created.
+                PKGS=\$(dpkg-query -W -f='\${Package}:\${Architecture} \${Version}\n' 2>/dev/null | grep bpo | grep -E 'mesa|libgl|libegl|libgbm|gallium|vulkan|libdrm|llvm|spirv' | cut -d' ' -f1 | sed 's|\$|/trixie|')
+                if [ -z \"\$PKGS\" ]; then
+                    echo 'Nothing from backports installed — already on stable.'
+                else
+                    echo \"Downgrading: \$PKGS\"
+                    sudo apt install -y --allow-downgrades \$PKGS
+                fi
+                sudo rm -f /etc/apt/sources.list.d/tebian-backports.list
+                sudo apt update
+                echo ''
+                echo 'Back on Debian stable Mesa — reboot (or log out/in) to apply.'
+                read -p 'Press Enter...'
+            "
+        fi
     done
 }
 
