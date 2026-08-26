@@ -21,7 +21,7 @@ log_error() { echo -e "${RED}[rebuild]${NC} $1" >&2; }
 
 if [ ! -f "$CONF" ]; then
     log_error "Manifest not found: $CONF"
-    echo "Create one with: cp $TEBIAN_DIR/tebian.conf.example $CONF"
+    echo "Create one with: cp $TEBIAN_DIR/tebian.conf $CONF"
     exit 1
 fi
 

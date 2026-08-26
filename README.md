@@ -31,7 +31,7 @@ Works on Debian, Raspberry Pi OS, Armbian, Ubuntu, and any Debian-based distro. 
 - **Sway + fuzzel** as the sole UI entry point — no desktop icons, no start menu
 - **tebian.conf** is the single source of truth — every feature is declaratively defined
 - **`tebian-rebuild`** applies the manifest: install a container template, swap the theme, harden the box, toggle a service
-- **9 themes** ship in-tree (glass, cyber, nord, dracula, rose-pine, everforest, tokyo-night, paper, solid) with matching wallpapers, mako, swaylock, kitty configs
+- **11 themes** ship in-tree (glass, cyber, nord, dracula, rose-pine, everforest, tokyo-night, paper, solid, gruvbox, material) with matching wallpapers, mako, swaylock, kitty configs
 - **Strips back to headless Debian** — delete the config folder, reboot, you have base Debian server
 
 ## Structure
