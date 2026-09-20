@@ -1,0 +1,109 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN DRIVE PROBE
+# Read-only filesystem health check for one block device. Prints a single
+# line for udev's IMPORT{program}:
+#
+#   TEBIAN_FS_STATE=clean|dirty|hibernated|corrupt|mounted|unknown
+#
+# Runs as root from the udev rule (90-tebian-drive-doctor.rules) because a
+# normal user cannot read raw block devices — tebian-drive-doctor, running in
+# the user's session, then just reads the property back from udev.
+#
+# Deliberately checks the same thing Windows does before it offers "scan and
+# fix": the filesystem's own dirty marker. That is a few bytes, so this stays
+# in the millisecond range and is safe to run inline in a udev event (a full
+# fsck -n on a large stick could stall it for minutes). Never writes anything.
+# ==============================================================================
+set -uo pipefail
+
+# udev hands programs a minimal PATH without the sbin directories
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+dev="${1:-}"
+
+# Runs as root on a path that arrives from a udev event — refuse anything
+# that isn't a plain device node
+if [[ ! "$dev" =~ ^/dev/[a-zA-Z0-9]+$ ]] || [ ! -b "$dev" ]; then
+    echo "TEBIAN_FS_STATE=unknown"
+    exit 0
+fi
+
+# Markers are only meaningful on an unmounted filesystem: FAT and exFAT set
+# their dirty bit for as long as they are mounted
+if findmnt -n -S "$dev" >/dev/null 2>&1; then
+    echo "TEBIAN_FS_STATE=mounted"
+    exit 0
+fi
+
+# udev exports ID_FS_TYPE; when run by hand, probe the device directly
+# (-p) rather than trusting blkid's cache
+fstype="${ID_FS_TYPE:-$(blkid -p -o value -s TYPE "$dev" 2>/dev/null)}"
+
+# Value of the byte at offset $1, in decimal
+byte_at() {
+    dd if="$dev" bs=1 skip="$1" count=1 2>/dev/null | od -An -tu1 | tr -d ' \n'
+}
+
+state=unknown
+case "$fstype" in
+    ntfs)
+        # Two independent markers. ntfs-3g.probe tells hibernated (14) apart
+        # from an unclean journal (15) — the distinction that matters, since
+        # "repairing" a hibernated Windows volume throws away its resume
+        # image. But it does not see the chkdsk flag that the kernel ntfs3
+        # driver refuses to mount over; only ntfsinfo reports that one.
+        if command -v ntfs-3g.probe >/dev/null; then
+            # 16 = device busy. Seen on the change event that follows an
+            # unmount, when the kernel hasn't let go of the device yet —
+            # worth a short wait rather than reporting "unknown".
+            for _try in 1 2 3; do
+                ntfs-3g.probe --readwrite "$dev" >/dev/null 2>&1
+                rc=$?
+                [ "$rc" -eq 16 ] || break
+                sleep 0.3
+            done
+            case $rc in
+                0)  state=clean ;;
+                13) state=corrupt ;;
+                14) state=hibernated ;;
+                15) state=dirty ;;
+            esac
+            # Captured rather than piped into grep -q: grep exiting on the
+            # first match SIGPIPEs ntfsinfo, which pipefail reports as failure
+            vol_flags=$(ntfsinfo -f -m "$dev" 2>/dev/null | grep 'Volume Flags:')
+            if [ "$state" = clean ] && [[ "$vol_flags" == *DIRTY* ]]; then
+                state=dirty
+            fi
+        fi
+        ;;
+    vfat)
+        # Bit 0 of the "reserved" boot sector byte is the dirty flag Windows
+        # reads. It sits at 0x41 on FAT32 and 0x25 on FAT12/16. Which one this
+        # is comes from the boot sector itself (16-bit FAT size field is zero
+        # only on FAT32) — blkid's VERSION can be missing from a stale cache.
+        if [ "$(byte_at 22)$(byte_at 23)" = 00 ]; then b=$(byte_at 65); else b=$(byte_at 37); fi
+        if [ -n "$b" ]; then
+            if (( b & 1 )); then state=dirty; else state=clean; fi
+        fi
+        ;;
+    exfat)
+        # VolumeFlags at offset 106, bit 1 = VolumeDirty
+        b=$(byte_at 106)
+        if [ -n "$b" ]; then
+            if (( b & 2 )); then state=dirty; else state=clean; fi
+        fi
+        ;;
+    ext2|ext3|ext4)
+        # A journal that merely needs replay still reads "clean" here, which
+        # is right: mounting replays it, nothing for the user to decide.
+        fs_state=$(dumpe2fs -h "$dev" 2>/dev/null | sed -n 's/^Filesystem state: *//p')
+        case "$fs_state" in
+            clean) state=clean ;;
+            "")    state=unknown ;;
+            *)     state=dirty ;;
+        esac
+        ;;
+esac
+
+echo "TEBIAN_FS_STATE=$state"

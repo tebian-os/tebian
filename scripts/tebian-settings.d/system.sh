@@ -345,6 +345,7 @@ more_menu() {
 󰡨 Infrastructure
 󰓅 Performance
 󰋅 System Info
+󰋊 Drives
 󰆏 Backup & Restore
 󰑀 Config Tracking (Git)
 󰍡 Notification History
@@ -366,6 +367,8 @@ more_menu() {
         perf_menu
     elif [[ "$M_CHOICE" =~ "System Info" ]]; then
         sysinfo_menu
+    elif [[ "$M_CHOICE" =~ "Drives" ]]; then
+        drives_menu
     elif [[ "$M_CHOICE" =~ "Backup & Restore" ]]; then
         backup_menu
     elif [[ "$M_CHOICE" =~ "Config Tracking" ]]; then

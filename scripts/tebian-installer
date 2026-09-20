@@ -1263,6 +1263,7 @@ KBEOF
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop python3-i3ipc \
                 pavucontrol adwaita-qt \
+                udisks2 ntfs-3g dosfstools exfatprogs \
                 xdg-desktop-portal-wlr xdg-desktop-portal-gtk
 
             echo 88; echo "# Installing audio system..."
@@ -1506,6 +1507,15 @@ GTK4EOF
                 mkdir -p "$user_home/.local/bin/tebian-settings.d"
                 cp "$TEBIAN_SRC/scripts/tebian-settings.d/"*.sh "$user_home/.local/bin/tebian-settings.d/" 2>/dev/null || true
             fi
+
+            # Drive Doctor's root half. The probe must be root-owned and
+            # outside the user's home: udev runs it as root on every USB
+            # plug-in, so a user-writable copy would be a privilege escalation.
+            install -o root -g root -m 755 "$TEBIAN_SRC/scripts/tebian-drive-probe" \
+                "$TARGET/usr/local/bin/tebian-drive-probe"
+            mkdir -p "$TARGET/etc/udev/rules.d"
+            install -o root -g root -m 644 "$TEBIAN_SRC/configs/udev/90-tebian-drive-doctor.rules" \
+                "$TARGET/etc/udev/rules.d/90-tebian-drive-doctor.rules"
 
             # Default bar stats to OFF (user can enable in Settings > Screen)
             mkdir -p "$user_home/.config/tebian"

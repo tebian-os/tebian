@@ -1,0 +1,390 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN DRIVE DOCTOR
+# Plug in a USB drive: a healthy one is mounted, a sick one gets an offer to
+# repair it — the "scan and fix" prompt from Windows that desktop Linux never
+# wired up, even though every part (udisks2, fsck, ntfsfix) has been there for
+# years.
+#
+#   tebian-drive-doctor watch          session daemon (started from sway config)
+#   tebian-drive-doctor scan [--all]   check drives that are already plugged in
+#   tebian-drive-doctor handle <dev>   check one partition
+#   tebian-drive-doctor repair <dev>   repair + mount (interactive, in a terminal)
+#   tebian-drive-doctor eject <dev>    unmount everything on the drive, power off
+#
+# Split of duties: the health check itself runs as root from a udev rule
+# (tebian-drive-probe) and is published as the TEBIAN_FS_STATE device
+# property, because only root can read a raw block device. Everything here is
+# unprivileged — mounting goes through udisks2, and the one step that writes
+# to a sick filesystem asks for sudo in a terminal where you can watch it.
+#
+# Not tied to Tebian's UI: set DRIVE_DOCTOR_MENU to any dmenu-compatible
+# command ("rofi -dmenu", "wofi --dmenu", "bemenu") to replace fuzzel.
+# ==============================================================================
+set -uo pipefail   # no -e: this is a long-lived loop, failures are handled inline
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+CONF_DIR="$HOME/.config/tebian"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/tebian-drive-doctor"
+LOG_FILE="$HOME/.local/share/tebian-drive-doctor.log"
+mkdir -p "$RUN_DIR/ignored" "$HOME/.local/share"
+
+# Root-owned copy is what udev runs; the one next to this script is only a
+# fallback for repair on systems where the rule was never installed
+PROBE=/usr/local/bin/tebian-drive-probe
+[ -x "$PROBE" ] || PROBE="$SCRIPT_DIR/tebian-drive-probe"
+
+dlog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+
+notify() {
+    local title="$1" body="$2" urgency="${3:-normal}"
+    command -v notify-send >/dev/null &&
+        notify-send -a "Drive Doctor" -u "$urgency" "$title" "$body" 2>/dev/null
+    dlog "$title: $body"
+}
+
+get_term() {
+    if command -v kitty &>/dev/null; then echo "kitty -e"
+    elif command -v foot &>/dev/null; then echo "foot -e"
+    elif command -v alacritty &>/dev/null; then echo "alacritty -e"
+    elif command -v xterm &>/dev/null; then echo "xterm -e"
+    else echo "kitty -e"
+    fi
+}
+
+# Options on stdin, choice on stdout. Held under a lock so a stick with two
+# sick partitions asks one question at a time instead of stacking menus.
+prompt() {
+    local text="$1"
+    (
+        flock 9
+        if [ -n "${DRIVE_DOCTOR_MENU:-}" ]; then
+            $DRIVE_DOCTOR_MENU
+        elif declare -F tfuzzel >/dev/null; then
+            tfuzzel -d -w 56 -p " $text | "
+        else
+            fuzzel -d -w 56 -p " $text | "
+        fi
+    ) 9>"$RUN_DIR/prompt.lock"
+}
+
+# --- Device inspection --------------------------------------------------------
+
+declare -A P
+load_props() {
+    P=()
+    local k v
+    while IFS='=' read -r k v; do
+        [ -n "$k" ] && P[$k]="$v"
+    done < <(udevadm info -q property -n "$1" 2>/dev/null)
+}
+
+is_mounted() { findmnt -n -S "$1" >/dev/null 2>&1; }
+
+# The safety spine: every reason to leave a device alone lives here. Loads P
+# as a side effect so the caller can read TEBIAN_FS_STATE afterwards.
+is_candidate() {
+    local dev="$1"
+    [[ "$dev" =~ ^/dev/[a-zA-Z0-9]+$ ]] && [ -b "$dev" ] || return 1
+    load_props "$dev"
+
+    # USB only — internal disks are fstab's business, never ours
+    [ "${P[ID_BUS]:-}" = usb ] || return 1
+    # Skips LUKS ("crypto"), swap ("other") and unformatted space for free
+    [ "${P[ID_FS_USAGE]:-}" = filesystem ] || return 1
+    [ "${P[UDISKS_IGNORE]:-0}" = 1 ] && return 1
+
+    # GPT attribute bit 63 is "do not automount" (no drive letter on Windows).
+    # Ventoy sets it on its 32M VTOYEFI partition, vendors set it on recovery
+    # partitions. Matched as text: the value overflows bash's signed integers.
+    [[ "${P[ID_PART_ENTRY_FLAGS]:-}" =~ ^0x[89a-fA-F][0-9a-fA-F]{15}$ ]] && return 1
+    # EFI system partitions get no letter on Windows either
+    [ "${P[ID_PART_ENTRY_TYPE]:-}" = c12a7328-f81f-11d2-ba4b-00a0c93ec93b ] && return 1
+
+    is_mounted "$dev" && return 1
+    findmnt -n --fstab --evaluate -S "$dev" >/dev/null 2>&1 && return 1
+    return 0
+}
+
+# --- Actions ------------------------------------------------------------------
+
+# Prints the mount point on success, the udisks error on failure
+do_mount() {
+    local dev="$1" ro="${2:-}" out
+    if out=$(udisksctl mount --no-user-interaction -b "$dev" ${ro:+-o ro} 2>&1); then
+        findmnt -n -o TARGET -S "$dev" | head -1
+        return 0
+    fi
+    # Lost a race with a file manager that mounted it first — that's a success
+    if is_mounted "$dev"; then
+        findmnt -n -o TARGET -S "$dev" | head -1
+        return 0
+    fi
+    echo "$out"
+    return 1
+}
+
+announce_mount() {
+    local label="$1" mnt="$2" note="${3:-}" used total
+    read -r used total < <(df -h --output=used,size "$mnt" 2>/dev/null | tail -1)
+    notify "$label mounted${note:+ ($note)}" "$mnt — ${used:-?} used of ${total:-?}"
+}
+
+ignore_dev() { touch "$RUN_DIR/ignored/$(basename "$1")"; }
+
+ask_sick() {
+    local dev="$1" label="$2" size="$3" choice mnt
+    choice=$(printf '%s\n' "󰑓 Repair and mount" "󰈈 Mount read-only" "󰅖 Ignore" |
+        prompt "$label ($size) has errors")
+
+    if [[ "$choice" =~ "Repair" ]]; then
+        dlog "$dev: user chose repair"
+        $(get_term) "$SELF" repair "$dev"
+    elif [[ "$choice" =~ "read-only" ]]; then
+        if mnt=$(do_mount "$dev" ro); then
+            announce_mount "$label" "$mnt" "read-only"
+        else
+            notify "$label would not mount" "$mnt" critical
+        fi
+    else
+        # Esc counts as Ignore, or every sway reload would ask again
+        ignore_dev "$dev"
+        dlog "$dev: ignored"
+    fi
+}
+
+ask_readonly_only() {
+    local dev="$1" label="$2" size="$3" why="$4" choice mnt
+    choice=$(printf '%s\n' "󰈈 Mount read-only" "󰅖 Ignore" | prompt "$label ($size): $why")
+    if [[ "$choice" =~ "read-only" ]]; then
+        if mnt=$(do_mount "$dev" ro); then
+            announce_mount "$label" "$mnt" "read-only"
+        else
+            notify "$label would not mount" "$mnt" critical
+        fi
+    else
+        ignore_dev "$dev"
+    fi
+}
+
+handle() {
+    local dev="$1" force="${2:-}" label size state mnt choice
+    [ -f "$CONF_DIR/drive_doctor_off" ] && return 0
+    is_candidate "$dev" || return 0
+    [ -z "$force" ] && [ -e "$RUN_DIR/ignored/$(basename "$dev")" ] && return 0
+
+    label=$(lsblk -dno LABEL "$dev" 2>/dev/null)
+    [ -n "$label" ] || label="USB drive"
+    size=$(lsblk -dno SIZE "$dev" 2>/dev/null | tr -d ' ')
+    # No property means the udev rule isn't installed; mounting below still
+    # works and a failed mount still leads to the repair offer
+    state="${P[TEBIAN_FS_STATE]:-unknown}"
+    dlog "$dev ($label, ${P[ID_FS_TYPE]:-?}, $size): state=$state"
+
+    case "$state" in
+        dirty)
+            ask_sick "$dev" "$label" "$size"
+            ;;
+        hibernated)
+            # No repair on offer, deliberately: ntfsfix on a hibernated volume
+            # discards Windows' saved session and whatever was unsaved in it
+            notify "$label: Windows is hibernated" \
+                "Windows hibernated (or used Fast Startup) with this drive attached. It can be read, but to write to it, shut Windows down fully first."
+            ask_readonly_only "$dev" "$label" "$size" "Windows is hibernated"
+            ;;
+        corrupt)
+            notify "$label is badly damaged" \
+                "The filesystem is inconsistent beyond a quick fix. Image it with ddrescue before trying anything else, or run chkdsk on Windows." critical
+            ask_readonly_only "$dev" "$label" "$size" "badly damaged"
+            ;;
+        *)
+            if [ -f "$CONF_DIR/drive_automount_off" ]; then
+                choice=$(printf '%s\n' "󰋊 Mount" "󰅖 Ignore" | prompt "$label ($size) plugged in")
+                if [[ ! "$choice" =~ "Mount" ]]; then ignore_dev "$dev"; return 0; fi
+            fi
+            # NTFS without a verdict is mounted read-only. The kernel ntfs3
+            # driver doesn't check for Windows hibernation, so a blind
+            # read-write mount is exactly the data-loss case the probe exists
+            # to prevent. Only reachable when the probe is missing or lost a
+            # race for the device.
+            if [ "$state" != clean ] && [ "${P[ID_FS_TYPE]:-}" = ntfs ]; then
+                if mnt=$(do_mount "$dev" ro); then
+                    announce_mount "$label" "$mnt" "read-only"
+                    notify "$label: health check unavailable" \
+                        "Mounted read-only to be safe. Replug the drive to retry, or install the health probe in Settings → More → Drives."
+                else
+                    dlog "$dev: mount failed: $mnt"
+                    ask_sick "$dev" "$label" "$size"
+                fi
+            elif mnt=$(do_mount "$dev"); then
+                announce_mount "$label" "$mnt"
+            else
+                dlog "$dev: mount failed: $mnt"
+                ask_sick "$dev" "$label" "$size"
+            fi
+            ;;
+    esac
+}
+
+cmd_scan() {
+    local force="${1:-}" dev
+    [ "$force" = "--all" ] && force=1
+    while read -r dev; do
+        handle "$dev" "$force"
+    done < <(lsblk -nrpo NAME 2>/dev/null)
+}
+
+# Runs inside a terminal so the user watches exactly what touches their data
+cmd_repair() {
+    local dev="$1" label fstype state rc mnt
+    if [[ ! "$dev" =~ ^/dev/[a-zA-Z0-9]+$ ]] || [ ! -b "$dev" ]; then
+        echo -e "${RED}Not a block device: $dev${NC}"; read -rp "Press Enter to close. "; return 1
+    fi
+    label=$(lsblk -dno LABEL "$dev"); [ -n "$label" ] || label="USB drive"
+    fstype=$(lsblk -dno FSTYPE "$dev")
+
+    echo -e "${BLUE}Tebian Drive Doctor${NC} — repairing ${GREEN}$label${NC} ($dev, $fstype)"
+    echo
+    if is_mounted "$dev"; then
+        echo -e "${YELLOW}$dev is mounted — a mounted filesystem can't be repaired safely.${NC}"
+        read -rp "Press Enter to close. "; return 1
+    fi
+    sudo -v || { read -rp "Press Enter to close. "; return 1; }
+
+    # Re-probe as root right before writing. This is the authoritative check:
+    # it works even without the udev rule, and the answer may have changed
+    # since the prompt appeared.
+    state=$(sudo "$PROBE" "$dev" | sed 's/^TEBIAN_FS_STATE=//')
+    echo "Health check: $state"
+    if [ "$state" = hibernated ]; then
+        echo -e "${RED}Windows is hibernated on this drive — refusing to repair.${NC}"
+        echo "Repairing now would destroy Windows' saved session. Boot Windows and"
+        echo "shut it down fully (hold Shift while clicking Shut down), then try again."
+        read -rp "Press Enter to close. "; return 1
+    fi
+    echo
+
+    # rc <= 1 is success for every tool below (fsck: 0 clean, 1 errors fixed)
+    case "$fstype" in
+        ntfs)
+            echo "> ntfsfix -d $dev"
+            sudo ntfsfix -d "$dev"; rc=$?
+            echo
+            echo -e "${YELLOW}Note:${NC} ntfsfix fixes common problems and clears the dirty flag. It is"
+            echo "not a full chkdsk — if this drive keeps acting up, run chkdsk /f on Windows."
+            ;;
+        vfat)
+            echo "> fsck.vfat -a -w $dev"
+            sudo fsck.vfat -a -w "$dev"; rc=$?
+            ;;
+        exfat)
+            echo "> fsck.exfat -p $dev"
+            sudo fsck.exfat -p "$dev"; rc=$?
+            ;;
+        ext2|ext3|ext4)
+            echo "> e2fsck -p $dev"
+            sudo e2fsck -p "$dev"; rc=$?
+            ;;
+        *)
+            echo -e "${RED}No repair tool known for '$fstype'.${NC}"; rc=99
+            ;;
+    esac
+    echo
+    dlog "$dev: repair ($fstype) exit=$rc"
+
+    if [ "$rc" -le 1 ]; then
+        echo -e "${GREEN}Repair finished.${NC} Mounting..."
+        # Let udev re-read the filesystem the tool just rewrote
+        udevadm settle --timeout=5 2>/dev/null
+        if mnt=$(do_mount "$dev"); then
+            echo -e "${GREEN}Mounted at $mnt${NC}"
+            announce_mount "$label" "$mnt" "repaired"
+        else
+            echo -e "${RED}Repaired, but mounting failed:${NC} $mnt"
+        fi
+    else
+        echo -e "${RED}The repair tool reported errors it could not fix (exit $rc).${NC}"
+        [[ "$fstype" == ext* ]] && echo "Try a full interactive check: sudo e2fsck -f $dev"
+        notify "$label could not be repaired" "See the terminal output for details." critical
+    fi
+    echo
+    read -rp "Press Enter to close. "
+}
+
+cmd_eject() {
+    local dev="$1" disk part label out
+    [[ "$dev" =~ ^/dev/[a-zA-Z0-9]+$ ]] && [ -b "$dev" ] || { echo "Not a block device: $dev" >&2; return 1; }
+    disk=$(lsblk -dno PKNAME "$dev")
+    if [ -n "$disk" ]; then disk="/dev/$disk"; else disk="$dev"; fi
+    label=$(lsblk -nro LABEL "$disk" | grep -m1 .) || label="USB drive"
+
+    while read -r part; do
+        is_mounted "$part" || continue
+        if ! out=$(udisksctl unmount --no-user-interaction -b "$part" 2>&1); then
+            notify "Can't eject $label" "Something is still using it — close open files and terminals on the drive. ($out)" critical
+            return 1
+        fi
+    done < <(lsblk -nrpo NAME "$disk")
+
+    # Cuts power to the port so the stick's own cache is flushed and it's
+    # genuinely safe to pull — unmounting alone doesn't guarantee that
+    udisksctl power-off --no-user-interaction -b "$disk" >/dev/null 2>&1
+    notify "$label ejected" "Safe to remove."
+}
+
+cmd_watch() {
+    [ -f "$CONF_DIR/drive_doctor_off" ] && exit 0
+
+    # One watcher per session. PID-based takeover (same reasoning as
+    # tebian-settings): sway's exec_always re-runs this on every reload.
+    local pid_file="$RUN_DIR/watch.pid" old
+    old=$(cat "$pid_file" 2>/dev/null)
+    if [ -n "$old" ] && kill -0 "$old" 2>/dev/null &&
+       grep -q "tebian-drive-doctor" "/proc/$old/cmdline" 2>/dev/null; then
+        kill "$old" 2>/dev/null
+        sleep 0.3
+    fi
+    echo $$ > "$pid_file"
+
+    exec 3< <(udevadm monitor --udev --subsystem-match=block)
+    local mon_pid=$!
+    # Only clear the pid file if it is still ours — after a takeover it
+    # already belongs to the new instance
+    trap 'kill "$mon_pid" 2>/dev/null; [ "$(cat "$pid_file" 2>/dev/null)" = "$$" ] && rm -f "$pid_file"' EXIT
+    trap 'exit 0' TERM INT HUP
+    dlog "watcher started (pid $$)"
+
+    # Drives that were already plugged in when the session started
+    cmd_scan &
+
+    # Monitor lines look like:
+    #   UDEV  [8125.337] add      /devices/pci.../block/sda/sda1 (block)
+    # The event is published after udev has run its rules, so by now the
+    # probe result is already in the device's properties.
+    local _tag _time action devpath _rest
+    while read -r _tag _time action devpath _rest <&3; do
+        case "$action" in
+            add)    handle "/dev/${devpath##*/}" & ;;
+            remove) rm -f "$RUN_DIR/ignored/${devpath##*/}" ;;
+        esac
+    done
+}
+
+case "${1:-}" in
+    watch)  cmd_watch ;;
+    scan)   cmd_scan "${2:-}" ;;
+    handle) handle "${2:?usage: tebian-drive-doctor handle <device>}" 1 ;;
+    repair) cmd_repair "${2:?usage: tebian-drive-doctor repair <device>}" ;;
+    eject)  cmd_eject "${2:?usage: tebian-drive-doctor eject <device>}" ;;
+    *)
+        sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        ;;
+esac

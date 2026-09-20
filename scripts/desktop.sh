@@ -56,6 +56,7 @@ PACKAGES=(
     brightnessctl wob
     xdg-desktop-portal-wlr
     lxpolkit
+    udisks2 ntfs-3g dosfstools exfatprogs
 )
 
 # Optional packages (don't fail if missing)
@@ -218,6 +219,12 @@ fi
 # tebian-session must be system-wide (greetd can't access ~/.local/bin)
 sudo cp "$LOCAL_BIN/tebian-session" /usr/local/bin/tebian-session
 sudo chmod +x /usr/local/bin/tebian-session
+
+# Drive Doctor's root half: udev runs the probe as root on every USB plug-in,
+# so it must be root-owned and outside the user-writable ~/.local/bin
+sudo install -o root -g root -m 755 "$TEBIAN_DIR/scripts/tebian-drive-probe" /usr/local/bin/tebian-drive-probe
+sudo install -o root -g root -m 644 "$TEBIAN_DIR/configs/udev/90-tebian-drive-doctor.rules" /etc/udev/rules.d/90-tebian-drive-doctor.rules
+sudo udevadm control --reload 2>/dev/null || true
 
 # Create greeter user if needed
 if ! id greeter &>/dev/null; then

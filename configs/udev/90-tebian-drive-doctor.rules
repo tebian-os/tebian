@@ -1,0 +1,18 @@
+# Tebian Drive Doctor — health-probe USB filesystems as they are plugged in.
+#
+# The probe result lands on the device as the TEBIAN_FS_STATE property, where
+# tebian-drive-doctor (unprivileged, in the user's session) reads it back with
+# udevadm. Doing it here is what lets the user side stay unprivileged: only
+# root can read a raw block device.
+#
+# "change" is included so the state refreshes after a repair rewrites the
+# filesystem, instead of staying "dirty" until the drive is replugged.
+
+ACTION!="add|change", GOTO="tebian_drive_doctor_end"
+SUBSYSTEM!="block", GOTO="tebian_drive_doctor_end"
+ENV{ID_BUS}!="usb", GOTO="tebian_drive_doctor_end"
+ENV{ID_FS_USAGE}!="filesystem", GOTO="tebian_drive_doctor_end"
+
+IMPORT{program}="/usr/local/bin/tebian-drive-probe $devnode"
+
+LABEL="tebian_drive_doctor_end"

@@ -41,6 +41,11 @@ exec_always bash -c 'pkill -x mako; command -v mako && mako'
 # Optional: Polkit authentication agent (only if installed)
 exec_always bash -c 'pkill -x lxpolkit; command -v lxpolkit && lxpolkit'
 
+# Optional: USB drive automount + repair offer (only if installed).
+# No pkill here: the watcher replaces its own previous instance, and a
+# pkill -f on its name would also match this very bash -c line.
+exec_always bash -c 'command -v tebian-drive-doctor && tebian-drive-doctor watch'
+
 # Optional: Clipboard history (only if installed)
 exec_always bash -c 'pkill -f "wl-paste --watch cliphist"; command -v wl-paste && command -v cliphist && wl-paste --watch cliphist store'
 
