@@ -63,16 +63,31 @@ get_term() {
 # Options on stdin, choice on stdout. Held under a lock so a stick with two
 # sick partitions asks one question at a time instead of stacking menus.
 prompt() {
-    local text="$1"
+    local text="$1" options choice started try
+    options=$(cat)
     (
         flock 9
         if [ -n "${DRIVE_DOCTOR_MENU:-}" ]; then
-            $DRIVE_DOCTOR_MENU
-        elif declare -F tfuzzel >/dev/null; then
-            tfuzzel -d -w 56 -p " $text | "
-        else
-            fuzzel -d -w 56 -p " $text | "
+            printf '%s\n' "$options" | $DRIVE_DOCTOR_MENU
+            exit
         fi
+        # fuzzel is single-instance: while any other menu is open (launcher,
+        # Settings) ours exits at once with "already running", which is
+        # indistinguishable from the user pressing Esc. So wait for the
+        # screen to be free, and treat an answer that comes back faster than
+        # a human could give it as a lost race, not as a decision.
+        for try in 1 2 3 4 5; do
+            while pgrep -x fuzzel >/dev/null; do sleep 1; done
+            started=$SECONDS
+            if declare -F tfuzzel >/dev/null; then
+                choice=$(printf '%s\n' "$options" | tfuzzel -d -w 56 -p " $text | ")
+            else
+                choice=$(printf '%s\n' "$options" | fuzzel -d -w 56 -p " $text | ")
+            fi
+            if [ -n "$choice" ] || (( SECONDS - started >= 1 )); then break; fi
+            sleep 1
+        done
+        printf '%s\n' "$choice"
     ) 9>"$RUN_DIR/prompt.lock"
 }
 
@@ -142,6 +157,10 @@ ignore_dev() { touch "$RUN_DIR/ignored/$(basename "$1")"; }
 
 ask_sick() {
     local dev="$1" label="$2" size="$3" choice mnt
+    # The notification outlives the menu: a prompt can be missed or dismissed
+    # by accident, and the drive is sitting there unmounted either way
+    notify "$label has filesystem errors" \
+        "It was not mounted. Pick Repair in the menu — or bring the menu back later from Settings → More → Drives → Check Plugged-in Drives Now."
     choice=$(printf '%s\n' "󰑓 Repair and mount" "󰈈 Mount read-only" "󰅖 Ignore" |
         prompt "$label ($size) has errors")
 
@@ -272,33 +291,50 @@ cmd_repair() {
     fi
     echo
 
+    # The probe above opens the device read-write, which udev sees as a
+    # change and answers by probing it again — racing the repair tool for
+    # the device ("Failed to write lock: Resource temporarily unavailable").
+    # Let that finish, then hold udev's own per-disk lock for the duration
+    # so nothing else touches the drive while it is being rewritten.
+    udevadm settle --timeout=10 2>/dev/null
+    local disk lock
+    disk=$(lsblk -dno PKNAME "$dev")
+    lock=(udevadm lock --timeout=10 --device="/dev/${disk:-${dev#/dev/}}" --)
+
     # rc <= 1 is success for every tool below (fsck: 0 clean, 1 errors fixed)
     case "$fstype" in
         ntfs)
             echo "> ntfsfix -d $dev"
-            sudo ntfsfix -d "$dev"; rc=$?
+            sudo "${lock[@]}" ntfsfix -d "$dev"; rc=$?
             echo
             echo -e "${YELLOW}Note:${NC} ntfsfix fixes common problems and clears the dirty flag. It is"
             echo "not a full chkdsk — if this drive keeps acting up, run chkdsk /f on Windows."
             ;;
         vfat)
             echo "> fsck.vfat -a -w $dev"
-            sudo fsck.vfat -a -w "$dev"; rc=$?
+            sudo "${lock[@]}" fsck.vfat -a -w "$dev"; rc=$?
             ;;
         exfat)
             echo "> fsck.exfat -p $dev"
-            sudo fsck.exfat -p "$dev"; rc=$?
+            sudo "${lock[@]}" fsck.exfat -p "$dev"; rc=$?
             ;;
         ext2|ext3|ext4)
             echo "> e2fsck -p $dev"
-            sudo e2fsck -p "$dev"; rc=$?
+            sudo "${lock[@]}" e2fsck -p "$dev"; rc=$?
             ;;
         *)
             echo -e "${RED}No repair tool known for '$fstype'.${NC}"; rc=99
             ;;
     esac
     echo
-    dlog "$dev: repair ($fstype) exit=$rc"
+
+    # Exit codes alone can't be trusted — ntfsfix returns 0 even when it
+    # failed to open the device. The real test is whether the filesystem
+    # reads as clean now.
+    udevadm settle --timeout=10 2>/dev/null
+    state=$(sudo "$PROBE" "$dev" | sed 's/^TEBIAN_FS_STATE=//')
+    dlog "$dev: repair ($fstype) exit=$rc, state after=$state"
+    [ "$rc" -le 1 ] && [ "$state" != clean ] && rc=98
 
     if [ "$rc" -le 1 ]; then
         echo -e "${GREEN}Repair finished.${NC} Mounting..."
@@ -311,7 +347,11 @@ cmd_repair() {
             echo -e "${RED}Repaired, but mounting failed:${NC} $mnt"
         fi
     else
-        echo -e "${RED}The repair tool reported errors it could not fix (exit $rc).${NC}"
+        if [ "$rc" = 98 ]; then
+            echo -e "${RED}The repair did not take — the drive still reads as '$state'.${NC}"
+        else
+            echo -e "${RED}The repair tool reported errors it could not fix (exit $rc).${NC}"
+        fi
         [[ "$fstype" == ext* ]] && echo "Try a full interactive check: sudo e2fsck -f $dev"
         notify "$label could not be repaired" "See the terminal output for details." critical
     fi
