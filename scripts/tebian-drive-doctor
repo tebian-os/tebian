@@ -11,6 +11,8 @@
 #   tebian-drive-doctor handle <dev>   check one partition
 #   tebian-drive-doctor repair <dev>   repair + mount (interactive, in a terminal)
 #   tebian-drive-doctor eject <dev>    unmount everything on the drive, power off
+#   tebian-drive-doctor format <disk> <exfat|ntfs|ext4>
+#                                      wipe a USB drive into one full partition
 #
 # Split of duties: the health check itself runs as root from a udev rule
 # (tebian-drive-probe) and is published as the TEBIAN_FS_STATE device
@@ -380,6 +382,137 @@ cmd_eject() {
     notify "$label ejected" "Safe to remove."
 }
 
+# Erase a whole USB drive into a single partition — Windows' "Format" on a
+# drive that has been split up (a Ventoy stick, an old installer). Runs in a
+# terminal: this is the one command here that destroys data, so the user
+# sees the drive's contents and has to type ERASE before anything happens.
+cmd_format() {
+    local disk="$1" fs="$2" label part mnt tran model size table ptype mkfs i
+    if [[ ! "$disk" =~ ^/dev/[a-zA-Z0-9]+$ ]] || [ ! -b "$disk" ] ||
+       [ "$(lsblk -dno TYPE "$disk" 2>/dev/null)" != disk ]; then
+        echo -e "${RED}Not a whole disk: $disk${NC}"; read -rp "Press Enter to close. "; return 1
+    fi
+    case "$fs" in exfat|ntfs|ext4) ;; *)
+        echo -e "${RED}Unknown format '$fs' (use exfat, ntfs or ext4).${NC}"; read -rp "Press Enter to close. "; return 1 ;;
+    esac
+
+    # USB only, and never anything the running system lives on — the drive
+    # picker only offers USB disks, this re-checks in case of a stale menu
+    tran=$(lsblk -dno TRAN "$disk")
+    if [ "$tran" != usb ]; then
+        echo -e "${RED}$disk is not a USB drive — refusing.${NC}"; read -rp "Press Enter to close. "; return 1
+    fi
+    while read -r part mnt; do
+        case "$mnt" in
+            /|/boot|/boot/*|/usr|/var|/home|/run/live/*|"[SWAP]")
+                echo -e "${RED}$part is in use by the running system ($mnt) — refusing.${NC}"
+                read -rp "Press Enter to close. "; return 1 ;;
+        esac
+        if findmnt -n --fstab --evaluate -S "$part" >/dev/null 2>&1; then
+            echo -e "${RED}$part is listed in /etc/fstab — refusing.${NC}"
+            read -rp "Press Enter to close. "; return 1
+        fi
+    done < <(lsblk -nrpo NAME,MOUNTPOINT "$disk")
+
+    model=$(lsblk -dno MODEL "$disk" | sed 's/ *$//')
+    size=$(lsblk -dno SIZE "$disk" | tr -d ' ')
+    echo -e "${BLUE}Tebian Drive Doctor${NC} — format ${GREEN}${model:-USB drive}${NC} ($disk, $size)"
+    echo
+    echo "Everything on this drive will be erased:"
+    echo
+    lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$disk" | sed 's/^/    /'
+    echo
+
+    # Label limits differ: exFAT 11 characters, ext4 16, NTFS 32
+    local max=11
+    [ "$fs" = ext4 ] && max=16
+    [ "$fs" = ntfs ] && max=32
+    read -rp "Name for the drive [USB]: " label
+    label="${label:-USB}"
+    # Characters Windows rejects in labels, and anything non-printable
+    label=$(printf '%s' "$label" | tr -d '*?"<>|:/\\+=,;[]' | tr -cd '[:print:]')
+    label="${label:0:$max}"
+    [ -n "$label" ] || label=USB
+    echo
+    echo -e "Will create one ${GREEN}$fs${NC} partition named ${GREEN}$label${NC} using the whole ${size}."
+    read -rp "Type ERASE to wipe $disk: " confirm
+    if [ "$confirm" != ERASE ]; then
+        echo "Cancelled — nothing was changed."; read -rp "Press Enter to close. "; return 1
+    fi
+    echo
+
+    # Unmount through udisks first so file managers let go cleanly
+    while read -r part; do
+        is_mounted "$part" || continue
+        echo "> unmount $part"
+        if ! udisksctl unmount --no-user-interaction -b "$part" >/dev/null 2>&1 &&
+           ! sudo umount "$part"; then
+            echo -e "${RED}$part is busy — close anything using the drive and try again.${NC}"
+            read -rp "Press Enter to close. "; return 1
+        fi
+    done < <(lsblk -nrpo NAME "$disk" | tail -n +2)
+
+    # MBR is what every TV, car stereo and old BIOS reads; only drives past
+    # its 2 TiB limit get GPT. Type 7 covers both exFAT and NTFS on MBR.
+    if (( $(lsblk -bdno SIZE "$disk") > 2199023255552 )); then
+        table=gpt
+        [ "$fs" = ext4 ] && ptype=0FC63DAF-8483-4772-8E79-3D69D8477DE4 || ptype=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
+    else
+        table=dos
+        [ "$fs" = ext4 ] && ptype=83 || ptype=7
+    fi
+    case "$fs" in
+        exfat) mkfs=(mkfs.exfat -L "$label") ;;
+        ntfs)  mkfs=(mkfs.ntfs -Q -F -L "$label") ;;  # -Q: quick, like Windows' default
+        ext4)  mkfs=(mkfs.ext4 -F -L "$label") ;;
+    esac
+
+    # udev's per-disk lock keeps the watcher (and udisks) from grabbing
+    # half-made partitions; the events it held back replay on release, so
+    # the finished drive then shows up like a fresh plug-in.
+    echo -e "${YELLOW}Formatting — don't unplug the drive.${NC}"
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin sudo udevadm lock --timeout=30 --device="$disk" -- bash -c '
+        set -e
+        disk=$1 table=$2 ptype=$3; shift 3
+        echo "> wipefs -a $disk"
+        wipefs -a -q "$disk"
+        echo "> sfdisk: one $table partition"
+        echo "type=$ptype" | sfdisk -q -W always -X "$table" "$disk"
+        part=$(lsblk -nrpo NAME "$disk" | sed -n 2p)
+        for i in $(seq 50); do [ -b "$part" ] && break; sleep 0.1; done
+        [ -b "$part" ] || { echo "Partition did not appear"; exit 1; }
+        wipefs -a -q "$part"
+        echo "> $* $part"
+        "$@" "$part" >/dev/null
+    ' _ "$disk" "$table" "$ptype" "${mkfs[@]}"
+    local rc=$?
+    echo
+    if [ "$rc" -ne 0 ]; then
+        echo -e "${RED}Formatting failed (exit $rc).${NC} The drive may be write-protected or failing."
+        notify "Format failed" "${model:-USB drive} could not be formatted." critical
+        read -rp "Press Enter to close. "; return 1
+    fi
+    dlog "$disk: formatted as $fs ($table), label $label"
+
+    udevadm settle --timeout=10 2>/dev/null
+    part=$(lsblk -nrpo NAME "$disk" | sed -n 2p)
+    rm -f "$RUN_DIR/ignored/$(basename "$part")"
+    # A running watcher mounts it from the replayed plug-in event; mount it
+    # ourselves only if nothing has after a few seconds
+    for i in $(seq 10); do is_mounted "$part" && break; sleep 0.5; done
+    if ! is_mounted "$part"; then
+        mnt=$(do_mount "$part") && announce_mount "$label" "$mnt" "formatted"
+    fi
+    mnt=$(findmnt -n -o TARGET -S "$part" | head -1)
+    # ext4 is created owned by root — hand the new drive to the user
+    if [ "$fs" = ext4 ] && [ -n "$mnt" ]; then
+        sudo chown "$(id -u):$(id -g)" "$mnt"
+    fi
+    echo -e "${GREEN}Done.${NC} ${model:-USB drive} is now one $fs drive named $label${mnt:+, mounted at $mnt}."
+    echo
+    read -rp "Press Enter to close. "
+}
+
 cmd_watch() {
     [ -f "$CONF_DIR/drive_doctor_off" ] && exit 0
 
@@ -424,7 +557,9 @@ case "${1:-}" in
     handle) handle "${2:?usage: tebian-drive-doctor handle <device>}" 1 ;;
     repair) cmd_repair "${2:?usage: tebian-drive-doctor repair <device>}" ;;
     eject)  cmd_eject "${2:?usage: tebian-drive-doctor eject <device>}" ;;
+    format) cmd_format "${2:?usage: tebian-drive-doctor format <disk> <exfat|ntfs|ext4>}" \
+                       "${3:?usage: tebian-drive-doctor format <disk> <exfat|ntfs|ext4>}" ;;
     *)
-        sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         ;;
 esac

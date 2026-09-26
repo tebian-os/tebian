@@ -41,6 +41,7 @@ drives_menu() {
             opts+="\n󰑓 Healthy Drives (Current: Mount automatically)"
         fi
         opts+="\n󰍉 Check Plugged-in Drives Now"
+        opts+="\n󰋊 Format a Drive"
 
         # Without the root-side probe, sick drives are only noticed once a
         # mount has already failed — offer the install rather than hide it
@@ -89,6 +90,8 @@ drives_menu() {
             # --all: also re-ask about drives that were ignored earlier
             tebian-drive-doctor scan --all &
             return
+        elif [[ "$D_CHOICE" =~ "Format a Drive" ]]; then
+            format_drive_menu
         elif [[ "$D_CHOICE" =~ "Install Health Probe" ]]; then
             local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
             $TERM_CMD bash -c "
@@ -105,4 +108,42 @@ drives_menu() {
             tebian-drive-doctor eject "${BASH_REMATCH[1]}"
         fi
     done
+}
+
+# Pick a USB drive and a format; tebian-drive-doctor does the wiping in a
+# terminal, where it shows what's on the drive and asks for ERASE first
+format_drive_menu() {
+    local disks="" disk model size labels choice fs
+
+    while read -r disk; do
+        model=$(lsblk -dno MODEL "$disk" | sed 's/ *$//')
+        size=$(lsblk -dno SIZE "$disk" | tr -d ' ')
+        labels=$(lsblk -nro LABEL "$disk" | grep . | paste -sd, -)
+        disks+="󰋊 ${model:-USB drive} — $size${labels:+ ($labels)} [$disk]\n"
+    done < <(lsblk -dnrpo NAME,TRAN | awk '$2=="usb"{print $1}')
+
+    if [ -z "$disks" ]; then
+        tnotify "Drives" "No USB drives plugged in"
+        return
+    fi
+
+    choice=$(echo -e "${disks}󰌍 Back" | tfuzzel -d -w 60 -p " Format which drive? | ")
+    if is_back "$choice"; then return; fi
+    [[ "$choice" =~ \[(/dev/[a-zA-Z0-9]+)\]$ ]] || return
+    disk="${BASH_REMATCH[1]}"
+
+    choice=$(echo -e "exFAT — works on Windows, Mac, Linux, TVs (recommended)
+NTFS — Windows, best for big files and Windows backups
+ext4 — Linux only
+󰌍 Back" | tfuzzel -d -w 60 -p " Format as | ")
+    if is_back "$choice"; then return; fi
+    case "$choice" in
+        exFAT*) fs=exfat ;;
+        NTFS*)  fs=ntfs ;;
+        ext4*)  fs=ext4 ;;
+        *) return ;;
+    esac
+
+    $TERM_CMD tebian-drive-doctor format "$disk" "$fs"
+    tlog "Drives: format $disk as $fs requested"
 }

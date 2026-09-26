@@ -56,7 +56,7 @@ PACKAGES=(
     brightnessctl wob
     xdg-desktop-portal-wlr
     lxpolkit
-    udisks2 ntfs-3g dosfstools exfatprogs
+    udisks2 ntfs-3g dosfstools exfatprogs fdisk
 )
 
 # Optional packages (don't fail if missing)

@@ -1263,7 +1263,7 @@ KBEOF
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop python3-i3ipc \
                 pavucontrol adwaita-qt \
-                udisks2 ntfs-3g dosfstools exfatprogs \
+                udisks2 ntfs-3g dosfstools exfatprogs fdisk \
                 xdg-desktop-portal-wlr xdg-desktop-portal-gtk
 
             echo 88; echo "# Installing audio system..."
