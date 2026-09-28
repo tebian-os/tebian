@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: system.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -288,11 +289,17 @@ power_menu() {
     if is_back "$P_CHOICE"; then return; fi
 
     if [[ "$P_CHOICE" =~ "Reboot" || "$P_CHOICE" =~ "Shutdown" ]]; then
-        # Blank display before shutdown to prevent visible Sway→Plymouth transition
-        swaymsg output '*' dpms off 2>/dev/null
-        sudo sh -c 'echo 4 > /sys/class/graphics/fb0/blank' 2>/dev/null
-        if [[ "$P_CHOICE" =~ "Reboot" ]]; then systemctl reboot
-        else systemctl poweroff; fi
+        local action=poweroff
+        [[ "$P_CHOICE" =~ "Reboot" ]] && action=reboot
+        # Blank the display to hide the Sway→Plymouth transition — but only
+        # once systemd has accepted the request. Blanking first left a black
+        # screen with a live session behind it whenever the reboot was
+        # refused (an inhibitor, another user logged in).
+        if systemctl "$action"; then
+            swaymsg output '*' power off >/dev/null 2>&1
+        else
+            tnotify "Power" "The system refused to $action — see: systemd-inhibit --list"
+        fi
     elif [[ "$P_CHOICE" =~ "Sleep" ]]; then systemctl suspend
     elif [[ "$P_CHOICE" =~ "Logout" ]]; then swaymsg exit
     fi

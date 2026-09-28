@@ -41,18 +41,29 @@ bindsym $mod+w exec tebian-workspace
 # --- Example: Change Wallpaper ---
 # exec swaybg -i ~/Pictures/my-wallpaper.jpg -m fill
 
-# Workspace navigation
+# Workspace navigation. Mod+Alt rather than bare Ctrl+Left/Right: plain
+# Ctrl+arrows is word-jump in every terminal, editor and text field.
 workspace_auto_back_and_forth yes
 bindsym $mod+Tab workspace back_and_forth
-bindsym Ctrl+Left workspace prev
-bindsym Ctrl+Right workspace next
+bindsym $mod+Alt+Left workspace prev
+bindsym $mod+Alt+Right workspace next
 bindsym $mod+l exec gtklock -d
-for_window [app_id=".*"] floating enable # tebian-floating-mode
-for_window [class=".*"] floating enable # tebian-floating-mode
-bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
-bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0 # tebian-floating-mode
-bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0 # tebian-floating-mode
-bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center # tebian-floating-mode
-exec_always bash -c 'pkill -f tebian-edge-snap; sleep 0.2; tebian-edge-snap &' # tebian-floating-mode
-default_border normal 2 # tebian-titlebars
-default_floating_border normal 2 # tebian-titlebars
+
+# Lines between "# tebian:NAME {" and "# tebian:NAME }" are managed by
+# Settings (Mod+S) and rewritten when you change the matching option — put
+# your own lines outside these blocks.
+# tebian:floating-mode {
+for_window [app_id=".*"] floating enable
+for_window [class=".*"] floating enable
+bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0
+bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0
+bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0
+bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center
+# tebian:floating-mode }
+# tebian:edge-snap {
+exec_always bash -c 'pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap"; sleep 0.2; exec tebian-edge-snap'
+# tebian:edge-snap }
+# tebian:titlebars {
+default_border normal 2
+default_floating_border normal 2
+# tebian:titlebars }

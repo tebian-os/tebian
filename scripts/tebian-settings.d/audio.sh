@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: audio.sh
 # Sourced by tebian-settings — do not run directly
 

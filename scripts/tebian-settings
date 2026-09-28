@@ -3,10 +3,14 @@ export PATH="$HOME/.local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/tebian-common" ]; then
-    source "$SCRIPT_DIR/tebian-common"
+    TEBIAN_COMMON="$SCRIPT_DIR/tebian-common"
 elif [ -f "$HOME/.local/bin/tebian-common" ]; then
-    source "$HOME/.local/bin/tebian-common"
+    TEBIAN_COMMON="$HOME/.local/bin/tebian-common"
 fi
+# Exported so scripts run in a terminal ($TERM_CMD bash -c '...') can source
+# the same helpers
+export TEBIAN_COMMON
+[ -n "$TEBIAN_COMMON" ] && source "$TEBIAN_COMMON"
 
 get_term() {
     if command -v kitty &>/dev/null; then echo "kitty -e"
@@ -47,6 +51,10 @@ tnotify() {
     notify-send "$title" "$msg" 2>/dev/null
     tlog "$title: $msg"
 }
+
+# Settings reads its toggles from config.user blocks; convert any lines an
+# older version wrote before looking at them
+declare -F tebian_user_migrate >/dev/null && tebian_user_migrate
 
 # Source modular function files
 SETTINGS_DIR="${SCRIPT_DIR:-$HOME/.local/bin}/tebian-settings.d"

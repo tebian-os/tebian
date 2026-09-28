@@ -46,11 +46,13 @@ exec_always bash -c 'pkill -x lxpolkit; command -v lxpolkit && lxpolkit'
 # pkill -f on its name would also match this very bash -c line.
 exec_always bash -c 'command -v tebian-drive-doctor && tebian-drive-doctor watch'
 
-# Optional: Clipboard history (only if installed)
-exec_always bash -c 'pkill -f "wl-paste --watch cliphist"; command -v wl-paste && command -v cliphist && wl-paste --watch cliphist store'
+# Optional: Clipboard history (only if installed). The pattern is anchored:
+# unanchored, it also matches this bash -c line and kills it first.
+exec_always bash -c 'pkill -f "^wl-paste --watch cliphist"; command -v wl-paste && command -v cliphist && exec wl-paste --watch cliphist store'
 
-# Optional: Screen lock & idle (only if installed)
-exec bash -c 'command -v swayidle && swayidle -w timeout 300 "gtklock -d" timeout 600 "swaymsg output * power off" resume "swaymsg output * power on" before-sleep "gtklock -d"'
+# Optional: Screen lock & idle (only if installed). Timeout and on/off come
+# from ~/.config/tebian/idle.conf, which Settings -> Lock writes.
+exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_idle_start'
 
 # Keybindings
 bindsym $mod+Return exec $term
@@ -65,7 +67,9 @@ bindsym $mod+Shift+e exec swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg e
 # WOB (Wayland Overlay Bar) Setup - optional
 set $wob_sock $XDG_RUNTIME_DIR/wob.sock
 set $wob_vol ~/.local/bin/wob-vol
-exec_always bash -c 'command -v wob && rm -f $XDG_RUNTIME_DIR/wob.sock && mkfifo $XDG_RUNTIME_DIR/wob.sock && tail -f $XDG_RUNTIME_DIR/wob.sock 2>/dev/null | wob &'
+# Stops the previous tail|wob pair first — every reload used to start
+# another one and leave the old pair running on a deleted fifo
+exec_always bash -c 'command -v wob >/dev/null || exit 0; pkill -f "^tail -f $XDG_RUNTIME_DIR/wob.sock"; pkill -x wob; rm -f $XDG_RUNTIME_DIR/wob.sock && mkfifo $XDG_RUNTIME_DIR/wob.sock && { tail -f $XDG_RUNTIME_DIR/wob.sock 2>/dev/null | wob & }'
 
 # Media Keys with WOB Feedback (using awk for proper decimal handling)
 bindsym XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+ && sh -c 'command -v wob && wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk "{print int(\$2*100)}" > $wob_sock'
@@ -136,9 +140,11 @@ bar {
     position top
     status_command ~/.local/bin/status.sh
     mode dock
-    
-    bindsym button1 exec tebian-menu
-    
+
+    # Right-click opens the menu. Left-click (button1) stays with swaybar,
+    # which needs it to switch workspaces from their buttons.
+    bindsym button3 exec tebian-menu
+
     colors {
         background $base
         statusline $text

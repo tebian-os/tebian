@@ -17,6 +17,42 @@ export QT_QPA_PLATFORM=wayland
 export SDL_VIDEODRIVER=wayland
 export _JAVA_AWT_WM_NONREPARENTING=1
 
+# User environment from ~/.config/environment.d (the systemd location, where
+# Settings writes e.g. the NVIDIA variables). systemd only hands these to
+# user services, not to sway, so export them here. Plain KEY=VALUE lines
+# only; values are taken literally, no expansion.
+for envfile in "$HOME"/.config/environment.d/*.conf; do
+    [ -f "$envfile" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in
+            ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
+        esac
+        [ "$key" = "$line" ] && continue
+        # Strip one pair of surrounding quotes
+        case "$value" in
+            \"*\") value=${value#\"}; value=${value%\"} ;;
+            \'*\') value=${value#\'}; value=${value%\'} ;;
+        esac
+        export "$key=$value"
+    done < "$envfile"
+done
+unset envfile line key value
+
+# Fix up Settings-managed lines in config.user written by older versions
+# before sway parses it (see tebian_user_migrate in tebian-common)
+if [ -f "$HOME/.local/bin/tebian-common" ] && command -v bash >/dev/null; then
+    bash -c '. "$HOME/.local/bin/tebian-common" && tebian_user_migrate' >/dev/null 2>&1
+fi
+
+# Sway refuses to start on the proprietary NVIDIA driver unless told it's
+# unsupported — without this, installing the driver leaves a black screen
+[ -d /sys/module/nvidia ] && set -- --unsupported-gpu "$@"
+
 # Ensure D-Bus session bus
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null; then
     exec dbus-run-session sway "$@"

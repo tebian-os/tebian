@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Drives — USB automount, repair offers and safe eject.
 # The work happens in tebian-drive-doctor; this is only its control panel.
 

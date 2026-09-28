@@ -2,5 +2,8 @@
 vt = 7
 
 [default_session]
-command = "sway --config /etc/nwg-hello/sway-config"
+# Sway refuses the proprietary NVIDIA driver without --unsupported-gpu, which
+# would leave the login screen black after installing it. Wrapped in sh -c so
+# the check runs whether or not greetd sources a profile first.
+command = "sh -c 'exec sway $([ -d /sys/module/nvidia ] && echo --unsupported-gpu) --config /etc/nwg-hello/sway-config'"
 user = "greeter"

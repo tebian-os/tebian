@@ -90,18 +90,14 @@ touch "$MARKER"
 
 # Enable effects in config
 if [ -f "$HOME/.config/sway/config.user" ]; then
-    # Add swayfx effects if not already present
-    if ! grep -q '# tebian-swayfx' "$HOME/.config/sway/config.user" 2>/dev/null; then
-        cat >> "$HOME/.config/sway/config.user" << 'FXEOF'
-blur enable # tebian-swayfx
-blur_xray off # tebian-swayfx
-blur_passes 2 # tebian-swayfx
-blur_radius 5 # tebian-swayfx
-corner_radius 8 # tebian-swayfx
-shadows enable # tebian-swayfx
-shadow_blur_radius 20 # tebian-swayfx
-default_dim_inactive 0.1 # tebian-swayfx
-FXEOF
+    # A managed block, not "cmd # tebian-swayfx" lines: sway has no
+    # end-of-line comments, so a trailing marker became extra arguments.
+    # Old-style lines from earlier versions are migrated by tebian-common.
+    if ! tebian_block_has swayfx && ! grep -q '# tebian-swayfx' "$HOME/.config/sway/config.user" 2>/dev/null; then
+        tebian_block_set swayfx \
+            "blur enable" "blur_xray off" "blur_passes 2" "blur_radius 5" \
+            "corner_radius 8" "shadows enable" "shadow_blur_radius 20" \
+            "default_dim_inactive 0.1"
     fi
 fi
 

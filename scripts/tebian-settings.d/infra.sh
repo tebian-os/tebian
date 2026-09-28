@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: infra.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -368,28 +369,58 @@ docker_create_menu() {
 
     if is_back "$CR_CHOICE"; then return; fi
 
-    local image="" cname="" docker_cmd=""
+    # Published ports bind to 127.0.0.1: Docker's own iptables rules bypass
+    # UFW, so "0.0.0.0" would put these on the LAN (café WiFi included) no
+    # matter what the firewall says. Passwords are random per container.
+    local image="" cname="" post_msg="" secret=""
+    local -a run_args=()
     if [[ "$CR_CHOICE" =~ "Alpine SSH" ]]; then
         image="alpine:latest"
         cname="alpine-ssh"
-        docker_cmd="docker run --name alpine-ssh -d -p 2222:22 alpine:latest sh -c 'apk add --no-cache openssh && ssh-keygen -A && echo \"PermitRootLogin yes\" >> /etc/ssh/sshd_config && echo \"root:alpine\" | chpasswd && /usr/sbin/sshd -D'"
+        local pubkeys=""
+        pubkeys=$(cat "$HOME"/.ssh/id_*.pub 2>/dev/null)
+        if [ -n "$pubkeys" ]; then
+            # Key login only — no password to leak
+            run_args=(-p 127.0.0.1:2222:22 -e "AUTH_KEYS=$pubkeys" "$image" sh -c \
+                'apk add --no-cache openssh && ssh-keygen -A && mkdir -p /root/.ssh && printf "%s\n" "$AUTH_KEYS" > /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && printf "PermitRootLogin prohibit-password\nPasswordAuthentication no\n" >> /etc/ssh/sshd_config && exec /usr/sbin/sshd -D')
+            post_msg="SSH: ssh root@localhost -p 2222 (logs in with your SSH key)"
+        else
+            secret=$(docker_random_secret)
+            run_args=(-p 127.0.0.1:2222:22 -e "ROOT_PW=$secret" "$image" sh -c \
+                'apk add --no-cache openssh && ssh-keygen -A && echo "root:$ROOT_PW" | chpasswd && echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && exec /usr/sbin/sshd -D')
+            post_msg="SSH: ssh root@localhost -p 2222"
+        fi
     elif [[ "$CR_CHOICE" =~ "Nginx" ]]; then
         image="nginx:alpine"
         cname="nginx"
-        docker_cmd="docker run --name nginx -d -p 8080:80 nginx:alpine"
+        run_args=(-p 127.0.0.1:8080:80 "$image")
+        post_msg="Web server: http://localhost:8080"
     elif [[ "$CR_CHOICE" =~ "PostgreSQL" ]]; then
         image="postgres:16-alpine"
         cname="postgres"
-        docker_cmd="docker run --name postgres -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -v postgres_data:/var/lib/postgresql/data postgres:16-alpine"
+        secret=$(docker_random_secret)
+        run_args=(-p 127.0.0.1:5432:5432 -e "POSTGRES_PASSWORD=$secret" -v postgres_data:/var/lib/postgresql/data "$image")
+        post_msg="Connect: psql -h localhost -U postgres"
+        # POSTGRES_PASSWORD only applies when the data volume is created
+        if docker volume inspect postgres_data >/dev/null 2>&1; then
+            post_msg+=$'\nNote: the existing postgres_data volume keeps its old password — the one below is ignored.'
+        fi
     elif [[ "$CR_CHOICE" =~ "Redis" ]]; then
         image="redis:alpine"
         cname="redis"
-        docker_cmd="docker run --name redis -d -p 6379:6379 redis:alpine"
+        secret=$(docker_random_secret)
+        run_args=(-p 127.0.0.1:6379:6379 "$image" redis-server --requirepass "$secret")
+        post_msg="Connect: redis-cli -h localhost --askpass"
     elif [[ "$CR_CHOICE" =~ "Custom" ]]; then
         image=$(echo "" | tfuzzel -d -p " 📝 Image (e.g. nginx:latest): ")
         [ -z "$image" ] && return
-        cname=$(echo "$image" | sed 's|.*/||;s|:.*||')
-        docker_cmd="docker run --name $cname -d $image"
+        # Typed text ends up in a command line — only image-reference characters
+        if [[ ! "$image" =~ ^[a-z0-9][a-z0-9._/:@-]*$ ]]; then
+            tnotify "Docker" "Not a valid image name: $image"
+            return
+        fi
+        cname=$(echo "$image" | sed 's|.*/||;s|[:@].*||')
+        run_args=("$image")
     fi
 
     [ -z "$image" ] && return
@@ -399,25 +430,39 @@ docker_create_menu() {
         return
     fi
 
-    local post_msg=""
-    if [[ "$CR_CHOICE" =~ "Alpine SSH" ]]; then
-        post_msg="SSH: ssh root@localhost -p 2222 (password: alpine)"
-    elif [[ "$CR_CHOICE" =~ "Nginx" ]]; then
-        post_msg="Web server: http://localhost:8080"
-    elif [[ "$CR_CHOICE" =~ "PostgreSQL" ]]; then
-        post_msg="Connect: psql -h localhost -U postgres (password: postgres)"
-    elif [[ "$CR_CHOICE" =~ "Redis" ]]; then
-        post_msg="Connect: redis-cli -h localhost"
+    # Credentials are shown once in the terminal and kept in a file only the
+    # user can read — not in notifications, which end up in mako's history
+    local cred_file="$HOME/.config/tebian/docker-credentials"
+    if [ -n "$secret" ]; then
+        mkdir -p "$(dirname "$cred_file")"
+        ( umask 077; printf '%s  %s  password: %s\n' "$(date '+%F %R')" "$cname" "$secret" >> "$cred_file" )
+        chmod 600 "$cred_file"
     fi
 
-    $TERM_CMD bash -c "echo '=== Creating $cname ==='
-    echo 'Image: $image'
-    echo ''
-    $docker_cmd
-    echo ''
-    echo '✅ $cname created!'
-    [ -n '$post_msg' ] && echo '' && echo '$post_msg'
-    read -p 'Press Enter to close...'"
+    CNAME="$cname" POST_MSG="$post_msg" SECRET="$secret" CRED_FILE="$cred_file" \
+    $TERM_CMD bash -c '
+        echo "=== Creating $CNAME ==="
+        echo ""
+        if docker run --name "$CNAME" -d "$@"; then
+            echo ""
+            echo "✅ $CNAME created (reachable from this computer only)."
+            [ -n "$POST_MSG" ] && echo "" && echo "$POST_MSG"
+            if [ -n "$SECRET" ]; then
+                echo "Password: $SECRET"
+                echo "(saved in $CRED_FILE)"
+            fi
+        else
+            echo ""
+            echo "❌ docker run failed."
+        fi
+        read -p "Press Enter to close..."
+    ' _ "${run_args[@]}"
+    [ -n "$secret" ] && tnotify "Docker" "$cname created — password saved in ~/.config/tebian/docker-credentials"
+}
+
+# 20 random URL-safe characters
+docker_random_secret() {
+    head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20
 }
 
 # ── VM/Container Config Helpers ──

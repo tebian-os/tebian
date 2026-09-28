@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: wifi-bt.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -186,7 +187,7 @@ bluetooth_menu() {
 
             B_OPTS="󰂲 Turn Bluetooth OFF
 ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
-󰀱 Open bluetuith (full manager)
+󰀱 Open Blueman (full manager)
 󰌍 Back"
 
             B_CHOICE=$(echo -e "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
@@ -201,11 +202,13 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
             elif [[ "$B_CHOICE" =~ "Scan for new devices" ]]; then
                 bt_scan_and_pair
 
-            elif [[ "$B_CHOICE" =~ "Open bluetuith" ]]; then
-                if command -v bluetuith &>/dev/null; then
-                    $TERM_CMD bluetuith
+            elif [[ "$B_CHOICE" =~ "Open Blueman" ]]; then
+                # bluetuith isn't packaged for Debian; Blueman ships with
+                # the Tebian desktop and is the full GUI manager
+                if command -v blueman-manager &>/dev/null || tebian_term_apt_install blueman; then
+                    setsid blueman-manager >/dev/null 2>&1 &
                 else
-                    tnotify "Bluetooth" "bluetuith not installed"
+                    tnotify "Bluetooth" "Blueman could not be installed"
                 fi
 
             elif [[ "$B_CHOICE" =~ "(connected)" ]]; then

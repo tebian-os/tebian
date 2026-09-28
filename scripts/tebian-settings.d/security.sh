@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: security.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -96,8 +97,18 @@ security_menu() {
         AUTOUPDATE_LABEL="󰚰 Auto Security Updates (OFF)"
     fi
 
+    # Passwordless sudo — tested by behaviour (sudoers files are root-only
+    # readable): -k ignores cached credentials, so this only succeeds when a
+    # NOPASSWD rule applies
+    if sudo -k -n true 2>/dev/null; then
+        SUDO_LABEL="🔑 Passwordless sudo (Current: On)"
+    else
+        SUDO_LABEL="🔑 Passwordless sudo (Current: Off)"
+    fi
+
     SEC_OPTS="$PARANOID_LABEL
 $SEC_LABEL
+$SUDO_LABEL
 $SSH_LABEL
 $SSH_KEY_LABEL
 $KERN_LABEL
@@ -189,6 +200,8 @@ $AUTOUPDATE_LABEL
             read -p 'Press Enter to close...'"
             tnotify "Security" "Standard security restored"
         fi
+    elif [[ "$S_CHOICE" =~ "Passwordless sudo" ]]; then
+        passwordless_sudo_toggle "$S_CHOICE"
     elif [[ "$S_CHOICE" =~ "Enable Remote Access" ]]; then
         $TERM_CMD bash -c "echo 'Enabling SSH Server...';
         sudo apt update && sudo apt install -y openssh-server;
@@ -286,6 +299,7 @@ SYSEOF
             echo '';
             echo 'Done!';
             read -p 'Press Enter to close...'"
+            firejail_desktop_overrides remove
             tnotify "Security" "Firejail sandboxing disabled"
         fi
     elif [[ "$S_CHOICE" =~ "Firejail" ]]; then
@@ -306,7 +320,8 @@ SYSEOF
         echo '';
         echo 'Done! Networked apps will launch in Firejail sandbox.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "Firejail sandboxing enabled"
+        firejail_desktop_overrides add
+        tnotify "Security" "Firejail sandboxing enabled (menu launches included)"
     elif [[ "$S_CHOICE" =~ "Tor" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         TOR_ACT=$(echo -e "󰗹 Disable Tor Service\n󰆴 Disable & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
         if is_back "$TOR_ACT"; then continue; fi
@@ -335,39 +350,71 @@ SYSEOF
         read -p 'Press Enter to close...'"
         tnotify "Security" "Tor routing enabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
-        $TERM_CMD bash -c "echo 'Disabling DNS-over-TLS...';
-        sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
-        sudo rm -f /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf;
-        sudo systemctl restart systemd-resolved 2>/dev/null;
-        # Restore NetworkManager DNS control
-        sudo rm -f /etc/resolv.conf 2>/dev/null;
-        sudo systemctl restart NetworkManager 2>/dev/null;
-        echo 'Done! Using default DNS.';
-        read -p 'Press Enter to close...'"
+        $TERM_CMD bash -c '
+            source "$TEBIAN_COMMON"
+            echo "Disabling DNS-over-TLS..."
+            dns_privacy_off
+            echo ""
+            if dns_works; then
+                echo "✅ Done — using your network'"'"'s DNS again."
+            else
+                echo "⚠️  DNS is not answering yet. Reconnecting to your network usually"
+                echo "   fixes it; /etc/resolv.conf is back under NetworkManager."
+            fi
+            read -p "Press Enter to close..."
+        '
         tnotify "Security" "DNS Privacy disabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]]; then
         DNS_PROVIDER=$(echo -e "🛡️ Quad9 (privacy + malware blocking)\n⚡ Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
         if is_back "$DNS_PROVIDER"; then continue; fi
-        $TERM_CMD bash -c "echo 'Enabling DNS-over-TLS...';
-        sudo mkdir -p /etc/systemd/resolved.conf.d;
-        if [[ '$DNS_PROVIDER' =~ 'Cloudflare' ]]; then
-            printf '[Resolve]\nDNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
+        local dns_servers
+        case "$DNS_PROVIDER" in
+            *Cloudflare*) dns_servers="1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com" ;;
+            *Quad9*)      dns_servers="9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net" ;;
+            *) continue ;;
+        esac
+        # Servers go in through the environment, never pasted into the script
+        DNS_SERVERS="$dns_servers" $TERM_CMD bash -c '
+            source "$TEBIAN_COMMON"
+            echo "Enabling DNS-over-TLS..."
+            echo ""
+            # systemd-resolved is its own package on Debian 13 and is not
+            # installed by default. Installing it is the first step, and the
+            # only one allowed to fail: nothing has been changed yet.
+            if ! dpkg-query -W -f="\${Status}" systemd-resolved 2>/dev/null | grep -q "ok installed"; then
+                if ! sudo apt install -y systemd-resolved; then
+                    echo ""
+                    echo "❌ Could not install systemd-resolved — DNS left unchanged."
+                    read -p "Press Enter to close..."; exit 1
+                fi
+            fi
+            sudo mkdir -p /etc/systemd/resolved.conf.d /etc/NetworkManager/conf.d
+            printf "[Resolve]\nDNS=%s\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n" "$DNS_SERVERS" |
+                sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf > /dev/null
+            printf "[main]\ndns=systemd-resolved\n" |
+                sudo tee /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf > /dev/null
+            sudo systemctl enable systemd-resolved
+            sudo systemctl restart systemd-resolved
+            sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+            sudo systemctl restart NetworkManager
+            echo ""
+            echo "Checking that names still resolve..."
+            if dns_works; then
+                echo "✅ DNS-over-TLS enabled."
+            else
+                # Some networks block port 853 (DNS-over-TLS). Leaving the
+                # machine without DNS is worse than no privacy — roll back.
+                echo "❌ No DNS answers over TLS (the network may block port 853)."
+                echo "   Rolling back to your network'"'"'s DNS..."
+                dns_privacy_off
+            fi
+            read -p "Press Enter to close..."
+        '
+        if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
+            tnotify "Security" "DNS Privacy enabled"
         else
-            printf '[Resolve]\nDNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf;
-        fi;
-        # Tell NetworkManager to use systemd-resolved
-        sudo mkdir -p /etc/NetworkManager/conf.d;
-        printf '[main]\ndns=systemd-resolved\n' | sudo tee /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf;
-        sudo systemctl enable --now systemd-resolved 2>/dev/null;
-        sudo systemctl restart systemd-resolved;
-        if [ ! -L /etc/resolv.conf ] || ! readlink /etc/resolv.conf | grep -q stub-resolv; then
-            sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf;
-        fi;
-        sudo systemctl restart NetworkManager 2>/dev/null;
-        echo '';
-        echo 'Done! DNS-over-TLS enabled.';
-        read -p 'Press Enter to close...'"
-        tnotify "Security" "DNS Privacy enabled"
+            tnotify "Security" "DNS Privacy not enabled — see the terminal output"
+        fi
     elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         CONFIRM=$(echo -e "No, keep auto-updates\nYes, disable auto-updates" | tfuzzel -d --match-mode=exact -p " ⚠️ Disable auto security updates? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
@@ -396,7 +443,142 @@ SYSEOF
     elif [[ "$S_CHOICE" =~ "View Security Logs" ]]; then
         security_logs_menu
     fi
+    security_record_profile
     done
+}
+
+# Passwordless sudo on/off. Tebian manages two drop-ins:
+#   /etc/sudoers.d/tebian-sudo      USER ALL=(ALL:ALL) ALL          (password)
+#   /etc/sudoers.d/tebian-nopasswd  USER ALL=(ALL:ALL) NOPASSWD: ALL
+# Turning it off installs the password rule BEFORE removing any NOPASSWD
+# grant: installs from before 3.2 gave the user sudo only through a
+# NOPASSWD file (not the sudo group), so deleting it alone would take sudo
+# away entirely. Every file is checked with visudo before it goes in.
+passwordless_sudo_toggle() {
+    local choice="$1"
+    if [[ ! "$USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        tnotify "Security" "Unexpected username '$USER' — not touching sudoers"
+        return
+    fi
+    if [[ "$choice" =~ "Current: On" ]]; then
+        CONFIRM=$(echo -e "No, keep it\nYes, require my password for sudo" | tfuzzel -d --match-mode=exact -p " Require password for sudo? | ")
+        [[ "$CONFIRM" =~ "Yes" ]] || return
+        TUSER="$USER" $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1 — nothing was changed."; read -p "Press Enter to close..."; exit 1; }
+            u="$TUSER"
+            # Without a usable password, password-required sudo is no sudo
+            [ "$(sudo passwd -S "$u" 2>/dev/null | cut -d" " -f2)" = P ] ||
+                fail "$u has no password set (run: passwd)"
+            tmp=$(mktemp)
+            printf "%s ALL=(ALL:ALL) ALL\n" "$u" > "$tmp"
+            sudo visudo -cqf "$tmp" || fail "Generated rule did not validate"
+            sudo install -o root -g root -m 0440 "$tmp" /etc/sudoers.d/tebian-sudo || fail "Could not install the rule"
+            rm -f "$tmp"
+            sudo rm -f /etc/sudoers.d/tebian-nopasswd
+            # The installer'"'"'s old per-user file — removed only if it holds
+            # nothing but that one line; anything else is the admin'"'"'s
+            legacy="/etc/sudoers.d/$u"
+            if sudo test -f "$legacy"; then
+                if [ "$(sudo grep -cvE "^[[:space:]]*(#|$)" "$legacy")" = 1 ] &&
+                   sudo grep -qxE "$u ALL=\(ALL(:ALL)?\) NOPASSWD: ?ALL" "$legacy"; then
+                    sudo rm -f "$legacy"
+                else
+                    echo "Note: $legacy has other rules and was left as is."
+                fi
+            fi
+            sudo visudo -cq || echo "⚠️  visudo reports a problem in another sudoers file — check: sudo visudo -c"
+            echo ""
+            if sudo -k -n true 2>/dev/null; then
+                echo "⚠️  sudo still works without a password — another sudoers rule grants it."
+            else
+                echo "✅ sudo now asks for your password."
+            fi
+            read -p "Press Enter to close..."
+        '
+    else
+        TUSER="$USER" $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1 — nothing was changed."; read -p "Press Enter to close..."; exit 1; }
+            u="$TUSER"
+            echo "Allow sudo without a password for $u."
+            echo "Anything running as you — including a compromised browser — then"
+            echo "gets root silently. Password-required is the safer default."
+            echo ""
+            read -p "Type YES to continue: " c
+            [ "$c" = YES ] || fail "Cancelled"
+            tmp=$(mktemp)
+            printf "%s ALL=(ALL:ALL) NOPASSWD: ALL\n" "$u" > "$tmp"
+            sudo visudo -cqf "$tmp" || fail "Generated rule did not validate"
+            sudo install -o root -g root -m 0440 "$tmp" /etc/sudoers.d/tebian-nopasswd || fail "Could not install the rule"
+            rm -f "$tmp"
+            echo ""
+            echo "✅ Passwordless sudo enabled."
+            read -p "Press Enter to close..."
+        '
+    fi
+}
+
+# The /usr/local/bin symlinks only catch launches by bare name. Menu entries
+# whose Exec= holds an absolute path (firefox-esr's is
+# /usr/lib/firefox-esr/firefox-esr) bypass them and run unsandboxed. For each
+# sandboxed app, write a user override of its .desktop file with the path
+# replaced by the bare name. Overrides are tagged so "remove" deletes only
+# ours — never a .desktop file the user wrote.
+firejail_desktop_overrides() {
+    local mode="$1" dir="$HOME/.local/share/applications" f
+    mkdir -p "$dir"
+    if [ "$mode" = remove ]; then
+        grep -l '^X-Tebian-Firejail=true' "$dir"/*.desktop 2>/dev/null | while read -r f; do rm -f "$f"; done
+        return 0
+    fi
+
+    local link bin target
+    for link in /usr/local/bin/*; do
+        [ -L "$link" ] && readlink "$link" | grep -q firejail || continue
+        bin=$(basename "$link")
+        target=$(readlink -f "/usr/bin/$bin" 2>/dev/null)
+        for f in /usr/share/applications/*.desktop; do
+            [ -f "$f" ] || continue
+            local out="$dir/$(basename "$f")"
+            # A user's own override wins; leave it alone
+            [ -f "$out" ] && ! grep -q '^X-Tebian-Firejail=true' "$out" && continue
+            BIN="$bin" TARGET="$target" awk '
+                BEGIN { hit = 0 }
+                /^Exec=/ {
+                    cmd = substr($0, 6); split(cmd, w, " ")
+                    if (w[1] ~ /^\// && (w[1] ~ "/" ENVIRON["BIN"] "$" || (ENVIRON["TARGET"] != "" && w[1] == ENVIRON["TARGET"]))) {
+                        sub(/^[^ ]+/, ENVIRON["BIN"], cmd); $0 = "Exec=" cmd; hit = 1
+                    }
+                }
+                { lines[++n] = $0 }
+                END {
+                    if (!hit) exit 1
+                    for (i = 1; i <= n; i++) {
+                        print lines[i]
+                        if (lines[i] == "[Desktop Entry]") print "X-Tebian-Firejail=true"
+                    }
+                }' "$f" > "$out.tmp" && mv "$out.tmp" "$out" || rm -f "$out.tmp"
+        done
+    done
+}
+
+# Write the profile the system is actually in to tebian.conf, so the next
+# tebian-rebuild re-applies what the user chose here instead of the default
+# ("standard"). Derived from the machine's state rather than from which
+# menu entry was picked — the user can cancel inside the terminal.
+security_record_profile() {
+    local profile=minimal
+    if systemctl is-enabled --quiet tebian-tor-iptables 2>/dev/null; then
+        profile=paranoid
+    elif [ -f /etc/sysctl.d/99-tebian-hardening.conf ]; then
+        profile=hardened
+    elif grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null; then
+        profile=standard
+    fi
+    tebian_conf_set SECURITY_PROFILE "$profile"
+    # What Settings just did is what's applied — tebian-rebuild compares
+    # against this so it doesn't re-run a whole profile over the toggles
+    mkdir -p "$HOME/.local/share/tebian"
+    echo "$profile" > "$HOME/.local/share/tebian/security-applied"
 }
 
 apparmor_menu() {
@@ -491,7 +673,7 @@ security_tools_menu() {
             "nmap|Nmap - Network Scanner|apt" \
             "masscan|Masscan - Fast Port Scanner|apt" \
             "whois|Whois - Domain Lookup|apt" \
-            "dnsutils|DNS Utils (dig, nslookup)|apt" \
+            "bind9-dnsutils|DNS Utils (dig, nslookup)|apt" \
             "netdiscover|Netdiscover - ARP Scanner|apt" \
             "recon-ng|Recon-ng - OSINT Framework|apt"
     elif [[ "$ST_CHOICE" =~ "Web" ]]; then
@@ -501,17 +683,17 @@ security_tools_menu() {
             "gobuster|Gobuster - Dir/DNS Brute|apt" \
             "dirb|Dirb - Web Content Scanner|apt" \
             "burpsuite|Burp Suite (Kali Container)|distrobox" \
-            "zaproxy|ZAP Proxy - Web App Scanner|apt"
+            "zaproxy|ZAP Proxy - Web App Scanner (Kali Container)|distrobox"
     elif [[ "$ST_CHOICE" =~ "Exploitation" ]]; then
         sec_tool_install_menu "Exploitation Frameworks" \
             "metasploit-framework|Metasploit (Kali Container)|distrobox" \
-            "exploitdb|ExploitDB - Exploit Archive|apt" \
+            "exploitdb|ExploitDB - Exploit Archive (Kali Container)|distrobox" \
             "set|Social Engineering Toolkit (Kali Container)|distrobox"
     elif [[ "$ST_CHOICE" =~ "Wireless" ]]; then
         sec_tool_install_menu "Wireless Attacks" \
             "aircrack-ng|Aircrack-ng - WiFi Cracking|apt" \
             "wifite|Wifite - Automated WiFi Attacks|apt" \
-            "kismet|Kismet - Wireless Sniffer|apt"
+            "kismet|Kismet - Wireless Sniffer (Kali Container)|distrobox"
     elif [[ "$ST_CHOICE" =~ "Password" ]]; then
         sec_tool_install_menu "Password Cracking" \
             "john|John the Ripper|apt" \

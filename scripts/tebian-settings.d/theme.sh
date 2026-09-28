@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: theme.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -158,53 +159,36 @@ apply_feel() {
         swaymsg '[class=".*"] floating disable' 2>/dev/null
     fi
 
-    # --- Bar position ---
+    # --- Bar position (bar_set_* live in ui.sh; they persist to config.user) ---
     if [[ "$FEEL" == "Windows" ]]; then
-        swaymsg "bar bar-0 position bottom" 2>/dev/null &
-        sed -i -E 's/^[[:space:]]*position[[:space:]]+(top|bottom)/    position bottom/' "$HOME/.config/sway/config"
-        sed -i 's/^anchor = .*/anchor = top center/' "$HOME/.config/wob/wob.ini" 2>/dev/null
+        bar_set_position bottom
     elif [[ "$FEEL" == "macOS" || "$FEEL" == "Tiling" || "$FEEL" == "Minimal" ]]; then
-        swaymsg "bar bar-0 position top" 2>/dev/null &
-        sed -i -E 's/^[[:space:]]*position[[:space:]]+(top|bottom)/    position top/' "$HOME/.config/sway/config"
-        sed -i 's/^anchor = .*/anchor = bottom center/' "$HOME/.config/wob/wob.ini" 2>/dev/null
+        bar_set_position top
     fi
 
-    # --- Bar visibility (scoped to bar block to avoid matching mode "resize") ---
+    # --- Bar visibility ---
     if [[ "$FEEL" == "Minimal" ]]; then
-        swaymsg "bar mode invisible" 2>/dev/null &
-        safe_sed_replace "^bar " "^}" 's/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)/    mode invisible/' "$HOME/.config/sway/config"
+        bar_set_mode invisible
     elif [[ "$FEEL" == "Tiling" ]]; then
-        swaymsg "bar mode hide" 2>/dev/null &
-        safe_sed_replace "^bar " "^}" 's/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)/    mode hide/' "$HOME/.config/sway/config"
+        bar_set_mode hide
     else
-        swaymsg "bar mode dock" 2>/dev/null &
-        safe_sed_replace "^bar " "^}" 's/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)/    mode dock/' "$HOME/.config/sway/config"
+        bar_set_mode dock
     fi
 
     # --- Title bars ---
-    local config_user="$HOME/.config/sway/config.user"
     if [[ "$FEEL" == "Windows" || "$FEEL" == "macOS" ]]; then
-        # Enable title bars
-        grep -q '# tebian-titlebars' "$config_user" 2>/dev/null || {
-            # "-on" suffix matters: ui.sh's Title Bars toggle greps for it
-            echo "default_border normal 2 # tebian-titlebars-on" >> "$config_user"
-            echo "default_floating_border normal 2 # tebian-titlebars-on" >> "$config_user"
-        }
+        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
         swaymsg "default_border normal 2" 2>/dev/null
     else
-        # Disable title bars
-        sed -i '/# tebian-titlebars/d' "$config_user" 2>/dev/null
+        tebian_block_remove titlebars
         swaymsg "default_border pixel 2" 2>/dev/null
     fi
 
-    # --- Gaps (persist to config.user so swaymsg reload doesn't reset them) ---
-    sed -i '/# tebian-feel-gaps/d' "$config_user" 2>/dev/null
+    # --- Gaps ---
     if [[ "$FEEL" == "Minimal" ]]; then
-        echo "gaps inner 0 # tebian-feel-gaps" >> "$config_user"
-        echo "gaps outer 0 # tebian-feel-gaps" >> "$config_user"
+        tebian_block_set gaps "gaps inner 0" "gaps outer 0"
     else
-        echo "gaps inner 4 # tebian-feel-gaps" >> "$config_user"
-        echo "gaps outer 0 # tebian-feel-gaps" >> "$config_user"
+        tebian_block_set gaps "gaps inner 4" "gaps outer 0"
     fi
 
     # Save current feel
@@ -232,22 +216,31 @@ font_menu() {
         local font_pkg="$2"
         local font_size="$3"
 
-        # Install the font package
-        sudo apt install -y "$font_pkg" 2>/dev/null
+        # Needs a terminal for sudo; don't switch to a font that isn't there
+        if ! tebian_term_apt_install "$font_pkg"; then
+            tnotify "Font" "$font_pkg could not be installed — font unchanged"
+            return
+        fi
 
-        # Apply to configs
-        sed -i "s/^font pango:.*/font pango:$font_name $font_size/" ~/.config/sway/config
-        sed -i "s/^font_family.*/font_family $font_name/" ~/.config/kitty/kitty.conf
-        sed -i "s/^font=.*/font=$font_name:size=$font_size/" ~/.config/fuzzel/fuzzel.ini
+        # Sway: a config.user block, which overrides the base config's font
+        # line and survives updates. kitty/fuzzel: rewrite their font lines,
+        # and record the choice so theme switches keep it (tebian-theme reads
+        # ~/.config/tebian/font).
+        tebian_block_set font "font pango:$font_name $font_size"
+        mkdir -p "$HOME/.config/tebian"
+        printf 'FONT_NAME=%q\nFONT_SIZE=%q\n' "$font_name" "$font_size" > "$HOME/.config/tebian/font"
+        tebian_apply_app_fonts
 
-        notify-send "Font" "$font_name applied" 2>/dev/null
+        tnotify "Font" "$font_name applied"
         swaymsg reload 2>/dev/null &
     }
 
     if [[ "$F_CHOICE" =~ "JetBrains Mono" ]]; then
         apply_font "JetBrains Mono" "fonts-jetbrains-mono" "11"
     elif [[ "$F_CHOICE" =~ "Terminus" ]]; then
-        apply_font "Terminus" "fonts-terminus" "12"
+        # -otb: the OpenType build. Plain fonts-terminus is bitmap-only,
+        # which pango and kitty can't use
+        apply_font "Terminus" "fonts-terminus-otb" "12"
     elif [[ "$F_CHOICE" =~ "Inter" ]]; then
         apply_font "Inter" "fonts-inter" "11"
     elif [[ "$F_CHOICE" =~ "Hack" ]]; then

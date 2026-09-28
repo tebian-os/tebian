@@ -4,6 +4,13 @@
 # Uses include files instead of fragile sed replacements
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
 THEME_DIR="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes"
 CONFIG_DIR="$HOME/.config"
 SWAY_THEME_FILE="$CONFIG_DIR/sway/theme"
@@ -11,8 +18,8 @@ SWAY_THEME_FILE="$CONFIG_DIR/sway/theme"
 apply_theme() {
     local theme="$1"
     local theme_path="$THEME_DIR/$theme"
-    
-    if [ ! -d "$theme_path" ]; then
+
+    if [[ ! "$theme" =~ ^[a-z0-9-]+$ ]] || [ ! -d "$theme_path" ]; then
         notify-send "Theme Error" "Theme '$theme' not found"
         exit 1
     fi
@@ -31,6 +38,10 @@ apply_theme() {
     mkdir -p "$CONFIG_DIR/fuzzel"
     cp "$theme_path/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
     
+    # The theme files carry the default font; put back the one the user
+    # picked in Settings -> Fonts, if any
+    declare -F tebian_apply_app_fonts >/dev/null && tebian_apply_app_fonts
+
     # 5. Mako
     mkdir -p "$CONFIG_DIR/mako"
     cp "$theme_path/mako" "$CONFIG_DIR/mako/config"
@@ -179,6 +190,10 @@ CSSEOF
             sudo -n sed -i "s|background-image: url(\"[^\"]*\")|background-image: url(\"$wallpaper\")|" "$nwg_css" 2>/dev/null
         fi
     fi
+
+    # Record the choice in tebian.conf: tebian-rebuild re-applies the theme
+    # named there, and would otherwise reset it to the default
+    declare -F tebian_conf_set >/dev/null && tebian_conf_set TEBIAN_THEME "$theme"
 
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then

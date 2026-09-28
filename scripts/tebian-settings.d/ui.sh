@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: ui.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -29,22 +30,23 @@ ui_menu() {
     fi
 
     # Detect floating mode
-    if grep -q '# tebian-floating-mode' "$HOME/.config/sway/config.user" 2>/dev/null; then
+    if tebian_block_has floating-mode; then
         FLOAT_LABEL="󰀻 Switch to Tiling (Current: Floating)"
     else
         FLOAT_LABEL="󰖲 Switch to Floating (Current: Tiling)"
     fi
 
     # Detect title bars (theme sets pixel 2 = OFF by default)
-    if grep -q '# tebian-titlebars-on' "$HOME/.config/sway/config.user" 2>/dev/null; then
+    if tebian_block_has titlebars; then
         TITLE_LABEL="󰘖 Title Bars (ON)"
     else
         TITLE_LABEL="󰘕 Title Bars (OFF)"
     fi
 
-    # Detect edge snapping (only show when floating mode is active)
-    if grep -q '# tebian-floating-mode' "$HOME/.config/sway/config.user" 2>/dev/null; then
-        if pgrep -f tebian-edge-snap > /dev/null 2>&1; then
+    # Detect edge snapping (only show when floating mode is active). The
+    # config block is the setting; the process may just be restarting.
+    if tebian_block_has floating-mode; then
+        if tebian_block_has edge-snap; then
             SNAP_LABEL="󰖲 Edge Snapping (ON)"
         else
             SNAP_LABEL="󰖳 Edge Snapping (OFF)"
@@ -55,7 +57,7 @@ ui_menu() {
 
     # Detect window effects (swayfx)
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
-        if grep -q '^blur enable # tebian-swayfx' "$HOME/.config/sway/config.user" 2>/dev/null; then
+        if [ "$(fx_get blur)" = enable ]; then
             FX_LABEL="󰖲 Window Effects (ON)"
         else
             FX_LABEL="󰖲 Window Effects (OFF)"
@@ -88,24 +90,18 @@ ${SNAP_LABEL:+$SNAP_LABEL
         rm -f "$HOME/.config/tebian/no_icons"
         tnotify "Tebian UI" "Icon Mode Enabled"
     elif [[ "$U_CHOICE" =~ "Show Bar Always" ]]; then
-        swaymsg "bar mode dock" &
-        safe_sed_replace "^bar " "^}" 's/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)/    mode dock/' "$HOME/.config/sway/config"
+        bar_set_mode dock
         tnotify "UI" "Bar set to always visible"
     elif [[ "$U_CHOICE" =~ "Hide Bar" ]]; then
-        swaymsg "bar mode hide" &
-        safe_sed_replace "^bar " "^}" 's/^[[:space:]]*mode[[:space:]]+(hide|dock|invisible)/    mode hide/' "$HOME/.config/sway/config"
+        bar_set_mode hide
         tnotify "UI" "Bar hidden (press Super to show)"
     elif [[ "$U_CHOICE" =~ "Bar Position" ]]; then
         if [[ "$BAR_POS" == "top" ]]; then
-            sed -i -E 's/^[[:space:]]*position[[:space:]]+(top|bottom)/    position bottom/' "$HOME/.config/sway/config"
-            sed -i 's/^anchor = .*/anchor = top center/' "$HOME/.config/wob/wob.ini" 2>/dev/null
+            bar_set_position bottom
             tnotify "UI" "Bar moved to bottom"
-            swaymsg reload 2>/dev/null &
         else
-            sed -i -E 's/^[[:space:]]*position[[:space:]]+(top|bottom)/    position top/' "$HOME/.config/sway/config"
-            sed -i 's/^anchor = .*/anchor = bottom center/' "$HOME/.config/wob/wob.ini" 2>/dev/null
+            bar_set_position top
             tnotify "UI" "Bar moved to top"
-            swaymsg reload 2>/dev/null &
         fi
     elif [[ "$U_CHOICE" =~ "Switch to Floating" ]]; then
         setup_floating_mode
@@ -119,7 +115,7 @@ ${SNAP_LABEL:+$SNAP_LABEL
         swaymsg reload 2>/dev/null &
     elif [[ "$U_CHOICE" =~ "Title Bars" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
         # Turn OFF title bars — remove override, theme's pixel 2 takes effect
-        sed -i '/# tebian-titlebars/d' "$HOME/.config/sway/config.user" 2>/dev/null
+        tebian_block_remove titlebars
         swaymsg "default_border pixel 2" 2>/dev/null
         swaymsg "default_floating_border pixel 2" 2>/dev/null
         swaymsg '[app_id=".*"] border pixel 2' 2>/dev/null
@@ -127,28 +123,25 @@ ${SNAP_LABEL:+$SNAP_LABEL
         tnotify "UI" "Title bars disabled"
     elif [[ "$U_CHOICE" =~ "Title Bars" ]]; then
         # Turn ON title bars — write explicit override to beat theme's pixel 2
-        sed -i '/# tebian-titlebars/d' "$HOME/.config/sway/config.user" 2>/dev/null
-        idempotent_append "default_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
-        idempotent_append "default_floating_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
+        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
         swaymsg "default_border normal 2" 2>/dev/null
         swaymsg "default_floating_border normal 2" 2>/dev/null
         swaymsg '[app_id=".*"] border normal 2' 2>/dev/null
         swaymsg '[class=".*"] border normal 2' 2>/dev/null
         tnotify "UI" "Title bars enabled"
     elif [[ "$U_CHOICE" =~ "Edge Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
-        pkill -f tebian-edge-snap 2>/dev/null
-        sed -i '/tebian-edge-snap/d' "$HOME/.config/sway/config.user" 2>/dev/null
+        tebian_block_remove edge-snap
+        pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
         tnotify "UI" "Edge snapping disabled"
     elif [[ "$U_CHOICE" =~ "Edge Snapping" ]] && [[ "$U_CHOICE" =~ "OFF" ]]; then
-        if ! command -v python3 &>/dev/null || ! python3 -c "import i3ipc" 2>/dev/null; then
-            tnotify "Edge Snap" "Installing python3-i3ipc..."
-            sudo apt install -y python3-i3ipc 2>/dev/null
+        if ! tebian_term_apt_install python3-i3ipc; then
+            tnotify "Edge Snap" "python3-i3ipc could not be installed — edge snapping stays off"
+            continue
         fi
-        pkill -f tebian-edge-snap 2>/dev/null
+        tebian_block_set edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
+        pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
         sleep 0.2
-        tebian-edge-snap &
-        disown
-        idempotent_append "exec_always bash -c 'pkill -f tebian-edge-snap; sleep 0.2; tebian-edge-snap &' # tebian-floating-mode" "$HOME/.config/sway/config.user"
+        setsid tebian-edge-snap >/dev/null 2>&1 &
         tnotify "UI" "Edge snapping enabled"
     elif [[ "$U_CHOICE" =~ "Window Effects" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
         window_effects_install
@@ -172,7 +165,7 @@ Mod+Shift+? ··· Show Key Helper
 Print ··· Screenshot (Region)
 Shift+Print ··· Screenshot (Full)
 Mod+V ··· Clipboard History
-Ctrl+Left/Right ··· Switch Workspace
+Mod+Alt+Left/Right ··· Previous/Next Workspace
 󰌍 Back"
         echo -e "$KEY_LIST" | tfuzzel -d -p " 󰌌 Keybinds | "
     elif [[ "$U_CHOICE" =~ "Input Devices" ]]; then
@@ -304,6 +297,25 @@ Fast (0.5)
     done
 }
 
+# Bar settings persist as config.user blocks: sway applies
+# `bar bar-0 <option>` after the bar {} block, and unlike the main config,
+# config.user survives updates and rebuilds
+bar_set_mode() {
+    swaymsg "bar bar-0 mode $1" >/dev/null 2>&1 &
+    tebian_block_set bar-mode "bar bar-0 mode $1"
+}
+
+bar_set_position() {
+    swaymsg "bar bar-0 position $1" >/dev/null 2>&1 &
+    tebian_block_set bar-position "bar bar-0 position $1"
+    # wob sits opposite the bar
+    local anchor="bottom center"
+    [ "$1" = bottom ] && anchor="top center"
+    sed -i "s/^anchor = .*/anchor = $anchor/" "$HOME/.config/wob/wob.ini" 2>/dev/null
+    pkill -x wob 2>/dev/null   # sway's exec_always line restarts it on reload
+    swaymsg reload >/dev/null 2>&1 &
+}
+
 window_effects_install() {
     INSTALL_CHOICE=$(echo -e "󰖲 Install SwayFX (build from source, ~5 min)\n󰌍 Back" | tfuzzel -d -p " 󰖲 Effects | ")
     if [[ "$INSTALL_CHOICE" =~ "Install" ]]; then
@@ -311,22 +323,40 @@ window_effects_install() {
     fi
 }
 
+# SwayFX settings live in the "swayfx" block of config.user. Values are read
+# back from it, and every change rewrites the whole block from them.
+fx_get() {
+    tebian_block_get swayfx | awk -v k="$1" '$1 == k { print $2; exit }'
+}
+
+fx_write() {
+    local blur="$1" passes="$2" radius="$3" corner="$4" shadows="$5" shadow_r="$6" dim="$7"
+    tebian_block_set swayfx \
+        "blur $blur" \
+        "blur_xray off" \
+        "blur_passes $passes" \
+        "blur_radius $radius" \
+        "corner_radius $corner" \
+        "shadows $shadows" \
+        "shadow_blur_radius $shadow_r" \
+        "default_dim_inactive $dim"
+    swaymsg reload 2>/dev/null &
+}
+
 window_effects_menu() {
     while true; do
-    # Read current values from config.user
-    local cfg="$HOME/.config/sway/config.user"
-    local blur_on=false
-    grep -q '^blur enable # tebian-swayfx' "$cfg" 2>/dev/null && blur_on=true
+    local cur_blur cur_passes cur_radius cur_corner cur_shadows cur_shadow cur_dim
+    cur_blur=$(fx_get blur)
+    cur_passes=$(fx_get blur_passes)
+    cur_radius=$(fx_get blur_radius)
+    cur_corner=$(fx_get corner_radius)
+    cur_shadows=$(fx_get shadows)
+    cur_shadow=$(fx_get shadow_blur_radius)
+    cur_dim=$(fx_get default_dim_inactive)
+    : "${cur_blur:=enable}" "${cur_passes:=2}" "${cur_radius:=5}" "${cur_corner:=8}" \
+      "${cur_shadows:=enable}" "${cur_shadow:=20}" "${cur_dim:=0.1}"
 
-    local cur_passes cur_radius cur_corner cur_shadow cur_dim
-    cur_passes=$(grep '^blur_passes' "$cfg" 2>/dev/null | awk '{print $2}')
-    cur_radius=$(grep '^blur_radius' "$cfg" 2>/dev/null | awk '{print $2}')
-    cur_corner=$(grep '^corner_radius' "$cfg" 2>/dev/null | awk '{print $2}')
-    cur_shadow=$(grep '^shadow_blur_radius' "$cfg" 2>/dev/null | awk '{print $2}')
-    cur_dim=$(grep '^default_dim_inactive' "$cfg" 2>/dev/null | awk '{print $2}')
-    : "${cur_passes:=2}" "${cur_radius:=5}" "${cur_corner:=8}" "${cur_shadow:=20}" "${cur_dim:=0.1}"
-
-    if $blur_on; then
+    if [ "$cur_blur" = enable ]; then
         TOGGLE_LABEL="󰖲 Effects: ON (click to disable)"
     else
         TOGGLE_LABEL="󰖲 Effects: OFF (click to enable)"
@@ -344,20 +374,15 @@ window_effects_menu() {
     if is_back "$FX_CHOICE"; then return; fi
 
     if [[ "$FX_CHOICE" =~ "Effects:" ]]; then
-        if $blur_on; then
-            # Disable all effects — remember current values first, the seds
-            # below overwrite them with 0 and re-enable must restore them
+        if [ "$cur_blur" = enable ]; then
+            # Disabling zeroes corners and dim; remember them so re-enabling
+            # restores the user's values rather than the defaults
             mkdir -p "$HOME/.config/tebian"
             printf 'corner=%s\ndim=%s\n' "$cur_corner" "$cur_dim" > "$HOME/.config/tebian/fx-saved"
-            sed -i 's/^blur enable # tebian-swayfx/blur disable # tebian-swayfx/' "$cfg"
-            sed -i 's/^shadows enable # tebian-swayfx/shadows disable # tebian-swayfx/' "$cfg"
-            sed -i 's/^corner_radius [0-9]* # tebian-swayfx/corner_radius 0 # tebian-swayfx/' "$cfg"
-            sed -i 's/^default_dim_inactive [0-9.]* # tebian-swayfx/default_dim_inactive 0 # tebian-swayfx/' "$cfg"
-            swaymsg reload 2>/dev/null &
+            fx_write disable "$cur_passes" "$cur_radius" 0 disable "$cur_shadow" 0
             tnotify "Effects" "Window effects disabled"
         else
-            # Enable all effects — restore the values saved at disable time
-            # (cur_corner/cur_dim read "0" from the zeroed config)
+            local saved
             if [ -f "$HOME/.config/tebian/fx-saved" ]; then
                 saved=$(sed -n 's/^corner=//p' "$HOME/.config/tebian/fx-saved" | head -1)
                 [ -n "$saved" ] && [ "$saved" != "0" ] && cur_corner="$saved"
@@ -366,11 +391,7 @@ window_effects_menu() {
             fi
             [ "$cur_corner" = "0" ] && cur_corner=8
             [ "$cur_dim" = "0" ] && cur_dim=0.1
-            sed -i 's/^blur disable # tebian-swayfx/blur enable # tebian-swayfx/' "$cfg"
-            sed -i 's/^shadows disable # tebian-swayfx/shadows enable # tebian-swayfx/' "$cfg"
-            sed -i "s/^corner_radius 0 # tebian-swayfx/corner_radius $cur_corner # tebian-swayfx/" "$cfg"
-            sed -i "s/^default_dim_inactive 0 # tebian-swayfx/default_dim_inactive $cur_dim # tebian-swayfx/" "$cfg"
-            swaymsg reload 2>/dev/null &
+            fx_write enable "$cur_passes" "$cur_radius" "$cur_corner" enable "$cur_shadow" "$cur_dim"
             tnotify "Effects" "Window effects enabled"
         fi
 
@@ -386,9 +407,7 @@ Heavy (3 passes, radius 8)
             *Heavy*) _bp=3; _br=8 ;;
             *) continue ;;
         esac
-        sed -i "s/^blur_passes .* # tebian-swayfx/blur_passes $_bp # tebian-swayfx/" "$cfg"
-        sed -i "s/^blur_radius .* # tebian-swayfx/blur_radius $_br # tebian-swayfx/" "$cfg"
-        swaymsg reload 2>/dev/null &
+        fx_write "$cur_blur" "$_bp" "$_br" "$cur_corner" "$cur_shadows" "$cur_shadow" "$cur_dim"
         tnotify "Effects" "Blur set to $_bp passes, radius $_br"
 
     elif [[ "$FX_CHOICE" =~ "Corner Radius" ]]; then
@@ -407,8 +426,7 @@ Pill (16)
             *Pill*) _cr=16 ;;
             *) continue ;;
         esac
-        sed -i "s/^corner_radius .* # tebian-swayfx/corner_radius $_cr # tebian-swayfx/" "$cfg"
-        swaymsg reload 2>/dev/null &
+        fx_write "$cur_blur" "$cur_passes" "$cur_radius" "$_cr" "$cur_shadows" "$cur_shadow" "$cur_dim"
         tnotify "Effects" "Corner radius set to $_cr"
 
     elif [[ "$FX_CHOICE" =~ "Shadows" ]]; then
@@ -425,9 +443,7 @@ Heavy (40)
             *Heavy*) _sr=40; _se="enable" ;;
             *) continue ;;
         esac
-        sed -i "s/^shadow_blur_radius .* # tebian-swayfx/shadow_blur_radius $_sr # tebian-swayfx/" "$cfg"
-        sed -i "s/^shadows .* # tebian-swayfx/shadows $_se # tebian-swayfx/" "$cfg"
-        swaymsg reload 2>/dev/null &
+        fx_write "$cur_blur" "$cur_passes" "$cur_radius" "$cur_corner" "$_se" "$_sr" "$cur_dim"
         tnotify "Effects" "Shadows set to $_se (radius $_sr)"
 
     elif [[ "$FX_CHOICE" =~ "Dim Inactive" ]]; then
@@ -444,8 +460,7 @@ Strong (0.35)
             *Strong*) _dv="0.35" ;;
             *) continue ;;
         esac
-        sed -i "s/^default_dim_inactive .* # tebian-swayfx/default_dim_inactive $_dv # tebian-swayfx/" "$cfg"
-        swaymsg reload 2>/dev/null &
+        fx_write "$cur_blur" "$cur_passes" "$cur_radius" "$cur_corner" "$cur_shadows" "$cur_shadow" "$_dv"
         tnotify "Effects" "Dim inactive set to $_dv"
     fi
     done

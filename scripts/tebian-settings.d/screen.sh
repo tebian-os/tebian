@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: screen.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -506,9 +507,14 @@ lock_menu() {
         return
     fi
 
-    if pgrep -x swayidle > /dev/null; then
+    # The saved setting is the truth (swayidle may just be restarting);
+    # tebian_idle_start in tebian-common reads the same file at login
+    local AUTOLOCK=on LOCK_MINUTES=5
+    # shellcheck disable=SC1090
+    [ -f "$TEBIAN_IDLE_CONF" ] && . "$TEBIAN_IDLE_CONF"
+    if [ "$AUTOLOCK" = on ]; then
         IDLE_STATE="ON"
-        IDLE_LABEL="󰗊 Disable Auto-Lock (Currently: ON)"
+        IDLE_LABEL="󰗊 Disable Auto-Lock (Currently: ON, ${LOCK_MINUTES} min)"
     else
         IDLE_STATE="OFF"
         IDLE_LABEL="󰗈 Enable Auto-Lock (Currently: OFF)"
@@ -535,15 +541,11 @@ $KEY_LABEL
         gtklock -d
     elif [[ "$L_CHOICE" =~ "Auto-Lock" ]]; then
         if [[ "$IDLE_STATE" == "ON" ]]; then
-            pkill swayidle
+            tebian_idle_set off "$LOCK_MINUTES"
             tnotify "Screen Lock" "Auto-lock disabled"
         else
-            swayidle -w \
-                timeout 300 'gtklock -d' \
-                timeout 600 'swaymsg "output * power off"' \
-                resume 'swaymsg "output * power on"' \
-                before-sleep 'gtklock -d' &
-            tnotify "Screen Lock" "Auto-lock enabled (5 min)"
+            tebian_idle_set on "$LOCK_MINUTES"
+            tnotify "Screen Lock" "Auto-lock enabled ($LOCK_MINUTES min)"
         fi
     elif [[ "$L_CHOICE" =~ "Super+L" ]]; then
         mkdir -p ~/.config/sway
@@ -576,16 +578,10 @@ lock_timeout_menu() {
 
     # Extract number of minutes (first number in the string)
     MINS=$(echo "$T_CHOICE" | sed 's/[^0-9]*//' | grep -oE '^[0-9]+')
-    SECS=$((MINS * 60))
-    SCREEN_OFF=$((SECS * 2))
+    [[ "$MINS" =~ ^[0-9]+$ ]] || return
 
-     # Restart swayidle with new timeout
-     pkill swayidle 2>/dev/null
-     swayidle -w \
-         timeout "$SECS" 'gtklock -d' \
-         timeout "$SCREEN_OFF" 'swaymsg "output * power off"' \
-         resume 'swaymsg "output * power on"' \
-         before-sleep 'gtklock -d' &
-     tnotify "Screen Lock" "Lock timeout set to $MINS minutes"
+    # Picking a timeout implies auto-lock on; saved so it survives a login
+    tebian_idle_set on "$MINS"
+    tnotify "Screen Lock" "Lock timeout set to $MINS minutes"
 }
 

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: software.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -93,7 +94,7 @@ $cinnamon_status
                 gnome-shell gnome-session gnome-control-center \
                 gnome-terminal nautilus gnome-text-editor \
                 gnome-system-monitor gnome-tweaks \
-                adwaita-icon-theme-full 2>&1
+                adwaita-icon-theme 2>&1
             # Prevent gdm from taking over — keep greetd
             sudo systemctl disable gdm 2>/dev/null || true
             sudo systemctl enable greetd 2>/dev/null || true
@@ -295,7 +296,10 @@ terminal_menu() {
     HAS_ALACRITTY=$(command -v alacritty &>/dev/null && echo "✓" || echo " ")
     HAS_GNOME=$(command -v gnome-terminal &>/dev/null && echo "✓" || echo " ")
     
-    DEFAULT_TERM=$(grep '^set \$term' ~/.config/sway/config 2>/dev/null | cut -d' ' -f3)
+    # The choice lives in config.user's "terminal" block; the base config's
+    # `set $term` is only the fallback
+    DEFAULT_TERM=$(tebian_block_get terminal | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
+    [ -n "$DEFAULT_TERM" ] || DEFAULT_TERM=$(grep '^set \$term' ~/.config/sway/config 2>/dev/null | cut -d' ' -f3)
     
     TERM_OPTS="[$HAS_KITTY] kitty - GPU accelerated, feature-rich (Default)
 [$HAS_FOOT] foot - Lightweight, fastest startup
@@ -311,31 +315,27 @@ Current default: ${DEFAULT_TERM:-kitty}
     if [[ "$T_CHOICE" =~ "Current default" ]]; then continue; fi
 
     if [[ "$T_CHOICE" =~ "kitty" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing kitty terminal...'
-            sudo apt update && sudo apt install -y kitty
+        $TERM_CMD bash -c '
+            echo "Installing kitty terminal..."
+            sudo apt update && sudo apt install -y kitty || { echo ""; echo "Install failed."; read -p "Press Enter..."; exit 1; }
 
-            echo ''
-            echo 'Setting as default terminal...'
-            sed -i 's/^set \$term .*/set \$term kitty/' ~/.config/sway/config
-
+            # Only seed a config if there is none — an existing one carries
+            # the theme and font already chosen
+            glass="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/glass/kitty.conf"
             mkdir -p ~/.config/kitty
-            if [ -f "${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/glass/kitty.conf" ]; then
-                cp "${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/glass/kitty.conf" ~/.config/kitty/kitty.conf
+            if [ ! -f ~/.config/kitty/kitty.conf ] && [ -f "$glass" ]; then
+                cp "$glass" ~/.config/kitty/kitty.conf
             fi
 
-            echo ''
-            echo 'Done! kitty is now your default terminal.'
-            read -p 'Press Enter...'
-        "
+            echo ""
+            echo "Done! kitty is now your default terminal."
+            read -p "Press Enter..."
+        '
     elif [[ "$T_CHOICE" =~ "foot" ]]; then
         $TERM_CMD bash -c "
             echo 'Installing foot terminal...'
-            sudo apt update && sudo apt install -y foot
+            sudo apt update && sudo apt install -y foot || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
 
-            echo ''
-            echo 'Setting as default terminal...'
-            sed -i 's/^set \$term .*/set \$term foot/' ~/.config/sway/config
 
             mkdir -p ~/.config/foot
             cat > ~/.config/foot/foot.ini << 'FOOTCONF'
@@ -358,11 +358,8 @@ FOOTCONF
     elif [[ "$T_CHOICE" =~ "alacritty" ]]; then
         $TERM_CMD bash -c "
             echo 'Installing alacritty terminal...'
-            sudo apt update && sudo apt install -y alacritty
+            sudo apt update && sudo apt install -y alacritty || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
 
-            echo ''
-            echo 'Setting as default terminal...'
-            sed -i 's/^set \$term .*/set \$term alacritty/' ~/.config/sway/config
 
             mkdir -p ~/.config/alacritty
             cat > ~/.config/alacritty/alacritty.toml << 'ALACONF'
@@ -386,17 +383,28 @@ ALACONF
     elif [[ "$T_CHOICE" =~ "gnome-terminal" ]]; then
         $TERM_CMD bash -c "
             echo 'Installing gnome-terminal...'
-            sudo apt update && sudo apt install -y gnome-terminal
+            sudo apt update && sudo apt install -y gnome-terminal || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
 
-            echo ''
-            echo 'Setting as default terminal...'
-            sed -i 's/^set \$term .*/set \$term gnome-terminal/' ~/.config/sway/config
 
             echo ''
             echo 'Done! gnome-terminal is now your default terminal.'
             read -p 'Press Enter...'
         "
     else
+        continue
+    fi
+
+    # Make it the default only if the install worked. `set $term` alone
+    # isn't enough: sway expands variables as it reads each line, so the
+    # Mod+Return binding in the base config already holds the old value
+    # and has to be declared again after it.
+    local picked
+    picked=$(echo "$T_CHOICE" | grep -oE 'kitty|foot|alacritty|gnome-terminal' | head -1)
+    if [ -n "$picked" ] && command -v "$picked" >/dev/null; then
+        tebian_block_set terminal "set \$term $picked" 'bindsym $mod+Return exec $term'
+        tnotify "Terminal" "$picked is now the default terminal (Mod+Return)"
+    else
+        tnotify "Terminal" "${picked:-Terminal} was not installed — default unchanged"
         continue
     fi
 
@@ -468,37 +476,35 @@ software_menu() {
     elif [[ "$A_CHOICE" =~ "Install Distrobox" ]]; then
         $TERM_CMD bash -c "echo 'Installing Distrobox & Podman...'; sudo apt update && sudo apt install -y distrobox podman; echo '--------------------------------'; echo 'To use AUR:'; echo '1. distrobox create --name arch --image archlinux'; echo '2. distrobox enter arch'; echo '3. git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si'; read -p 'Done! Press Enter...'"
     elif [[ "$A_CHOICE" =~ "Install Nix" ]]; then
-        $TERM_CMD bash -c "echo 'Installing Nix Package Manager...'
-        echo ''
-        echo 'Downloading installer with signature verification...'
-        INSTALLER=/tmp/nix-install.sh
-        curl -fsSL -o \"\$INSTALLER\" https://nixos.org/nix/install
-        # Verify the installer is a shell script (basic check)
-        if ! head -1 \"\$INSTALLER\" | grep -q '^#!/'; then
-            echo 'ERROR: Downloaded file does not look like a shell script.'
-            rm -f \"\$INSTALLER\"
-            read -p 'Press Enter...'
-            exit 1
-        fi
-        chmod +x \"\$INSTALLER\"
-        sh \"\$INSTALLER\" --daemon
-        rm -f \"\$INSTALLER\"
-        echo ''
-        echo 'Done! Please restart your shell.'
-        read -p 'Press Enter...'"
-    
+        # Debian's own Nix packages: signed by the Debian archive like
+        # everything else apt installs, instead of piping a script from
+        # nixos.org into a root shell
+        $TERM_CMD bash -c '
+            echo "Installing Nix Package Manager (Debian package)..."
+            echo ""
+            if ! sudo apt update || ! sudo apt install -y nix-setup-systemd; then
+                echo ""
+                echo "❌ Install failed."
+                read -p "Press Enter..."; exit 1
+            fi
+            # The daemon only serves members of nix-users
+            sudo usermod -aG nix-users "$USER"
+            echo ""
+            echo "✅ Done. Log out and back in (for the nix-users group), then:"
+            echo "   nix-channel --add https://nixos.org/channels/nixpkgs-unstable"
+            echo "   nix-channel --update"
+            read -p "Press Enter..."
+        '
+
     elif [[ "$A_CHOICE" =~ "Install Steam" ]]; then
         $TERM_CMD bash -c "
             echo 'Installing Steam...'
             echo ''
             # Steam requires contrib + non-free repos and i386 architecture
             sudo dpkg --add-architecture i386
-            # Enable contrib and non-free if not already present
-            SOURCES_FILE='/etc/apt/sources.list'
-            if [ -f \"\$SOURCES_FILE\" ] && ! grep -qE '^deb .* contrib' \"\$SOURCES_FILE\"; then
-                echo 'Enabling contrib and non-free repositories...'
-                sudo sed -i '/^deb .*main/ s/\$/ contrib non-free/' \"\$SOURCES_FILE\"
-            fi
+            # Enable contrib and non-free on Debian sources (either format)
+            source \"\$TEBIAN_COMMON\"
+            tebian_apt_add_components 'contrib non-free'
             sudo apt update
             sudo apt install -y xwayland 2>/dev/null || true
             if ! sudo apt install -y steam-installer; then

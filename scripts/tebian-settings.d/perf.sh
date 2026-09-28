@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tebian-settings module: perf.sh
 # Sourced by tebian-settings — do not run directly
 
@@ -54,8 +55,8 @@ perf_menu() {
         HIDPI_LABEL="󰍺 Set HiDPI Scaling (2x)"
     fi
 
-    # Rolling
-    if grep -q 'testing' /etc/apt/sources.list 2>/dev/null; then
+    # Rolling (either apt sources format)
+    if [[ "$(tebian_apt_suite)" =~ ^(testing|sid|unstable)$ ]]; then
         ROLLING_LABEL="✅ Rolling Branch (Active)"
     else
         ROLLING_LABEL="󰚰 Join Rolling Branch (Testing)"
@@ -331,14 +332,21 @@ perf_menu() {
                 [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
             fi
 
-            echo "Adding non-free repos if needed..."
-            if ! grep -q "non-free-firmware" /etc/apt/sources.list 2>/dev/null; then
-                sudo sed -i "s/main$/main contrib non-free non-free-firmware/" /etc/apt/sources.list
-            fi
+            # nvidia-driver lives in non-free; stock Debian 13 sources only
+            # carry "main non-free-firmware", in either sources.list or
+            # deb822 debian.sources
+            echo "Enabling contrib/non-free if needed..."
+            source "$TEBIAN_COMMON"
+            tebian_apt_add_components "contrib non-free non-free-firmware"
 
             echo "Installing NVIDIA drivers..."
             sudo apt update
-            sudo apt install -y nvidia-driver firmware-misc-nonfree
+            if ! sudo apt install -y nvidia-driver firmware-misc-nonfree; then
+                echo ""
+                echo "❌ Driver install failed — nothing else was changed."
+                read -p "Press Enter to close..."
+                exit 1
+            fi
 
             echo ""
             echo "Blacklisting nouveau..."
@@ -350,6 +358,8 @@ perf_menu() {
             sudo update-initramfs -u
 
             echo ""
+            # tebian-session exports these into sway at login, and adds
+            # --unsupported-gpu when the nvidia module is loaded
             echo "Configuring Wayland environment..."
             mkdir -p "$HOME/.config/environment.d"
             cat > "$HOME/.config/environment.d/tebian-nvidia.conf" <<NVEOF
@@ -474,27 +484,49 @@ NVEOF
 
     # --- Rolling Branch ---
     elif [[ "$P_CHOICE" =~ "Join Rolling" ]]; then
-        $TERM_CMD bash -c "echo '󰚰 Switching to Rolling Branch (Debian Testing)...';
-        echo '';
-        echo '⚠️  WARNING: Rolling gets newer packages but may be less stable.';
-        echo '   You will always be on Testing (follows current Testing release).';
-        echo '';
-        read -p 'Continue? [y/N] ' confirm;
-        if [ \"\$confirm\" = 'y' ] || [ \"\$confirm\" = 'Y' ]; then
-            echo '';
-            echo 'Updating sources.list...';
-            sudo sed -i 's/\\bbookworm\\b/testing/g' /etc/apt/sources.list;
-            sudo sed -i 's/\\bbullseye\\b/testing/g' /etc/apt/sources.list 2>/dev/null;
-            sudo sed -i 's/\\btrixie\\b/testing/g' /etc/apt/sources.list 2>/dev/null;
-            echo 'Running full system upgrade...';
-            sudo apt update && sudo apt full-upgrade -y;
-            echo '';
-            echo '✅ Now on Rolling (Testing).';
-            echo '   Reboot recommended.';
-        else
-            echo 'Cancelled.';
-        fi;
-        read -p 'Press Enter to close...'"
+        $TERM_CMD bash -c '
+            source "$TEBIAN_COMMON"
+            echo "󰚰 Switch to Rolling (Debian Testing)"
+            echo ""
+            current=$(tebian_apt_suite)
+            if [ -z "$current" ]; then
+                echo "No Debian release found in your apt sources — nothing to switch."
+                read -p "Press Enter to close..."; exit 1
+            fi
+            echo "Currently on: $current"
+            echo ""
+            echo "⚠️  This is ONE-WAY. Testing gets newer packages every day and is"
+            echo "   less stable. Going back to a stable release is not supported by"
+            echo "   Debian — downgrading a whole system breaks it. The only way back"
+            echo "   is a reinstall."
+            echo ""
+            echo "   Third-party repos (Docker, Tailscale, ...) are left as they are."
+            echo "   Backports entries are removed: they do not apply to Testing."
+            echo ""
+            read -p "Type ROLLING to continue: " confirm
+            if [ "$confirm" != "ROLLING" ]; then
+                echo "Cancelled — nothing changed."
+                read -p "Press Enter to close..."; exit 0
+            fi
+            echo ""
+            changes=$(tebian_apt_switch_suite "$current" testing)
+            if [ -z "$changes" ]; then
+                echo "❌ No apt sources were changed — not switching."
+                read -p "Press Enter to close..."; exit 1
+            fi
+            echo "$changes"
+            echo ""
+            echo "Running full system upgrade..."
+            if sudo apt update && sudo apt full-upgrade -y; then
+                echo ""
+                echo "✅ Now on Rolling (Testing). Reboot recommended."
+            else
+                echo ""
+                echo "❌ The upgrade did not finish. Your sources now point at Testing;"
+                echo "   fix the error above and run: sudo apt full-upgrade"
+            fi
+            read -p "Press Enter to close..."
+        '
     elif [[ "$P_CHOICE" =~ "Rolling Branch (Active)" ]]; then
         tnotify "Rolling Branch" "Already on Debian Testing"
 
@@ -563,13 +595,12 @@ hardware_detect_menu() {
 
         sudo apt update
 
-        # GPU drivers
+        # GPU drivers. The proprietary NVIDIA driver is a big change (DKMS,
+        # nouveau blacklisted) — offer it rather than installing it silently.
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
-            echo "Installing NVIDIA drivers..."
-            sudo apt install -y nvidia-driver firmware-misc-nonfree 2>/dev/null || true
-            mkdir -p "$HOME/.config/environment.d"
-            echo "WLR_NO_HARDWARE_CURSORS=1" > "$HOME/.config/environment.d/tebian-nvidia.conf"
-            echo "LIBVA_DRIVER_NAME=nvidia" >> "$HOME/.config/environment.d/tebian-nvidia.conf"
+            echo "NVIDIA GPU found. The proprietary driver is available from"
+            echo "Settings → Performance → Install Nvidia Drivers."
+            echo "(nouveau, the open driver already in use, needs no setup.)"
         elif [ "$GPU_TYPE" = "AMD" ]; then
             echo "Installing AMD firmware..."
             sudo apt install -y firmware-amd-graphics firmware-linux-nonfree 2>/dev/null || true
@@ -600,7 +631,7 @@ hardware_detect_menu() {
         echo "========================================="
         echo ""
         echo "Installed:"
-        [ "$GPU_TYPE" = "NVIDIA" ] && echo "  - NVIDIA drivers"
+        [ "$GPU_TYPE" = "NVIDIA" ] && echo "  - (NVIDIA: driver install offered separately, see above)"
         [ "$GPU_TYPE" = "AMD" ] && echo "  - AMD firmware"
         [ "$GPU_TYPE" = "Intel" ] && echo "  - Intel firmware"
         [ "$CPU_TYPE" = "Intel" ] && echo "  - Intel microcode"
