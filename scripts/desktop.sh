@@ -32,6 +32,34 @@ if [ ! -f /etc/debian_version ]; then
     exit 1
 fi
 
+# --- Existing login screen ---------------------------------------------------
+# greetd takes over display-manager.service. While gdm3/lightdm/sddm owns
+# that name, `systemctl enable greetd` fails — and under set -e that used to
+# abort the install halfway, after /etc/greetd and PAM were already changed.
+# So decide up front, before anything is touched.
+USE_GREETD=true
+PREV_DM=""
+dm_target=$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)
+if [ -n "$dm_target" ] && [ -e "$dm_target" ] && [ "$(basename "$dm_target")" != greetd.service ]; then
+    dm_unit=$(basename "$dm_target")
+    echo ""
+    echo "  ${dm_unit%.service} is this system's login screen."
+    echo "  Tebian can replace it with its own, or keep it — you'd then choose"
+    echo "  \"Tebian\" from its session menu when logging in."
+    if [ -t 0 ]; then
+        read -r -p "  Replace ${dm_unit%.service} with Tebian's login screen? [y/N]: " replace_dm || replace_dm=""
+    else
+        replace_dm="${TEBIAN_REPLACE_DM:-n}"
+    fi
+    if [[ "$replace_dm" =~ ^[Yy] ]]; then
+        PREV_DM="$dm_unit"
+    else
+        USE_GREETD=false
+        log_info "Keeping ${dm_unit%.service}; Tebian will be added to its session list"
+    fi
+    echo ""
+fi
+
 log_info "Installing packages..."
 
 if ! sudo apt update; then
@@ -50,7 +78,6 @@ PACKAGES=(
     fonts-noto-core fonts-noto-color-emoji fonts-jetbrains-mono
     network-manager
     curl
-    greetd nwg-hello
     libnotify-bin mako-notifier
     grim slurp wl-clipboard
     brightnessctl wob
@@ -58,6 +85,10 @@ PACKAGES=(
     lxpolkit
     udisks2 ntfs-3g dosfstools exfatprogs fdisk
 )
+
+if [ "$USE_GREETD" = true ]; then
+    PACKAGES+=(greetd nwg-hello)
+fi
 
 # Optional packages (don't fail if missing)
 OPTIONAL_PACKAGES=()
@@ -88,17 +119,24 @@ fi
 log_info "Installing JetBrainsMono Nerd Font..."
 
 FONT_DIR="$HOME/.local/share/fonts"
+# Pinned and checksummed: "latest" made installs differ from one week to the
+# next and trusted whatever the download returned. Bump both together; the
+# sum is published in the release's SHA-256.txt.
+NERD_VERSION="v3.5.1"
+NERD_SHA256="04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf"
 if ! fc-list | grep -qi "JetBrainsMono Nerd"; then
     mkdir -p "$FONT_DIR"
-    NERD_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
-    if curl -fsSL "$NERD_URL" -o /tmp/JetBrainsMono.tar.xz; then
-        tar -xf /tmp/JetBrainsMono.tar.xz -C "$FONT_DIR"
+    NERD_URL="https://github.com/ryanoasis/nerd-fonts/releases/download/$NERD_VERSION/JetBrainsMono.tar.xz"
+    NERD_TMP=$(mktemp)
+    if curl -fsSL "$NERD_URL" -o "$NERD_TMP" &&
+       echo "$NERD_SHA256  $NERD_TMP" | sha256sum -c --quiet - >/dev/null 2>&1; then
+        tar -xf "$NERD_TMP" -C "$FONT_DIR"
         fc-cache -f "$FONT_DIR"
-        rm -f /tmp/JetBrainsMono.tar.xz
         log_info "Nerd Font installed"
     else
-        log_error "Failed to download Nerd Font (icons may not display correctly)"
+        log_error "Nerd Font download failed or didn't match its checksum (menu icons may not display)"
     fi
+    rm -f "$NERD_TMP"
 else
     log_info "Nerd Font already installed"
 fi
@@ -174,7 +212,7 @@ if [ -d "$TEBIAN_DIR/scripts" ]; then
         # Skip installer-only scripts and directories
         [ -d "$script" ] && continue
         case "$name" in
-            desktop.sh|build-iso.sh|uninstall.sh) continue ;;
+            desktop.sh|build-iso.sh|uninstall.sh|tebian-installer|test-vm.sh) continue ;;
             *) cp "$script" "$LOCAL_BIN/" ;;
         esac
     done
@@ -226,60 +264,96 @@ sudo install -o root -g root -m 755 "$TEBIAN_DIR/scripts/tebian-drive-probe" /us
 sudo install -o root -g root -m 644 "$TEBIAN_DIR/configs/udev/90-tebian-drive-doctor.rules" /etc/udev/rules.d/90-tebian-drive-doctor.rules
 sudo udevadm control --reload 2>/dev/null || true
 
-# Create greeter user if needed
-if ! id greeter &>/dev/null; then
-    sudo useradd -r -m -s /bin/bash greeter
+if [ "$USE_GREETD" = true ]; then
+    # Create greeter user if needed
+    if ! id greeter &>/dev/null; then
+        sudo useradd -r -m -s /bin/bash greeter
+    fi
+    sudo usermod -aG video,input,render greeter 2>/dev/null || true
+
+    # Ensure greeter home directory exists (prevents "unable to set working directory")
+    sudo mkdir -p /home/greeter/.local/state/wireplumber
+    sudo chown -R greeter:greeter /home/greeter
+    sudo chmod 700 /home/greeter
+
+    # Install greetd config files
+    sudo mkdir -p /etc/greetd
+    sudo cp "$TEBIAN_DIR/configs/greetd/config.toml" /etc/greetd/config.toml
+    sudo cp "$TEBIAN_DIR/configs/greetd/environments" /etc/greetd/environments
+
+    # nwg-hello login screen config
+    sudo mkdir -p /etc/nwg-hello
+    sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.json" /etc/nwg-hello/nwg-hello.json
+    sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.css" /etc/nwg-hello/nwg-hello.css
+    sudo cp "$TEBIAN_DIR/configs/nwg-hello/tebian.glade" /etc/nwg-hello/tebian.glade
+    sudo cp "$TEBIAN_DIR/configs/nwg-hello/sway-config" /etc/nwg-hello/sway-config
+
+    # Initialize greeter cache (preselect Tebian session for first login)
+    sudo mkdir -p /var/cache/nwg-hello
+    if [ ! -f /var/cache/nwg-hello/cache.json ]; then
+        echo '{}' | sudo tee /var/cache/nwg-hello/cache.json >/dev/null
+    fi
+    sudo chown greeter:greeter /var/cache/nwg-hello/cache.json 2>/dev/null || true
+
+    # Fix nwg-hello upstream bug (still in trixie's 0.3.0): the session combo
+    # uses the session name instead of its exec as the ID. ui.py belongs to the
+    # package, so any reinstall or upgrade silently undoes an in-place edit —
+    # an apt hook re-applies it after every dpkg run (a no-op once fixed upstream).
+    sudo mkdir -p /usr/local/sbin
+    sudo tee /usr/local/sbin/tebian-nwg-hello-fix >/dev/null << 'NWGFIX'
+#!/bin/sh
+# Re-applies Tebian's one-line nwg-hello fix; run by apt after every dpkg run.
+# Safe to delete (with /etc/apt/apt.conf.d/80-tebian-nwg-hello) once Debian's
+# nwg-hello selects sessions by exec.
+f=/usr/lib/python3/dist-packages/nwg_hello/ui.py
+if [ -f "$f" ] && grep -q 'sessions\[0\]\["name"\]' "$f"; then
+    sed -i 's/sessions\[0\]\["name"\]/sessions[0]["exec"]/' "$f"
 fi
-sudo usermod -aG video,input,render greeter 2>/dev/null || true
+exit 0
+NWGFIX
+    sudo chmod 755 /usr/local/sbin/tebian-nwg-hello-fix
+    echo 'DPkg::Post-Invoke { "if [ -x /usr/local/sbin/tebian-nwg-hello-fix ]; then /usr/local/sbin/tebian-nwg-hello-fix; fi"; };' |
+        sudo tee /etc/apt/apt.conf.d/80-tebian-nwg-hello >/dev/null
+    sudo /usr/local/sbin/tebian-nwg-hello-fix
 
-# Ensure greeter home directory exists (prevents "unable to set working directory")
-sudo mkdir -p /home/greeter/.local/state/wireplumber
-sudo chown -R greeter:greeter /home/greeter
-sudo chmod 700 /home/greeter
+    # Clean greetd PAM config (remove gnome-keyring/kwallet which cause auth failures)
+    if [ -f /etc/pam.d/greetd ]; then
+        sudo sed -i '/pam_gnome_keyring/d; /pam_kwallet/d' /etc/pam.d/greetd
+    fi
 
-# Install greetd config files
-sudo mkdir -p /etc/greetd
-sudo cp "$TEBIAN_DIR/configs/greetd/config.toml" /etc/greetd/config.toml
-sudo cp "$TEBIAN_DIR/configs/greetd/environments" /etc/greetd/environments
+    # Enable greetd (replaces getty on tty7). The old login screen is only
+    # disabled, not stopped — the user may be sitting in its session right now;
+    # the switch happens at the next boot. Recorded so uninstall can restore it.
+    if [ -n "$PREV_DM" ]; then
+        sudo mkdir -p /etc/tebian
+        echo "$PREV_DM" | sudo tee /etc/tebian/previous-display-manager >/dev/null
+        sudo systemctl disable "$PREV_DM"
+        log_info "Disabled ${PREV_DM%.service} (takes effect at next boot)"
+    fi
+    sudo systemctl enable greetd
 
-# nwg-hello login screen config
-sudo mkdir -p /etc/nwg-hello
-sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.json" /etc/nwg-hello/nwg-hello.json
-sudo cp "$TEBIAN_DIR/configs/nwg-hello/nwg-hello.css" /etc/nwg-hello/nwg-hello.css
-sudo cp "$TEBIAN_DIR/configs/nwg-hello/tebian.glade" /etc/nwg-hello/tebian.glade
-sudo cp "$TEBIAN_DIR/configs/nwg-hello/sway-config" /etc/nwg-hello/sway-config
-
-# Initialize greeter cache (preselect Tebian session for first login)
-sudo mkdir -p /var/cache/nwg-hello
-if [ ! -f /var/cache/nwg-hello/cache.json ]; then
-    echo '{}' | sudo tee /var/cache/nwg-hello/cache.json >/dev/null
-fi
-sudo chown greeter:greeter /var/cache/nwg-hello/cache.json 2>/dev/null || true
-
-# Fix nwg-hello upstream bug: session combo uses name instead of exec as ID
-NWG_UI="/usr/lib/python3/dist-packages/nwg_hello/ui.py"
-if [ -f "$NWG_UI" ] && grep -q 'sessions\[0\]\["name"\]' "$NWG_UI"; then
-    sudo sed -i 's/sessions\[0\]\["name"\]/sessions[0]["exec"]/' "$NWG_UI"
-    log_info "Patched nwg-hello session selection bug"
-fi
-
-# Clean greetd PAM config (remove gnome-keyring/kwallet which cause auth failures)
-if [ -f /etc/pam.d/greetd ]; then
-    sudo sed -i '/pam_gnome_keyring/d; /pam_kwallet/d' /etc/pam.d/greetd
-fi
-
-# Enable greetd (replaces getty on tty7)
-sudo systemctl enable greetd
-
-# Smooth Plymouth→greeter transition (retain splash until greeter draws)
-sudo mkdir -p /etc/systemd/system/greetd.service.d
-sudo tee /etc/systemd/system/greetd.service.d/plymouth.conf > /dev/null << 'PLYDROP'
+    # Smooth Plymouth→greeter transition (retain splash until greeter draws)
+    sudo mkdir -p /etc/systemd/system/greetd.service.d
+    sudo tee /etc/systemd/system/greetd.service.d/plymouth.conf > /dev/null << 'PLYDROP'
 [Service]
 ExecStartPre=-/usr/bin/plymouth deactivate
 ExecStartPre=-/usr/bin/plymouth quit --retain-splash
 # Fallback: force-quit plymouth if retain-splash hangs
 ExecStartPre=-/bin/sh -c 'sleep 2 && /usr/bin/plymouth quit 2>/dev/null || true'
 PLYDROP
+
+else
+    # Existing login screen kept: offer Tebian as one of its sessions
+    sudo mkdir -p /usr/share/wayland-sessions
+    sudo tee /usr/share/wayland-sessions/tebian.desktop >/dev/null << 'SESSION'
+[Desktop Entry]
+Name=Tebian
+Comment=Sway with Tebian's setup
+Exec=/usr/local/bin/tebian-session
+Type=Application
+DesktopNames=sway
+SESSION
+fi
 
 # Dark VT colors (prevents visible text flash during plymouth→greetd transition)
 # Color slots: 0=bg, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=fg
@@ -309,7 +383,11 @@ echo ""
 echo "✅ Tebian Base installed!"
 echo ""
 echo "─── Quick Start ───"
-echo "  Reboot for graphical login, or type 'sway' to start now."
+if [ "$USE_GREETD" = true ]; then
+    echo "  Reboot for graphical login, or type 'sway' to start now."
+else
+    echo "  Log out, then pick \"Tebian\" from ${dm_unit%.service}'s session menu."
+fi
 echo "  On first login you'll be asked: Base (Minimal) or Desktop (Familiar)."
 echo "  Desktop mode installs extras (file manager, bluetooth, screenshots, etc)."
 echo ""

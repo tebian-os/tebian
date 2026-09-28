@@ -22,6 +22,59 @@ get_term() {
 }
 TERM_CMD=$(get_term)
 
+# Add contrib/non-free/non-free-firmware to Debian's own apt sources, in
+# both formats: one-line .list files and the deb822 .sources files that
+# fresh trixie installs use (debian.sources). Components are compared as
+# whole words — "non-free-firmware" must not count as "non-free" — and
+# third-party repositories are left alone. Returns 0 if anything changed.
+# Exported so the setup terminal (a separate bash -c) can call it.
+enable_debian_components() {
+    local want="contrib non-free non-free-firmware" f tmp changed=1
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+        [ -f "$f" ] || continue
+        tmp=$(mktemp)
+        awk -v want="$want" '
+            /^deb(-src)?[ \t]/ && /debian\.org/ {
+                delete have
+                for (i = 1; i <= NF; i++) have[$i] = 1
+                n = split(want, w, " ")
+                for (j = 1; j <= n; j++) if (!(w[j] in have)) $0 = $0 " " w[j]
+            }
+            { print }' "$f" > "$tmp"
+        if ! cmp -s "$f" "$tmp"; then sudo cp "$tmp" "$f"; changed=0; fi
+        rm -f "$tmp"
+    done
+    for f in /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] || continue
+        tmp=$(mktemp)
+        # Stanzas are blank-line separated; only those whose URIs are
+        # Debian mirrors get their Components line extended
+        awk -v want="$want" '
+            function flush(   i, k, m, j, c, deb, l, parts, w, have) {
+                deb = 0
+                for (i = 1; i <= n; i++) if (buf[i] ~ /^URIs:/ && buf[i] ~ /debian\.org/) deb = 1
+                for (i = 1; i <= n; i++) {
+                    l = buf[i]
+                    if (deb && l ~ /^Components:/) {
+                        m = split(l, parts, /[ \t]+/)
+                        for (k = 2; k <= m; k++) have[parts[k]] = 1
+                        c = split(want, w, " ")
+                        for (j = 1; j <= c; j++) if (!(w[j] in have)) l = l " " w[j]
+                    }
+                    print l
+                }
+                n = 0
+            }
+            /^[ \t]*$/ { flush(); print; next }
+            { buf[++n] = $0 }
+            END { flush() }' "$f" > "$tmp"
+        if ! cmp -s "$f" "$tmp"; then sudo cp "$tmp" "$f"; changed=0; fi
+        rm -f "$tmp"
+    done
+    return $changed
+}
+export -f enable_debian_components
+
 ONBOARD_FILE="$HOME/.config/tebian-onboarded"
 LOG_FILE="$HOME/.local/share/tebian-onboard.log"
 
@@ -147,10 +200,11 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
 
         # Nvidia drivers
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
-            echo "  Checking repositories for non-free-firmware..."
-            if ! grep -q "non-free-firmware" /etc/apt/sources.list; then
-                echo "  Adding non-free-firmware repo..."
-                safe_sources_add_components /etc/apt/sources.list "contrib non-free non-free-firmware"
+            # nvidia-driver lives in non-free (not non-free-firmware, which a
+            # stock trixie install already has)
+            echo "  Checking repositories for contrib/non-free..."
+            if enable_debian_components; then
+                echo "  Enabled contrib and non-free"
                 sudo apt update
             fi
             
@@ -235,14 +289,9 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
 
         # Configure greetd to use nwg-hello
         if [ -f /etc/greetd/config.toml ] && ! grep -q "nwg-hello" /etc/greetd/config.toml; then
-            sudo tee /etc/greetd/config.toml > /dev/null << 'GREETD'
-[terminal]
-vt = 7
-
-[default_session]
-command = "sway --config /etc/nwg-hello/sway-config"
-user = "greeter"
-GREETD
+            # The shipped config, not an inline copy: it carries the NVIDIA
+            # --unsupported-gpu handling, and a single source cannot drift
+            sudo install -m 644 "${TEBIAN_DIR:-$HOME/Tebian}/configs/greetd/config.toml" /etc/greetd/config.toml
             echo "  Login greeter configured"
         fi
 
@@ -268,10 +317,22 @@ GREETD
             fi
         fi
 
-        # Disable SSH on desktop (unnecessary attack surface for a laptop)
-        if systemctl is-active --quiet ssh 2>/dev/null; then
-            sudo systemctl disable --now ssh 2>/dev/null
-            echo "  SSH disabled (re-enable in Settings > Security)"
+        # SSH server: needless attack surface on a laptop, but it may also be
+        # how this machine is reached (a Pi set up headless). Never turn it
+        # off under a connected session, and otherwise ask rather than assume.
+        if systemctl is-active --quiet ssh.service 2>/dev/null ||
+           systemctl is-active --quiet ssh.socket 2>/dev/null; then
+            if pgrep -f "sshd(-session)?: [^ ]+@" >/dev/null 2>&1; then
+                echo "  SSH left on: someone is connected through it right now"
+            else
+                read -r -p "  Turn off the SSH server? It is only needed to reach this machine remotely. [y/N] " ssh_off
+                if [[ "$ssh_off" =~ ^[Yy] ]]; then
+                    sudo systemctl disable --now ssh.service ssh.socket 2>/dev/null
+                    echo "  SSH disabled (re-enable in Settings > Security)"
+                else
+                    echo "  SSH left on"
+                fi
+            fi
         fi
 
         # QT theme integration (use GTK theme for consistency)

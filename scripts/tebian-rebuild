@@ -2,6 +2,8 @@
 # ==============================================================================
 # TEBIAN REBUILD
 # Reads tebian.conf and applies declared state. Idempotent.
+# tebian.conf is the source of truth: Settings records theme and security
+# profile changes there, so re-applying it restores what the user chose.
 # Usage: tebian-rebuild
 # ==============================================================================
 
@@ -21,7 +23,7 @@ log_error() { echo -e "${RED}[rebuild]${NC} $1" >&2; }
 
 if [ ! -f "$CONF" ]; then
     log_error "Manifest not found: $CONF"
-    echo "Create one with: cp $TEBIAN_DIR/tebian.conf.example $CONF"
+    echo "Restore the default with: tebian-update (or copy tebian.conf from the Tebian source)"
     exit 1
 fi
 
@@ -69,13 +71,30 @@ if [ -d "$THEME_DIR" ]; then
     if [ -f "$THEME_DIR/sway-theme" ]; then
         cp "$THEME_DIR/sway-theme" "$CONFIG_DIR/sway/theme"
     fi
+    # Theme files carry colors and a default font. The font may have been
+    # changed in Settings since, so carry those lines over instead of
+    # resetting them with the theme.
     if [ -f "$THEME_DIR/kitty.conf" ]; then
         mkdir -p "$CONFIG_DIR/kitty"
+        kitty_font=$(grep -E '^(font_family|font_size)[[:space:]]' "$CONFIG_DIR/kitty/kitty.conf" 2>/dev/null || true)
         cp "$THEME_DIR/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
+        if [ -n "$kitty_font" ]; then
+            sed -i -E '/^(font_family|font_size)[[:space:]]/d' "$CONFIG_DIR/kitty/kitty.conf"
+            printf '%s\n' "$kitty_font" >> "$CONFIG_DIR/kitty/kitty.conf"
+        fi
     fi
     if [ -f "$THEME_DIR/fuzzel.ini" ]; then
         mkdir -p "$CONFIG_DIR/fuzzel"
+        fuzzel_font=$(grep -E '^font=' "$CONFIG_DIR/fuzzel/fuzzel.ini" 2>/dev/null | head -1 || true)
         cp "$THEME_DIR/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+        if [ -n "$fuzzel_font" ]; then
+            # font= belongs to [main]; replace in place when the theme has one
+            if grep -q '^font=' "$CONFIG_DIR/fuzzel/fuzzel.ini"; then
+                sed -i "s|^font=.*|${fuzzel_font//|/\\|}|" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+            else
+                sed -i "0,/^\[main\]/s||[main]\n${fuzzel_font//|/\\|}|" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+            fi
+        fi
     fi
     if [ -f "$THEME_DIR/mako" ]; then
         mkdir -p "$CONFIG_DIR/mako"
@@ -87,22 +106,32 @@ else
 fi
 
 # --- 4. Sync scripts ---
+# Temp file + rename, never cp over the target: this runs inside
+# `tebian-update --rebuild`, and rewriting a running script in place makes
+# bash execute garbage when it reads the next line.
+replace_file() {
+    local tmp
+    tmp=$(mktemp "$2.XXXXXX")
+    cp -p "$1" "$tmp"
+    mv -f "$tmp" "$2"
+}
 if [ -d "$TEBIAN_DIR/scripts" ]; then
     mkdir -p "$LOCAL_BIN"
     for script in "$TEBIAN_DIR/scripts/"*; do
         [ -d "$script" ] && continue
         name=$(basename "$script")
         case "$name" in
-            desktop.sh|build-iso.sh|uninstall.sh) continue ;;
-            *) cp "$script" "$LOCAL_BIN/" ;;
+            desktop.sh|build-iso.sh|uninstall.sh|tebian-installer|test-vm.sh) continue ;;
+            *) replace_file "$script" "$LOCAL_BIN/$name"; chmod +x "$LOCAL_BIN/$name" ;;
         esac
     done
-    chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
 
     # Copy modular settings directory
     if [ -d "$TEBIAN_DIR/scripts/tebian-settings.d" ]; then
         mkdir -p "$LOCAL_BIN/tebian-settings.d"
-        cp "$TEBIAN_DIR/scripts/tebian-settings.d/"*.sh "$LOCAL_BIN/tebian-settings.d/"
+        for module in "$TEBIAN_DIR/scripts/tebian-settings.d/"*.sh; do
+            replace_file "$module" "$LOCAL_BIN/tebian-settings.d/${module##*/}"
+        done
     fi
     log_info "Scripts synced to $LOCAL_BIN"
 fi
@@ -110,9 +139,17 @@ fi
 # --- 5. Security profile ---
 SECURITY="${SECURITY_PROFILE:-standard}"
 SECURITY_SCRIPT="$TEBIAN_DIR/modules/core/security.sh"
-if [ -f "$SECURITY_SCRIPT" ]; then
+# Re-applied only when it changed. Settings records the profile it deduces
+# from individual toggles (e.g. "hardened" once kernel hardening is on), and
+# blindly re-running the full profile would add parts the user never chose,
+# such as key-only SSH.
+SECURITY_APPLIED="$HOME/.local/share/tebian/security-applied"
+if [ -f "$SECURITY_SCRIPT" ] && [ "$(cat "$SECURITY_APPLIED" 2>/dev/null)" = "$SECURITY" ]; then
+    log_info "Security profile unchanged ($SECURITY) — not re-applied"
+elif [ -f "$SECURITY_SCRIPT" ]; then
     log_info "Applying security profile: $SECURITY"
-    bash "$SECURITY_SCRIPT" "$SECURITY"
+    bash "$SECURITY_SCRIPT" "$SECURITY" &&
+        { mkdir -p "${SECURITY_APPLIED%/*}"; echo "$SECURITY" > "$SECURITY_APPLIED"; }
 else
     log_warn "Security module not found: $SECURITY_SCRIPT"
 fi
@@ -121,6 +158,10 @@ fi
 if [ -f "$SECURITY_SCRIPT" ]; then
     if [[ "${ENABLE_TOR:-no}" == "yes" ]]; then
         bash "$SECURITY_SCRIPT" tor-on
+    elif [[ "$SECURITY" == "paranoid" ]]; then
+        # Paranoid routes all traffic through Tor whatever ENABLE_TOR says;
+        # stopping it here would cut the machine off the network
+        :
     else
         # Only disable if tor is currently active
         if systemctl is-active --quiet tor 2>/dev/null; then

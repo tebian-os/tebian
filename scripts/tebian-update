@@ -1,19 +1,54 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN UPDATE
-# Downloads latest Tebian and rebuilds. No git required.
-# Usage: tebian-update
+# Brings ~/Tebian, the installed scripts and Tebian's few root-owned files up
+# to the latest release. Your settings are left alone: theme, security
+# profile, sway config.user and tebian.conf are never touched.
+#
+# Usage: tebian-update [--rebuild]
+#   --rebuild   afterwards, also re-apply tebian.conf (tebian-rebuild)
+#
+# Channel: TEBIAN_CHANNEL in tebian.conf (or the environment)
+#   stable (default)  latest GitHub release, checked against its SHA256SUMS
+#   main              development branch, unverified
+# A git checkout of ~/Tebian (fleet or dev machine) is updated with git pull.
 # ==============================================================================
 
 set -euo pipefail
+# Let failures inside $(...) abort too (bash otherwise drops -e there)
+shopt -s inherit_errexit
 
 TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
-TEBIAN_TARBALL="https://github.com/tebian-os/tebian/archive/main.tar.gz"
+TEBIAN_GH="https://github.com/tebian-os/tebian"
+LOCAL_BIN="$HOME/.local/bin"
+STATE_DIR="$HOME/.local/share/tebian"
+# sha256 of every file as last synced — how local edits are told apart
+# from upstream changes
+MANIFEST="$STATE_DIR/manifest.sha256"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
+
+info() { echo -e "${GREEN}[update]${NC} $*"; }
+warn() { echo -e "${YELLOW}[update]${NC} $*"; }
+fail() { echo -e "${RED}[update]${NC} $*" >&2; exit 1; }
+
+REBUILD=""
+for arg in "$@"; do
+    case "$arg" in
+        --rebuild) REBUILD=1 ;;
+        -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) fail "Unknown option: $arg (see tebian-update --help)" ;;
+    esac
+done
+
+# Scripts that live in the repo but don't belong in ~/.local/bin
+SKIP_SCRIPTS="desktop.sh build-iso.sh uninstall.sh tebian-installer test-vm.sh"
+# Removed from Tebian in earlier releases; an old ~/.local/bin may still
+# carry them, and there is no manifest yet to reveal them as stale
+RETIRED_SCRIPTS="tebian-tidy-home tebian-xdg.conf"
 
 echo ""
 echo "  ┌─────────────────────┐"
@@ -21,49 +56,273 @@ echo "  │  TEBIAN  UPDATE     │"
 echo "  └─────────────────────┘"
 echo ""
 
-# If it's a git repo, use git pull instead
-if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ]; then
-    echo -e "${GREEN}[update]${NC} Git repo detected, pulling..."
-    git -C "$TEBIAN_DIR" pull --ff-only
-else
-    echo -e "${GREEN}[update]${NC} Downloading latest Tebian..."
-    curl -fsSL "$TEBIAN_TARBALL" | tar xz -C /tmp
+[ -d "$TEBIAN_DIR" ] || fail "Tebian not found at $TEBIAN_DIR"
 
-    if [ ! -d /tmp/tebian-main ]; then
-        echo -e "${RED}[update]${NC} Download failed"
-        exit 1
+if [ -z "${TEBIAN_CHANNEL:-}" ] && [ -f "$TEBIAN_DIR/tebian.conf" ]; then
+    # Read just this key — sourcing the whole manifest here isn't needed
+    TEBIAN_CHANNEL=$(sed -n 's/^TEBIAN_CHANNEL="\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$TEBIAN_DIR/tebian.conf" | tail -1)
+fi
+TEBIAN_CHANNEL="${TEBIAN_CHANNEL:-stable}"
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$STATE_DIR"
+
+# --- Download ----------------------------------------------------------------
+# Same channel logic as install.sh (kept in sync by hand: install.sh runs via
+# curl | bash and can't source a library). Verification happens before
+# anything on disk changes, so a dropped connection leaves the system as it was.
+fetch_tebian() {
+    local work="$1" tarball="$1/tebian-src.tar.gz" tag expected top
+
+    if [ "$TEBIAN_CHANNEL" = main ]; then
+        warn "Channel: main (development branch, unverified)" >&2
+        curl -fsSL -o "$tarball" "$TEBIAN_GH/archive/refs/heads/main.tar.gz" ||
+            { echo -e "${RED}[update]${NC} Download failed" >&2; return 1; }
+    else
+        tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$TEBIAN_GH/releases/latest" |
+              sed -n 's|.*/releases/tag/||p') || true
+        if [ -z "$tag" ]; then
+            echo -e "${RED}[update]${NC} Could not reach GitHub to find the latest release." >&2
+            return 1
+        fi
+        echo -e "${GREEN}[update]${NC} Latest release: $tag" >&2
+        if ! curl -fsSL -o "$tarball" "$TEBIAN_GH/releases/download/$tag/tebian-src.tar.gz" ||
+           ! curl -fsSL -o "$work/SHA256SUMS" "$TEBIAN_GH/releases/download/$tag/SHA256SUMS"; then
+            echo -e "${RED}[update]${NC} Release $tag is missing tebian-src.tar.gz or SHA256SUMS." >&2
+            return 1
+        fi
+        expected=$(awk '$2 == "tebian-src.tar.gz" || $2 == "*tebian-src.tar.gz" { print $1 }' "$work/SHA256SUMS")
+        if [ -z "$expected" ]; then
+            echo -e "${RED}[update]${NC} SHA256SUMS for $tag has no entry for tebian-src.tar.gz — refusing." >&2
+            return 1
+        fi
+        if ! echo "$expected  $tarball" | sha256sum -c --quiet - >/dev/null 2>&1; then
+            echo -e "${RED}[update]${NC} Checksum mismatch — download corrupted or tampered with. Nothing was changed." >&2
+            return 1
+        fi
+        echo -e "${GREEN}[update]${NC} Checksum verified" >&2
     fi
 
-    # Sync files, preserving user manifest
-    rsync -a --exclude='tebian.conf' /tmp/tebian-main/ "$TEBIAN_DIR/"
-    rm -rf /tmp/tebian-main
-    echo -e "${GREEN}[update]${NC} Files updated"
+    mkdir -p "$work/src"
+    tar xzf "$tarball" -C "$work/src"
+    top=$(find "$work/src" -mindepth 1 -maxdepth 1 -type d)
+    if [ "$(printf '%s\n' "$top" | wc -l)" -ne 1 ] || [ ! -f "$top/bootstrap.sh" ] ||
+       [ ! -d "$top/scripts" ] || [ ! -f "$top/VERSION" ]; then
+        echo -e "${RED}[update]${NC} The downloaded archive doesn't look like Tebian." >&2
+        return 1
+    fi
+    echo "$top"
+}
+
+# --- Manifest helpers ----------------------------------------------------------
+declare -A OLD_SUM=()
+if [ -f "$MANIFEST" ]; then
+    while read -r sum path; do
+        [ -n "$path" ] && OLD_SUM["$path"]="$sum"
+    done < "$MANIFEST"
 fi
 
-# Re-sync scripts to ~/.local/bin
-LOCAL_BIN="$HOME/.local/bin"
-mkdir -p "$LOCAL_BIN"
-for script in "$TEBIAN_DIR/scripts/"*; do
-    name=$(basename "$script")
-    case "$name" in
-        desktop.sh|build-iso.sh|uninstall.sh) continue ;;
-        *) cp -r "$script" "$LOCAL_BIN/" ;;
-    esac
-done
-chmod +x "$LOCAL_BIN"/* 2>/dev/null || true
-chmod +x "$LOCAL_BIN"/tebian-settings.d/*.sh 2>/dev/null || true
-echo -e "${GREEN}[update]${NC} Scripts synced"
+# Files that ship in the tree but aren't Tebian's to overwrite
+is_user_file() {
+    case "$1" in tebian.conf|.git|.git/*) return 0 ;; esac
+    return 1
+}
 
-# Run rebuild if manifest exists
-if [ -f "$TEBIAN_DIR/tebian.conf" ]; then
+file_sum() { sha256sum "$1" | awk '{ print $1 }'; }
+
+# Copy via a temp file + rename. Overwriting in place would corrupt any
+# script that is running right now (bash reads scripts as it executes them)
+# — this very file included.
+replace_file() {  # <src> <dst>
+    local tmp
+    mkdir -p "$(dirname "$2")"
+    tmp=$(mktemp "$2.XXXXXX")
+    cp -p "$1" "$tmp"
+    mv -f "$tmp" "$2"
+}
+
+# Paths Tebian ships, one per line: the manifest covers these and nothing
+# else, so files the user added to ~/Tebian are never mistaken for ours
+write_manifest() {  # <file list on stdin>
+    ( cd "$TEBIAN_DIR" && tr '\n' '\0' | xargs -0 -r sha256sum ) > "$MANIFEST.tmp"
+    mv -f "$MANIFEST.tmp" "$MANIFEST"
+}
+
+BACKUP_DIR="$STATE_DIR/backups/$(date +%Y%m%d-%H%M%S)"
+BACKED_UP=0
+# A file is "locally edited" when it no longer matches what the last sync
+# wrote. With no manifest (first update after install) that can't be known,
+# so every file about to change is backed up — cheap, and never loses work.
+backup_if_edited() {
+    local rel="$1" cur
+    [ -f "$TEBIAN_DIR/$rel" ] || return 0
+    cur=$(file_sum "$TEBIAN_DIR/$rel")
+    if [ -z "${OLD_SUM[$rel]:-}" ] || [ "${OLD_SUM[$rel]}" != "$cur" ]; then
+        mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
+        cp -p "$TEBIAN_DIR/$rel" "$BACKUP_DIR/$rel"
+        BACKED_UP=$((BACKED_UP + 1))
+        [ -f "$MANIFEST" ] && warn "Local edit saved before overwrite: $rel"
+    fi
+    return 0
+}
+
+# --- 1. Update ~/Tebian ----------------------------------------------------------
+OLD_VERSION=$(cat "$TEBIAN_DIR/VERSION" 2>/dev/null || echo "?")
+STALE_LIST="$STATE_DIR/stale-scripts"
+
+if [ -n "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
+    : # re-executed by the previous version after it synced the tree
+elif [ -d "$TEBIAN_DIR/.git" ]; then
+    command -v git >/dev/null || fail "$TEBIAN_DIR is a git checkout but git isn't installed."
+    info "Git checkout — pulling..."
+    # --ff-only never merges over local commits; uncommitted edits that
+    # collide make git refuse, which is the right outcome
+    git -C "$TEBIAN_DIR" pull --ff-only || fail "git pull failed — nothing else was changed. Resolve it in $TEBIAN_DIR."
+    git -C "$TEBIAN_DIR" ls-files | grep -vx 'tebian.conf' > "$WORK/shipped" || true
+elif [ -L "$TEBIAN_DIR" ]; then
+    # install.sh --local links ~/Tebian to a working copy; pouring a release
+    # tarball over someone's source tree would clobber their work
+    fail "$TEBIAN_DIR links to $(readlink -f "$TEBIAN_DIR") (local mode). Update that tree yourself, then re-run with TEBIAN_UPDATE_POST_SYNC=1 to sync scripts."
+else
+    NEW=$(fetch_tebian "$WORK") || fail "Update aborted — nothing was changed."
+
+    CHANGED=0
+    declare -A NEW_FILES=()
+    while IFS= read -r -d '' f; do
+        rel="${f#"$NEW"/}"
+        is_user_file "$rel" && continue
+        NEW_FILES["$rel"]=1
+        if [ ! -f "$TEBIAN_DIR/$rel" ] || ! cmp -s "$f" "$TEBIAN_DIR/$rel"; then
+            backup_if_edited "$rel"
+            replace_file "$f" "$TEBIAN_DIR/$rel"
+            CHANGED=$((CHANGED + 1))
+        fi
+    done < <(find "$NEW" -type f -print0)
+
+    # Files the previous release shipped and this one dropped. Only known
+    # with a manifest; anything not in it may be the user's own and stays.
+    REMOVED=0
+    for rel in "${!OLD_SUM[@]}"; do
+        [ -n "${NEW_FILES[$rel]:-}" ] && continue
+        is_user_file "$rel" && continue
+        [ -f "$TEBIAN_DIR/$rel" ] || continue
+        backup_if_edited "$rel"
+        rm -f "$TEBIAN_DIR/$rel"
+        REMOVED=$((REMOVED + 1))
+    done
+    printf '%s\n' "${!NEW_FILES[@]}" | sort > "$WORK/shipped"
+    info "Tebian $OLD_VERSION → $(cat "$TEBIAN_DIR/VERSION"): $CHANGED file(s) updated, $REMOVED removed"
+    if [ "$BACKED_UP" -gt 0 ]; then
+        if [ -f "$MANIFEST" ]; then
+            warn "$BACKED_UP locally edited file(s) backed up to $BACKUP_DIR"
+        else
+            info "Previous versions of changed files saved to $BACKUP_DIR"
+        fi
+    fi
+fi
+
+if [ -z "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
+    # Scripts the previous version shipped and this one doesn't: their
+    # ~/.local/bin copies go in step 2. Remembered in a file because the
+    # manifest is replaced below and this process may re-exec.
+    for rel in "${!OLD_SUM[@]}"; do
+        [[ "$rel" == scripts/* ]] || continue
+        grep -qxF "$rel" "$WORK/shipped" || echo "$rel"
+    done > "$STALE_LIST"
+    write_manifest < "$WORK/shipped"
+
+    # Finish with the version just downloaded, so a release's changes to
+    # the steps below take effect on this run rather than the next one
+    if ! cmp -s "${BASH_SOURCE[0]}" "$TEBIAN_DIR/scripts/tebian-update"; then
+        rm -rf "$WORK"
+        trap - EXIT
+        TEBIAN_UPDATE_POST_SYNC=1 exec bash "$TEBIAN_DIR/scripts/tebian-update" "$@"
+    fi
+fi
+
+# --- 2. Scripts → ~/.local/bin ---------------------------------------------------
+mkdir -p "$LOCAL_BIN/tebian-settings.d"
+for script in "$TEBIAN_DIR/scripts/"*; do
+    [ -f "$script" ] || continue
+    name=$(basename "$script")
+    case " $SKIP_SCRIPTS " in *" $name "*) continue ;; esac
+    replace_file "$script" "$LOCAL_BIN/$name"
+    chmod +x "$LOCAL_BIN/$name"
+done
+for module in "$TEBIAN_DIR/scripts/tebian-settings.d/"*.sh; do
+    replace_file "$module" "$LOCAL_BIN/tebian-settings.d/${module##*/}"
+done
+
+# Stale copies matter: tebian-settings sources every module in its directory,
+# so a module deleted upstream would keep redefining functions forever
+if [ -f "$STALE_LIST" ]; then
+    while read -r rel; do
+        case "$rel" in
+            scripts/tebian-settings.d/*.sh) rm -f "$LOCAL_BIN/tebian-settings.d/${rel##*/}" ;;
+            scripts/*/*) ;;
+            scripts/*) rm -f "$LOCAL_BIN/${rel#scripts/}" ;;
+        esac
+    done < "$STALE_LIST"
+    rm -f "$STALE_LIST"
+fi
+for name in $RETIRED_SCRIPTS; do
+    rm -f "$LOCAL_BIN/$name"
+done
+info "Scripts synced to $LOCAL_BIN"
+
+# --- 3. Root-owned files -----------------------------------------------------------
+# A few pieces live outside the home directory because root or the greeter
+# runs them. Refreshed only when content differs; greeter files only on
+# systems where they are Tebian's (an nwg-hello greetd config).
+ROOT_SRC=() ROOT_DST=() ROOT_MODE=()
+queue_root() {  # <repo path> <destination> <mode> <install-if-missing yes|no>
+    local src="$TEBIAN_DIR/$1"
+    [ -f "$src" ] || return 0
+    if [ ! -e "$2" ]; then
+        [ "$4" = yes ] || return 0
+    elif cmp -s "$src" "$2"; then
+        return 0
+    fi
+    ROOT_SRC+=("$src"); ROOT_DST+=("$2"); ROOT_MODE+=("$3")
+}
+
+queue_root scripts/tebian-session             /usr/local/bin/tebian-session      755 no
+# Drive Doctor's root half: missing on installs that predate it
+queue_root scripts/tebian-drive-probe         /usr/local/bin/tebian-drive-probe  755 yes
+queue_root configs/udev/90-tebian-drive-doctor.rules /etc/udev/rules.d/90-tebian-drive-doctor.rules 644 yes
+if grep -qs "nwg-hello" /etc/greetd/config.toml; then
+    queue_root configs/greetd/config.toml     /etc/greetd/config.toml            644 no
+    queue_root configs/greetd/environments    /etc/greetd/environments           644 no
+    for f in nwg-hello.json nwg-hello.css tebian.glade sway-config; do
+        queue_root "configs/nwg-hello/$f"     "/etc/nwg-hello/$f"                644 no
+    done
+fi
+
+if [ "${#ROOT_DST[@]}" -gt 0 ]; then
+    info "System files to refresh:"
+    for dst in "${ROOT_DST[@]}"; do echo "    $dst"; done
+    if sudo -v; then
+        udev_changed=""
+        for i in "${!ROOT_DST[@]}"; do
+            sudo install -o root -g root -m "${ROOT_MODE[$i]}" -D "${ROOT_SRC[$i]}" "${ROOT_DST[$i]}"
+            [[ "${ROOT_DST[$i]}" == /etc/udev/* ]] && udev_changed=1
+        done
+        [ -n "$udev_changed" ] && sudo udevadm control --reload 2>/dev/null
+        info "System files refreshed"
+    else
+        warn "No sudo — system files not refreshed. Run tebian-update in a terminal to finish."
+    fi
+fi
+
+# --- 4. Apply ---------------------------------------------------------------------
+if [ -n "$REBUILD" ]; then
     echo ""
     bash "$TEBIAN_DIR/scripts/tebian-rebuild"
-else
-    # Reload sway if running
-    if pgrep -x sway &>/dev/null; then
-        swaymsg reload 2>/dev/null && echo -e "${GREEN}[update]${NC} Sway reloaded" || true
-    fi
+elif pgrep -x sway &>/dev/null; then
+    swaymsg reload >/dev/null 2>&1 && info "Sway reloaded" || true
 fi
 
 echo ""
-echo -e "${GREEN}[update]${NC} Tebian is up to date!"
+info "Tebian is up to date ($(cat "$TEBIAN_DIR/VERSION"))."
+[ -z "$REBUILD" ] && echo "         Your theme and security settings were left as they are." || true
