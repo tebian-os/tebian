@@ -34,13 +34,21 @@ helpline=white,black
 '
 
 # ── Globals ──
-TEBIAN_SRC="/home/user/Tebian"
+TEBIAN_SRC="${TEBIAN_SRC:-/home/user/Tebian}"
 TARGET="/mnt/tebian"
 DISK=""
 PARTITION_ROOT=""
 PARTITION_EFI=""
-PARTITION_SWAP=""
-ENCRYPT=false
+PARTITION_BOOT=""       # separate /boot, only for encrypted installs
+LUKS_PART=""            # raw partition under the LUKS mapping
+ENCRYPT=false           # set once the disk plan has been applied
+ENCRYPT_PLANNED=false   # user's choice, collected before partitioning
+LUKS_PASS=""
+PART_MODE=""            # erase | alongside | manual
+SHRINK_PART=""
+SHRINK_FSTYPE=""
+SHRINK_TO_BYTES=0
+MANUAL_FORMAT_EFI=false
 CRYPT_NAME="tebian_crypt"
 USERNAME=""
 USERPASS=""
@@ -53,6 +61,11 @@ KB_LAYOUT="us"
 KB_VARIANT=""
 TIMEZONE="UTC"
 INSTALL_LOG="/tmp/tebian-install.log"
+
+# Unattended mode: answers come from a KEY=VALUE file instead of dialogs.
+# Used for automated VM testing; see load_answers.
+AUTO=false
+declare -A ANS=()
 
 # ── UI helpers ──
 WT_HEIGHT=18
@@ -85,6 +98,11 @@ progress() {
 }
 
 die() {
+    echo "INSTALL_FAILED: $1" >> "$INSTALL_LOG"
+    if $AUTO; then
+        echo "ERROR: $1" >&2
+        poweroff
+    fi
     msg "ERROR: $1"
     exit 1
 }
@@ -94,23 +112,28 @@ step_back() {
     return 1
 }
 
-# Wait for partition devices to appear after partprobe
-wait_for_partitions() {
-    local disk="$1" tries=0
-    partprobe "$disk" 2>/dev/null || true
-    while [ $tries -lt 10 ]; do
-        sleep 0.5
-        # Check that at least one partition device exists
-        if ls "${disk}"?* 2>/dev/null | head -1 | grep -q .; then
-            return 0
-        fi
-        tries=$((tries + 1))
+# Unattended answers: KEY=VALUE lines, parsed (never sourced — it holds
+# passwords and is read by root). Comes from --answers FILE, or from QEMU's
+# fw_cfg (-fw_cfg name=opt/org.tebian/answers,file=...), which only a VM's
+# host can set — so a stray file or USB stick can never start a wipe.
+load_answers() {
+    local file="$1" key val
+    [ -r "$file" ] || die "Answers file not readable: $file"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        key="${line%%=*}" val="${line#*=}"
+        [[ "$key" =~ ^[a-z_]+$ ]] || die "Answers file: bad line '$line'"
+        ANS[$key]="$val"
+    done < "$file"
+    for key in disk username password; do
+        [ -n "${ANS[$key]:-}" ] || die "Answers file: '$key' is required"
     done
-    return 1
+    AUTO=true
 }
 
 # ── Step 1: Welcome ──
 welcome() {
+    $AUTO && return 0
     wt --title "  T E B I A N" --yesno "\
 Welcome to Tebian.
 
@@ -127,6 +150,11 @@ Begin installation?" $WT_HEIGHT $WT_WIDTH || {
 
 # ── Step 2: Keyboard layout ──
 select_keyboard() {
+    if $AUTO; then
+        KB_LAYOUT="${ANS[keyboard]:-us}"
+        apply_live_keymap
+        return 0
+    fi
     KB_LAYOUT=$(wt --title "  Keyboard Layout" --menu "\
 Select your keyboard layout:" \
         $WT_HEIGHT $WT_WIDTH $WT_MENU \
@@ -149,25 +177,38 @@ Select your keyboard layout:" \
         "kr" "Korean" \
         "ru" "Russian" \
         "ch" "Swiss (German)" \
-        "ca" "Canadian (Multilingual)" \
+        "ca" "Canadian (French)" \
         3>&1 1>&2 2>&3) || return 1
 
-    # Apply keyboard layout to live session immediately
-    # so password entry matches physical keyboard
-    # (some xkb names differ from console keymap names)
-    local console_map="$KB_LAYOUT"
-    case "$KB_LAYOUT" in
-        gb) console_map="uk" ;;
-        latam) console_map="la-latin1" ;;
-        br) console_map="br-abnt2" ;;
-        jp) console_map="jp106" ;;
-        kr) console_map="us" ;;  # Korean uses US layout + IME
-    esac
-    loadkeys "$console_map" 2>/dev/null || true
+    apply_live_keymap
+}
+
+# Switch the live console to the chosen layout, so the passphrase and
+# password typed next are what the installed system will expect. setupcon
+# compiles the XKB layout itself — the same names the installed system and
+# Sway use — so no separate console-keymap naming table is needed. If it
+# fails the user must know: a German user typing their LUKS passphrase on a
+# silently-US keymap can't unlock the disk after installing.
+apply_live_keymap() {
+    [ "$KB_LAYOUT" = us ] && return 0
+    # ckbcomp compiles the XKB layout into a console keymap, so the same
+    # names work here, on the installed system and in Sway — no separate
+    # console-keymap table. (kbd alone ships no keymaps: `loadkeys de`
+    # used to fail silently.)
+    if command -v ckbcomp >/dev/null && ckbcomp -model pc105 -layout "$KB_LAYOUT" 2>/dev/null | loadkeys -q 2>/dev/null; then
+        return 0
+    fi
+    $AUTO && return 0
+    msg "Couldn't switch this console to the \"${KB_LAYOUT}\" layout.\n\nThe installed system will use ${KB_LAYOUT}, but while installing\nyou're typing on a US layout. Avoid characters that differ\nbetween the two in passwords, or they won't match later."
 }
 
 # ── Step 3: Timezone ──
 select_timezone() {
+    if $AUTO; then
+        TIMEZONE="${ANS[timezone]:-UTC}"
+        [ -f "/usr/share/zoneinfo/$TIMEZONE" ] || die "Answers file: unknown timezone '$TIMEZONE'"
+        return 0
+    fi
     local region
     region=$(wt --title "  Timezone" --menu "\
 Select your region:" \
@@ -212,6 +253,11 @@ setup_network() {
     # Quick connectivity test — use curl, not ping (ICMP blocked in QEMU SLIRP)
     if curl -sfm5 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
         return 0
+    fi
+    if $AUTO; then
+        sleep 10
+        curl -sfm10 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null && return 0
+        die "Unattended install: no network"
     fi
     # Fallback: NM may still be getting DHCP — wait briefly and retry
     sleep 3
@@ -385,8 +431,57 @@ detect_efi() {
     fi
 }
 
+# Partition device name for partition number $2 of disk $1. Kernel naming
+# adds a "p" when the disk name ends in a digit (nvme0n1p1, mmcblk0p1,
+# loop0p1) — matching on "nvme"/"mmcblk" missed other such devices.
+part_dev() {
+    local disk="$1" num="$2"
+    if [[ "$disk" =~ [0-9]$ ]]; then echo "${disk}p${num}"; else echo "${disk}${num}"; fi
+}
+
+# Wait until every listed device node exists. udev creates partition nodes
+# asynchronously after the kernel rereads a table; formatting too early
+# fails (or, before, silently didn't).
+wait_for_devs() {
+    local dev
+    udevadm settle --timeout=10 2>/dev/null || true
+    for dev in "$@"; do
+        for _ in $(seq 50); do
+            [ -b "$dev" ] && break
+            sleep 0.2
+        done
+        [ -b "$dev" ] || { echo "Device $dev did not appear" >&2; return 1; }
+    done
+}
+
+# Tell the kernel about a new partition table and wait for it to settle
+reread_table() {
+    local disk="$1"
+    udevadm settle --timeout=10 2>/dev/null || true
+    partprobe "$disk" 2>/dev/null || blockdev --rereadpt "$disk" 2>/dev/null || true
+    udevadm settle --timeout=10 2>/dev/null || true
+}
+
+ESP_GUID="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+# EFI System Partition on $1, found by partition type — not "first vfat
+# partition", which can be a FAT data or recovery partition
+find_esp() {
+    local disk="$1" name ptype
+    while read -r name ptype; do
+        [ "$name" = "$disk" ] && continue
+        case "${ptype,,}" in
+            "$ESP_GUID"|0xef) echo "$name"; return 0 ;;
+        esac
+    done < <(lsblk -lnpo NAME,PARTTYPE "$disk" 2>/dev/null)
+    return 1
+}
+
+disk_label() { blkid -p -o value -s PTTYPE "$1" 2>/dev/null || true; }
+
 # ── Step 6: Disk selection ──
 select_disk() {
+    DISK=""
     # Find the live boot media device so we can exclude it
     local live_disk=""
     if mountpoint -q /run/live/medium 2>/dev/null; then
@@ -398,11 +493,8 @@ select_disk() {
     fi
 
     local disks=()
-    while IFS= read -r line; do
-        local dev size model
-        dev=$(echo "$line" | awk '{print $1}')
-        size=$(echo "$line" | awk '{print $2}')
-        model=$(echo "$line" | awk '{$1=$2=""; print}' | xargs)
+    local dev size model
+    while read -r dev size model; do
         [ -z "$model" ] && model="Disk"
         # Skip the live boot media (USB/DVD the installer booted from)
         [ "$dev" = "$live_disk" ] && continue
@@ -414,6 +506,12 @@ select_disk() {
         return 1
     fi
 
+    if $AUTO; then
+        DISK="${ANS[disk]:-}"
+        [ -b "$DISK" ] || die "Answers file: disk '${DISK}' is not a block device"
+        return 0
+    fi
+
     DISK=$(wt --title "  Select Target Drive" --menu "\
 Choose the drive to install Tebian on.
 
@@ -422,51 +520,46 @@ Next screen lets you choose:
   • Install alongside existing OS (dual-boot)
   • Manual partitioning (advanced)
 
-All partitions (including boot) will be managed
-on the selected drive automatically." \
+Nothing is written to disk until the final
+confirmation screen." \
         $WT_HEIGHT $WT_WIDTH $WT_MENU "${disks[@]}" 3>&1 1>&2 2>&3) || return 1
 }
 
 # ── Step 7: Partition strategy ──
+# Only decides what to do. The disk is not touched until apply_disk_plan
+# runs after the final confirmation, so going back and changing answers is
+# always safe. (Previously the wipe ran here, and backing up from a later
+# screen re-ran it — shrinking Windows twice.)
 select_partition_mode() {
-    # Check for existing OS installations
-    local has_windows=false
-    local has_linux=false
-    local existing_os=""
+    PART_MODE="" DUAL_BOOT=false SHRINK_PART="" SHRINK_FSTYPE="" SHRINK_TO_BYTES=0
+    PARTITION_ROOT="" PARTITION_EFI="" PARTITION_BOOT="" MANUAL_FORMAT_EFI=false
 
-    # Build a summary of current partitions on this drive
-    local part_summary=""
-    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
-        [ -b "$part" ] || continue
-        local fstype size label
-        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
+    local has_windows=false has_linux=false has_bitlocker=false
+    local existing_os="" part_summary=""
+    local part fstype size label size_bytes
+    while read -r part; do
+        [ "$part" = "$DISK" ] && continue
+        fstype=$(blkid -p -o value -s TYPE "$part" 2>/dev/null || true)
         size=$(lsblk -dnpo SIZE "$part" 2>/dev/null | xargs)
-        label=$(blkid -o value -s LABEL "$part" 2>/dev/null || true)
+        label=$(blkid -p -o value -s LABEL "$part" 2>/dev/null || true)
 
-        if [ "$fstype" = "ntfs" ]; then
-            if echo "$label" | grep -qiE "windows|system|recovery"; then
-                has_windows=true
-            fi
-            local size_bytes
-            size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
-            if [ "$size_bytes" -gt 20000000000 ]; then
-                has_windows=true
-            fi
-        fi
-        if [ "$fstype" = "ext4" ] || [ "$fstype" = "btrfs" ] || [ "$fstype" = "xfs" ]; then
-            has_linux=true
-        fi
-
-        # Build display line
+        case "$fstype" in
+            ntfs)
+                size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
+                if [[ "$label" =~ [Ww]indows|[Ss]ystem ]] || [ "$size_bytes" -gt 20000000000 ]; then
+                    has_windows=true
+                fi ;;
+            BitLocker) has_windows=true; has_bitlocker=true ;;
+            ext4|btrfs|xfs) has_linux=true ;;
+        esac
         if [ -n "$fstype" ]; then
             local desc="$size $fstype"
             [ -n "$label" ] && desc="$size $fstype ($label)"
             part_summary+="  ${part##*/}: ${desc}\n"
         fi
-    done
+    done < <(lsblk -lnpo NAME "$DISK" 2>/dev/null)
 
     local options=()
-
     if $has_windows; then
         existing_os="Windows detected on this disk.\n"
         options+=("alongside" "Install alongside Windows (dual-boot)")
@@ -474,333 +567,422 @@ select_partition_mode() {
         existing_os="Linux detected on this disk.\n"
         options+=("alongside" "Install alongside existing Linux (dual-boot)")
     fi
-
     options+=("erase" "Erase entire disk and install Tebian")
     options+=("manual" "Manual partitioning (advanced)")
-
     [ -n "$part_summary" ] && existing_os+="Current partitions:\n${part_summary}"
 
     local choice
-    choice=$(wt --title "  Partition Disk" --menu "\
+    if $AUTO; then
+        choice="${ANS[partition]:-erase}"
+    else
+        choice=$(wt --title "  Partition Disk" --menu "\
 ${existing_os}
 How would you like to partition ${DISK}?" \
-        $WT_HEIGHT $WT_WIDTH $WT_MENU "${options[@]}" 3>&1 1>&2 2>&3) || return 1
+            $WT_HEIGHT $WT_WIDTH $WT_MENU "${options[@]}" 3>&1 1>&2 2>&3) || return 1
+    fi
 
     case "$choice" in
-        alongside) partition_alongside ;;
-        erase)     partition_erase ;;
-        manual)    partition_manual ;;
+        alongside)
+            if $has_bitlocker; then
+                step_back "This disk has a BitLocker-encrypted partition.\n\nIt can't be resized from Linux. In Windows, open Settings >\nPrivacy & security > Device encryption (or Manage BitLocker)\nand turn it off, wait for decryption to finish, then retry.\n\nKeep your BitLocker recovery key handy either way: changing\nthe boot order can make Windows ask for it."
+                return 1
+            fi
+            plan_alongside ;;
+        erase)  plan_erase ;;
+        manual) plan_manual ;;
+        *) return 1 ;;
     esac
 }
 
-# ── Partition: erase entire disk ──
-partition_erase() {
-    local existing_parts=""
+plan_erase() {
+    PART_MODE=erase
+    local existing_parts
     existing_parts="$(lsblk -lnpo NAME,SIZE,FSTYPE "$DISK" | grep -v "^${DISK}[[:space:]]" | sed 's/^/  • /' || true)"
     [ -z "$existing_parts" ] && existing_parts="  • (no existing partitions detected)"
 
-    local new_layout=""
-    if $IS_EFI; then
-        new_layout="  • EFI 512MiB (FAT32)\n  • Swap 2GiB\n  • Root ext4 (remaining space)"
-    else
-        new_layout="  • Swap 2GiB\n  • Root ext4 (remaining space)"
-    fi
-
-    yesno "You selected: ${DISK}\n\nExisting partitions that will be DELETED:\n${existing_parts}\n\nNew Tebian layout that will be created:\n${new_layout}\n\nThis erases all existing partitions (Windows, recovery, data).\nContinue?" || return 1
-
-    # Set partition names BEFORE the subshell so they survive
-    if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
-        local P="p"
-    else
-        local P=""
-    fi
-
-    if $IS_EFI; then
-        PARTITION_EFI="${DISK}${P}1"
-        PARTITION_SWAP="${DISK}${P}2"
-        PARTITION_ROOT="${DISK}${P}3"
-    else
-        PARTITION_SWAP="${DISK}${P}1"
-        PARTITION_ROOT="${DISK}${P}2"
-    fi
-
-    (
-        echo 10; echo "# Wiping partition table..."
-        # Clear signatures from whole disk and every existing child partition.
-        wipefs -a -f "$DISK" >/dev/null 2>&1 || true
-        while read -r part; do
-            [ -b "$part" ] || continue
-            wipefs -a -f "$part" >/dev/null 2>&1 || true
-        done < <(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$")
-        sgdisk --zap-all "$DISK" >/dev/null 2>&1 || true
-        partprobe "$DISK" 2>/dev/null || true
-
-        if $IS_EFI; then
-            echo 30; echo "# Creating GPT partition table..."
-            parted -s "$DISK" mklabel gpt
-            parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
-            parted -s "$DISK" set 1 esp on
-            parted -s "$DISK" mkpart primary linux-swap 513MiB 2561MiB
-            parted -s "$DISK" mkpart primary ext4 2561MiB 100%
-
-            wait_for_partitions "$DISK"
-
-            echo 60; echo "# Formatting EFI partition..."
-            mkfs.fat -F32 "$PARTITION_EFI" >/dev/null 2>&1
-        else
-            echo 30; echo "# Creating MBR partition table..."
-            parted -s "$DISK" mklabel msdos
-            parted -s "$DISK" mkpart primary linux-swap 1MiB 2049MiB
-            parted -s "$DISK" mkpart primary ext4 2049MiB 100%
-            parted -s "$DISK" set 2 boot on
-
-            wait_for_partitions "$DISK"
-        fi
-
-        echo 70; echo "# Formatting swap..."
-        mkswap "$PARTITION_SWAP" >/dev/null 2>&1
-
-        echo 80; echo "# Formatting root partition..."
-        mkfs.ext4 -F "$PARTITION_ROOT" >/dev/null 2>&1
-
-        echo 100; echo "# Partitioning complete"
-    ) | progress "Partitioning ${DISK}..." || {
-        msg "Disk partitioning failed.\n\nNo installation was started."
-        return 1
-    }
+    $AUTO && return 0
+    yesno "You selected: ${DISK}\n\nThese partitions will be DELETED when you confirm at the end:\n${existing_parts}\n\nThis erases everything on the disk (Windows, recovery, data)." || return 1
 }
 
-# ── Partition: install alongside (shrink existing) ──
-partition_alongside() {
+# Choose a partition to shrink and how much space to give Tebian.
+# Everything here is read-only: sizes are validated against what the
+# filesystem tools say is possible, but nothing is resized yet.
+plan_alongside() {
+    PART_MODE=alongside
     DUAL_BOOT=true
 
-    # Find the largest supported partition to shrink.
-    # We only support offline sizing logic for ntfs/ext4 here.
-    local largest_part=""
-    local largest_size=0
-    local largest_fstype=""
+    local label; label=$(disk_label "$DISK")
 
-    for part in "${DISK}"*[0-9] "${DISK}p"*[0-9]; do
-        [ -b "$part" ] || continue
-        local fstype
-        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || true)
-        [ "$fstype" = "ntfs" ] || [ "$fstype" = "ext4" ] || continue
-        local size_bytes
+    # A firmware/disk mismatch can't be fixed by the installer — refuse
+    # before anything is resized rather than fail at grub-install after
+    if ! $IS_EFI && [ "$label" = gpt ] && find_esp "$DISK" >/dev/null; then
+        step_back "The existing OS on this disk boots in UEFI mode, but this\ninstaller was started in legacy BIOS mode.\n\nReboot, choose the USB entry marked \"UEFI\" in your boot\nmenu, and run the installer again."
+        return 1
+    fi
+    if $IS_EFI && ! find_esp "$DISK" >/dev/null; then
+        if [ "$label" = dos ]; then
+            step_back "The existing OS on this disk boots in legacy BIOS mode,\nbut this installer was started in UEFI mode.\n\nReboot and pick the USB's legacy/non-UEFI boot entry, then\nrun the installer again."
+        else
+            step_back "No EFI System Partition found on ${DISK}.\n\nUse Manual partitioning instead."
+        fi
+        return 1
+    fi
+
+    # Pick the largest NTFS/ext4 partition
+    local part fstype size_bytes largest_size=0
+    while read -r part; do
+        [ "$part" = "$DISK" ] && continue
+        fstype=$(blkid -p -o value -s TYPE "$part" 2>/dev/null || true)
+        [ "$fstype" = ntfs ] || [ "$fstype" = ext4 ] || continue
         size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
         if [ "$size_bytes" -gt "$largest_size" ]; then
-            largest_size=$size_bytes
-            largest_part=$part
-            largest_fstype=$fstype
+            largest_size=$size_bytes SHRINK_PART=$part SHRINK_FSTYPE=$fstype
         fi
-    done
+    done < <(lsblk -lnpo NAME "$DISK" 2>/dev/null)
 
-    if [ -z "$largest_part" ]; then
+    if [ -z "$SHRINK_PART" ]; then
         step_back "Could not find a shrinkable NTFS/ext4 partition on ${DISK}.\n\nUse Manual partitioning instead."
         return 1
     fi
 
-    # Partition must be unmounted for resize
-    if findmnt -n "$largest_part" &>/dev/null; then
-        umount "$largest_part" 2>/dev/null || {
-            step_back "${largest_part} is currently mounted and could not be\nunmounted. Unmount it first, then retry."
+    # MBR holds 4 primary partitions; Tebian needs 1 (2 when encrypted)
+    local need=1; $ENCRYPT_PLANNED && need=2
+    if [ "$label" = dos ]; then
+        local used; used=$(lsblk -lnpo NAME "$DISK" | grep -vc "^${DISK}$" || true)
+        if [ $((used + need)) -gt 4 ]; then
+            step_back "${DISK} uses an MBR partition table that already has ${used}\npartitions — no room for Tebian's.\n\nUse Manual partitioning instead."
+            return 1
+        fi
+    fi
+
+    if findmnt -n "$SHRINK_PART" &>/dev/null; then
+        umount "$SHRINK_PART" 2>/dev/null || {
+            step_back "${SHRINK_PART} is mounted and could not be unmounted.\nUnmount it first, then retry."
             return 1
         }
     fi
 
-    local largest_gb=$((largest_size / 1073741824))
-    local suggest_gb=$((largest_gb / 2))
-    [ "$suggest_gb" -lt 20 ] && suggest_gb=20
-    [ "$suggest_gb" -gt "$((largest_gb - 20))" ] && suggest_gb=$((largest_gb - 20))
+    # Smallest size the existing filesystem can be shrunk to, plus room for
+    # it to keep working (Windows needs free space for updates)
+    local min_bytes=0
+    if [ "$SHRINK_FSTYPE" = ntfs ]; then
+        # Read-only dry run: catches hibernation / Fast Startup and a dirty
+        # volume now, before the user commits, instead of mid-install
+        local info
+        if ! info=$(ntfsresize --info --no-progress-bar "$SHRINK_PART" 2>&1); then
+            step_back "Windows can't be resized right now:\n\n$(echo "$info" | grep -iE 'hibernat|unclean|error|chkdsk' | head -3)\n\nBoot Windows, turn off Fast Startup (Control Panel > Power\nOptions > Choose what the power buttons do), shut down fully,\nthen retry."
+            return 1
+        fi
+        min_bytes=$(echo "$info" | sed -n 's/.*resize at \([0-9]*\) bytes.*/\1/p' | head -1)
+    else
+        local blocks bsize
+        blocks=$(resize2fs -P "$SHRINK_PART" 2>/dev/null | grep -o '[0-9]*$' || true)
+        bsize=$(dumpe2fs -h "$SHRINK_PART" 2>/dev/null | sed -n 's/^Block size: *//p')
+        [ -n "$blocks" ] && [ -n "$bsize" ] && min_bytes=$((blocks * bsize))
+    fi
+    [ -n "$min_bytes" ] || min_bytes=0
+    local GiB=1073741824
+    local keep_min_gb=$(( (min_bytes + 10 * GiB) / GiB + 1 ))   # used + 10GiB headroom
+    local total_gb=$(( largest_size / GiB ))
+    local max_tebian=$(( total_gb - keep_min_gb ))
+    if [ "$max_tebian" -lt 20 ]; then
+        step_back "${SHRINK_PART} doesn't have enough free space.\n\nTebian needs 20GB; at most ${max_tebian}GB can be freed while\nleaving the existing system room to work."
+        return 1
+    fi
+
+    local suggest=$(( total_gb / 2 ))
+    [ "$suggest" -gt "$max_tebian" ] && suggest=$max_tebian
+    [ "$suggest" -lt 20 ] && suggest=20
 
     local tebian_gb
-    tebian_gb=$(input "Found ${largest_part} (${largest_gb}GB).\n\nHow many GB for Tebian? (minimum 20)" "$suggest_gb") || return 1
-
-    # Validate
-    if [ "$tebian_gb" -lt 20 ] 2>/dev/null; then
-        step_back "Tebian needs at least 20GB.\n\nUse a larger value or go back."
-        return 1
-    fi
-    if [ "$tebian_gb" -ge "$largest_gb" ] 2>/dev/null; then
-        step_back "Not enough space. Maximum is $((largest_gb - 20))GB.\n\nUse a smaller value or go back."
-        return 1
-    fi
-
-    local shrink_to_gb=$((largest_gb - tebian_gb))
-
-    yesno "This will:\n\n• Shrink ${largest_part} to ${shrink_to_gb}GB\n• Create ${tebian_gb}GB for Tebian\n\nContinue?" || return 1
-
-    # Snapshot existing partitions before creating new ones
-    local parts_before
-    parts_before=$(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$")
-
-    local _partfile
-    _partfile=$(mktemp /tmp/tebian-parts.XXXXXX)
-
-    (
-        echo 10; echo "# Preparing to resize..."
-
-        # Ensure unmounted (may have been auto-mounted since our check)
-        umount "$largest_part" 2>/dev/null || true
-
-        # Shrink the existing filesystem
-        if [ "$largest_fstype" = "ntfs" ]; then
-            # Dry run first — catches hibernation (Fast Startup), dirty
-            # volume, and insufficient space before touching anything
-            echo 15; echo "# Verifying NTFS resize is safe..."
-            if ! ntfsresize --no-action -s "${shrink_to_gb}G" "$largest_part" </dev/null >/dev/null 2>&1; then
-                echo "NTFS resize safety check failed — volume may be hibernated (Windows Fast Startup), dirty, or too full" >&2
-                exit 1
-            fi
-            echo 20; echo "# Resizing NTFS filesystem (this may take a while)..."
-            # --force skips interactive prompt (safety already verified by dry run)
-            ntfsresize --force -s "${shrink_to_gb}G" "$largest_part" </dev/null >/dev/null 2>&1
-        elif [ "$largest_fstype" = "ext4" ]; then
-            echo 20; echo "# Checking filesystem..."
-            e2fsck -f -y "$largest_part" >/dev/null 2>&1 || {
-                local rc=$?
-                # e2fsck: 0=clean, 1=corrected, 2=corrected+reboot; >2=fatal
-                [ "$rc" -le 2 ] || exit "$rc"
-            }
-            echo 30; echo "# Resizing ext4 filesystem..."
-            resize2fs "$largest_part" "${shrink_to_gb}G" >/dev/null 2>&1
+    while true; do
+        if $AUTO; then
+            tebian_gb="${ANS[alongside_gb]:-$suggest}"
+        else
+            tebian_gb=$(input "${SHRINK_PART} is ${total_gb}GB (${SHRINK_FSTYPE}).\n\nHow many GB for Tebian? (20 to ${max_tebian})" "$suggest") || return 1
         fi
-
-        echo 40; echo "# Resizing partition table entry..."
-        local part_num
-        part_num=$(echo "$largest_part" | grep -o '[0-9]*$')
-        # Use GiB to match filesystem resize units (parted GB = 10^9, GiB = 2^30)
-        parted -s "$DISK" resizepart "$part_num" "${shrink_to_gb}GiB" 2>/dev/null
-
-        echo 50; echo "# Creating Tebian partitions in free space..."
-        parted -s "$DISK" mkpart primary linux-swap "${shrink_to_gb}GiB" "$((shrink_to_gb + 2))GiB"
-        parted -s "$DISK" mkpart primary ext4 "$((shrink_to_gb + 2))GiB" 100%
-
-        wait_for_partitions "$DISK"
-
-        # Find new partitions by comparing before/after
-        local parts_after
-        parts_after=$(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$")
-        local new_parts
-        new_parts=$(echo "$parts_after" | grep -vxF -f <(echo "$parts_before"))
-
-        local swap_part root_part
-        swap_part=$(echo "$new_parts" | head -1)
-        root_part=$(echo "$new_parts" | tail -1)
-
-        if [ -z "$swap_part" ] || [ -z "$root_part" ]; then
-            echo "Failed to detect new partitions after resize" >&2
-            exit 1
+        if [[ "$tebian_gb" =~ ^[0-9]+$ ]] && [ "$tebian_gb" -ge 20 ] && [ "$tebian_gb" -le "$max_tebian" ]; then
+            break
         fi
+        $AUTO && die "Answers file: alongside_gb must be 20..${max_tebian}"
+        msg "Enter a whole number between 20 and ${max_tebian}."
+    done
 
-        echo "PARTITION_SWAP=$swap_part" > "$_partfile"
-        echo "PARTITION_ROOT=$root_part" >> "$_partfile"
-
-        if $IS_EFI; then
-            local efi_part
-            efi_part=$(blkid -t TYPE=vfat -o device "$DISK"* 2>/dev/null | head -1)
-            echo "PARTITION_EFI=$efi_part" >> "$_partfile"
-        fi
-
-        echo 70; echo "# Formatting swap..."
-        mkswap "$swap_part" >/dev/null 2>&1
-
-        echo 80; echo "# Formatting root partition..."
-        mkfs.ext4 -F "$root_part" >/dev/null 2>&1
-
-        echo 100; echo "# Partitioning complete"
-    ) | progress "Partitioning for dual-boot..." || {
-        rm -f "$_partfile"
-        msg "Dual-boot partitioning failed.\n\nIf shrinking Windows: boot Windows, disable Fast Startup,\ndo a full shutdown, then retry.\n\nOtherwise use Manual partitioning."
-        return 1
-    }
-
-    # Read partition names back from temp file
-    source "$_partfile"
-    rm -f "$_partfile"
-
-    if $IS_EFI && [ -z "${PARTITION_EFI:-}" ]; then
-        msg "Could not detect an EFI partition for dual-boot.\n\nUse Manual partitioning and select your existing EFI System Partition."
-        return 1
-    fi
+    SHRINK_TO_BYTES=$(( (total_gb - tebian_gb) * GiB ))
+    $AUTO && return 0
+    yesno "When you confirm at the end, this will:\n\n• Shrink ${SHRINK_PART} to $((total_gb - tebian_gb))GB\n• Create ${tebian_gb}GB for Tebian in the freed space\n\nBack up anything important first — resizing is safe but\nnot risk-free.\n\nContinue?" || return 1
 }
 
-# ── Partition: manual ──
-partition_manual() {
-    msg "Opening cfdisk for manual partitioning.\n\nCreate at least:\n  • A root partition (20GB+, type Linux)\n  • A swap partition (optional)\n  • An EFI partition (512MB, type EFI) if using UEFI\n\nPress OK to continue."
+plan_manual() {
+    PART_MODE=manual
+    $AUTO && die "Answers file: manual partitioning is interactive only"
+    msg "Opening cfdisk. Changes you write there are applied immediately.\n\nCreate at least:\n  • A root partition (20GB+, type Linux)\n  • An EFI partition (512MB, type EFI System) if using UEFI\n  • A /boot partition (1GB, type Linux) if you'll encrypt\n\nPress OK to continue."
 
     cfdisk "$DISK"
-    wait_for_partitions "$DISK"
+    reread_table "$DISK"
 
-    # Ask user to identify partitions
-    local parts=()
-    while IFS= read -r line; do
-        local dev size fstype
-        dev=$(echo "$line" | awk '{print $1}')
-        size=$(echo "$line" | awk '{print $2}')
-        fstype=$(echo "$line" | awk '{print $3}')
-        parts+=("$dev" "$size  $fstype")
+    local parts=() dev size fstype
+    while read -r dev size fstype; do
+        parts+=("$dev" "$size  ${fstype:--}")
     done < <(lsblk -lnpo NAME,SIZE,FSTYPE "$DISK" | grep -v "^${DISK} ")
+    [ ${#parts[@]} -gt 0 ] || { step_back "No partitions on ${DISK}."; return 1; }
 
     PARTITION_ROOT=$(wt --title "  Select Root Partition" --menu \
-        "Which partition for / (root)?" \
+        "Which partition for / (root)?\n\nIt will be formatted as ext4." \
         $WT_HEIGHT $WT_WIDTH $WT_MENU "${parts[@]}" 3>&1 1>&2 2>&3) || return 1
-
-    if yesno "Format ${PARTITION_ROOT} as ext4?\n\n(Select No if already formatted)"; then
-        mkfs.ext4 -F "$PARTITION_ROOT"
-    fi
 
     if $IS_EFI; then
         PARTITION_EFI=$(wt --title "  Select EFI Partition" --menu \
-            "Which partition is EFI?" \
+            "Which partition is the EFI System Partition?" \
             $WT_HEIGHT $WT_WIDTH $WT_MENU "${parts[@]}" 3>&1 1>&2 2>&3) || return 1
-
+        [ "$PARTITION_EFI" != "$PARTITION_ROOT" ] || { step_back "EFI and root must be different partitions."; return 1; }
         local efi_type
-        efi_type=$(blkid -o value -s TYPE "$PARTITION_EFI" 2>/dev/null || true)
-        if [ "$efi_type" != "vfat" ] && [ "$efi_type" != "fat32" ]; then
-            msg "Selected EFI partition is not FAT32/VFAT.\n\nChoose the existing EFI System Partition (usually ~100-512MB, FAT32)."
-            return 1
+        efi_type=$(blkid -p -o value -s TYPE "$PARTITION_EFI" 2>/dev/null || true)
+        if [ "$efi_type" != vfat ]; then
+            # An existing ESP is shared with other systems — only format one
+            # that has no filesystem yet, and only when asked
+            yesno "${PARTITION_EFI} is not FAT32.\n\nFormat it as FAT32 for use as the EFI partition?\n(Only do this for a new, empty partition.)" || return 1
+            MANUAL_FORMAT_EFI=true
+        fi
+    fi
+
+    if $ENCRYPT_PLANNED; then
+        PARTITION_BOOT=$(wt --title "  Select /boot Partition" --menu \
+            "Encryption needs a separate unencrypted /boot (1GB).\nIt will be formatted as ext4." \
+            $WT_HEIGHT $WT_WIDTH $WT_MENU "${parts[@]}" 3>&1 1>&2 2>&3) || return 1
+        if [ "$PARTITION_BOOT" = "$PARTITION_ROOT" ] || [ "$PARTITION_BOOT" = "${PARTITION_EFI:-}" ]; then
+            step_back "/boot must be its own partition."; return 1
         fi
     fi
 }
 
 # ── Step 8: Encryption ──
+# Asked before partitioning: an encrypted install needs a separate /boot,
+# which changes the layout. Only collects the passphrase.
 setup_encryption() {
-    if ! yesno "Enable disk encryption (LUKS)?\n\nThis encrypts your root partition. You'll enter a\npassword each boot. Recommended for laptops."; then
-        return
+    ENCRYPT_PLANNED=false LUKS_PASS=""
+    local want=false
+    if $AUTO; then
+        [ "${ANS[encrypt]:-no}" = yes ] && want=true
+    else
+        yesno "Enable disk encryption (LUKS)?\n\nEncrypts the whole Tebian system. You'll type a passphrase\nat every boot. Recommended for laptops.\n\nIf you forget the passphrase, your data cannot be recovered." && want=true
     fi
-
-    ENCRYPT=true
+    $want || return 0
 
     local pass1 pass2
-    while true; do
-        pass1=$(password "Enter encryption passphrase:") || return 1
-        pass2=$(password "Confirm encryption passphrase:") || return 1
-
-        if [ "$pass1" = "$pass2" ] && [ -n "$pass1" ]; then
+    if $AUTO; then
+        LUKS_PASS="${ANS[encrypt_passphrase]:-}"
+        [ -n "$LUKS_PASS" ] || die "Answers file: encrypt=yes needs encrypt_passphrase"
+    else
+        while true; do
+            pass1=$(password "Enter encryption passphrase:") || return 1
+            pass2=$(password "Confirm encryption passphrase:") || return 1
+            if [ "$pass1" != "$pass2" ] || [ -z "$pass1" ]; then
+                msg "Passphrases don't match or are empty. Try again."
+                continue
+            fi
+            if [ ${#pass1} -lt 8 ] && ! yesno "That passphrase is only ${#pass1} characters — short\npassphrases can be guessed offline.\n\nUse it anyway?"; then
+                continue
+            fi
             break
-        fi
-        msg "Passphrases don't match or are empty. Try again."
-    done
+        done
+        LUKS_PASS="$pass1"
+    fi
+    ENCRYPT_PLANNED=true
+}
 
+# ── Apply the disk plan (runs only after the final confirmation) ──
+# Runs in a subshell under the progress gauge, so results come back through
+# $DISK_STATE; errexit + an ERR trap make any failing command abort with a
+# logged reason instead of carrying on with a half-made disk.
+apply_disk_plan() {
+    local state; state=$(mktemp /tmp/tebian-disk.XXXXXX)
+    set +e
     (
-        echo 10; echo "# Setting up LUKS encryption..."
-        echo -n "$pass1" | cryptsetup luksFormat --batch-mode "$PARTITION_ROOT" -
+        set -eE
+        trap 'echo "INSTALL_FAILED: partitioning: \"$BASH_COMMAND\" (line $LINENO)" >> "$INSTALL_LOG"' ERR
+        exec 2>>"$INSTALL_LOG"
+        local boot_part="" root_part="" efi_part=""
 
-        echo 40; echo "# Opening encrypted volume..."
-        echo -n "$pass1" | cryptsetup open "$PARTITION_ROOT" "$CRYPT_NAME" -
+        case "$PART_MODE" in
+        erase)
+            echo 5; echo "# Wiping ${DISK}..."
+            local p
+            while read -r p; do
+                [ "$p" = "$DISK" ] && continue
+                wipefs -a -f "$p" >/dev/null || true
+            done < <(lsblk -lnpo NAME "$DISK")
+            wipefs -a -f "$DISK" >/dev/null
+            sgdisk --zap-all "$DISK" >/dev/null || true
+            reread_table "$DISK"
 
-        echo 60; echo "# Formatting encrypted volume..."
-        mkfs.ext4 -F "/dev/mapper/$CRYPT_NAME" >/dev/null 2>&1
+            # GPT for UEFI, and for BIOS disks past MBR's 2 TiB limit (with a
+            # bios_grub partition for GRUB's core image). Small BIOS disks get
+            # MBR, which the oldest firmware handles best.
+            local n=1 table=gpt
+            if ! $IS_EFI && [ "$(blockdev --getsize64 "$DISK")" -le 2199023255552 ]; then
+                table=msdos
+            fi
+            echo 20; echo "# Creating partition table..."
+            parted -s "$DISK" mklabel "$table"
+            # MBR partitions take a type ("primary") where GPT takes a name
+            local nm_boot=boot nm_root=root
+            [ "$table" = msdos ] && nm_boot=primary nm_root=primary
+            local start=1
+            if $IS_EFI; then
+                parted -s "$DISK" mkpart ESP fat32 1MiB 1025MiB
+                parted -s "$DISK" set $n esp on
+                efi_part=$(part_dev "$DISK" $n); n=$((n + 1)); start=1025
+            elif [ "$table" = gpt ]; then
+                parted -s "$DISK" mkpart biosgrub 1MiB 2MiB
+                parted -s "$DISK" set $n bios_grub on
+                n=$((n + 1)); start=2
+            fi
+            local active=""
+            if $ENCRYPT_PLANNED; then
+                parted -s "$DISK" mkpart $nm_boot ext4 ${start}MiB $((start + 1024))MiB
+                boot_part=$(part_dev "$DISK" $n); active=$n; n=$((n + 1)); start=$((start + 1024))
+            fi
+            parted -s "$DISK" mkpart $nm_root ext4 ${start}MiB 100%
+            root_part=$(part_dev "$DISK" $n)
+            # Some legacy BIOSes won't boot an MBR disk with no active
+            # partition; mark the one holding /boot
+            [ "$table" = msdos ] && parted -s "$DISK" set "${active:-$n}" boot on
+            reread_table "$DISK"
+            wait_for_devs $efi_part $boot_part $root_part
+            [ -n "$efi_part" ] && mkfs.fat -F32 -n EFI "$efi_part" >/dev/null
+            ;;
 
-        echo 100; echo "# Encryption configured"
-    ) | progress "Setting up encryption..."
+        alongside)
+            local sect
+            sect=$(basename "$SHRINK_PART")
+            local start_s size_s pnum
+            start_s=$(cat "/sys/class/block/$sect/start")
+            size_s=$(cat "/sys/class/block/$sect/size")
+            pnum=$(cat "/sys/class/block/$sect/partition")
+            umount "$SHRINK_PART" 2>/dev/null || true
 
-    # Update root to point to the decrypted device
-    PARTITION_ROOT="/dev/mapper/$CRYPT_NAME"
+            # New partition size in sectors, aligned to 1MiB, and the
+            # filesystem shrunk to exactly that size — matching them the way
+            # GParted does. NTFS keeps its backup boot sector in the
+            # partition's last sector, so slack after the filesystem breaks
+            # it; and parted's "resizepart N 40GiB" (the old way) sets the
+            # END position on the disk, not the size, which cut the tail off
+            # any filesystem that didn't start at sector 0.
+            local align=2048 new_size_s new_bytes
+            new_size_s=$(( SHRINK_TO_BYTES / 512 / align * align ))
+            new_bytes=$(( new_size_s * 512 ))
+            [ "$new_size_s" -lt "$size_s" ]
+
+            echo 10; echo "# Shrinking ${SHRINK_PART} (this can take a while)..."
+            if [ "$SHRINK_FSTYPE" = ntfs ]; then
+                # Exact bytes: ntfsresize's k/M/G suffixes are decimal
+                ntfsresize --force --no-progress-bar -s "$new_bytes" "$SHRINK_PART" </dev/null >>"$INSTALL_LOG"
+            else
+                local rc=0
+                e2fsck -f -y "$SHRINK_PART" >>"$INSTALL_LOG" || rc=$?
+                [ "$rc" -le 2 ]   # 0 clean, 1-2 corrected; >2 is fatal
+                resize2fs "$SHRINK_PART" "$((new_bytes / 1024))K" >>"$INSTALL_LOG"
+            fi
+
+            echo 40; echo "# Resizing partition entry..."
+            echo ",$new_size_s" | sfdisk --no-reread --no-tell-kernel -q -N "$pnum" "$DISK" >>"$INSTALL_LOG"
+
+            # New partitions go exactly into the freed region, never to
+            # "100%" — Windows usually keeps a recovery partition after C:
+            local free_start=$(( start_s + new_size_s ))
+            local free_end=$(( start_s + size_s ))       # exclusive
+            local ptype_linux=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+            [ "$(disk_label "$DISK")" = dos ] && ptype_linux=83
+            local before after
+            before=$(lsblk -lnpo NAME "$DISK" | sort)
+            echo 50; echo "# Creating Tebian partitions..."
+            if $ENCRYPT_PLANNED; then
+                printf 'start=%s, size=%s, type=%s\nstart=%s, size=%s, type=%s\n' \
+                    "$free_start" $((1024 * 2048)) "$ptype_linux" \
+                    $((free_start + 1024 * 2048)) $((free_end - free_start - 1024 * 2048)) "$ptype_linux" |
+                    sfdisk --append --no-reread --no-tell-kernel -q "$DISK" >>"$INSTALL_LOG"
+            else
+                printf 'start=%s, size=%s, type=%s\n' "$free_start" $((free_end - free_start)) "$ptype_linux" |
+                    sfdisk --append --no-reread --no-tell-kernel -q "$DISK" >>"$INSTALL_LOG"
+            fi
+            reread_table "$DISK"
+            after=$(lsblk -lnpo NAME "$DISK" | sort)
+            local new; new=$(comm -13 <(echo "$before") <(echo "$after"))
+            if $ENCRYPT_PLANNED; then
+                boot_part=$(echo "$new" | sed -n 1p); root_part=$(echo "$new" | sed -n 2p)
+            else
+                root_part=$(echo "$new" | sed -n 1p)
+            fi
+            [ -n "$root_part" ]
+            wait_for_devs $boot_part $root_part
+            efi_part=""
+            $IS_EFI && efi_part=$(find_esp "$DISK")
+            ;;
+
+        manual)
+            root_part="$PARTITION_ROOT" boot_part="$PARTITION_BOOT" efi_part="$PARTITION_EFI"
+            if $MANUAL_FORMAT_EFI; then
+                mkfs.fat -F32 -n EFI "$efi_part" >/dev/null
+            fi
+            ;;
+        esac
+
+        if [ -n "$boot_part" ]; then
+            echo 60; echo "# Formatting /boot..."
+            wipefs -a -f "$boot_part" >/dev/null
+            mkfs.ext4 -q -F -L boot "$boot_part"
+        fi
+
+        local luks_part=""
+        if $ENCRYPT_PLANNED; then
+            echo 70; echo "# Encrypting root partition..."
+            luks_part="$root_part"
+            wipefs -a -f "$luks_part" >/dev/null
+            printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --batch-mode --type luks2 "$luks_part" -
+            printf '%s' "$LUKS_PASS" | cryptsetup open "$luks_part" "$CRYPT_NAME" -
+            root_part="/dev/mapper/$CRYPT_NAME"
+        fi
+
+        echo 85; echo "# Formatting root..."
+        [ -z "$luks_part" ] && wipefs -a -f "$root_part" >/dev/null
+        mkfs.ext4 -q -F -L tebian "$root_part"
+
+        {
+            echo "PARTITION_ROOT=$root_part"
+            echo "PARTITION_BOOT=$boot_part"
+            echo "PARTITION_EFI=$efi_part"
+            echo "LUKS_PART=$luks_part"
+        } > "$state"
+        echo 100; echo "# Disk ready"
+    ) | progress "Preparing ${DISK}..."
+    local rc=${PIPESTATUS[0]}
+    set -e
+    unset LUKS_PASS
+
+    if [ "$rc" -ne 0 ] || ! grep -q '^PARTITION_ROOT=/' "$state"; then
+        rm -f "$state"
+        grep -q INSTALL_FAILED "$INSTALL_LOG" || echo "INSTALL_FAILED: partitioning exited $rc" >> "$INSTALL_LOG"
+        install_failed
+    fi
+    # Read back what the subshell created (plain KEY=VALUE, device paths only)
+    local key val
+    while IFS='=' read -r key val; do
+        case "$key" in
+            PARTITION_ROOT|PARTITION_BOOT|PARTITION_EFI|LUKS_PART) printf -v "$key" '%s' "$val" ;;
+        esac
+    done < "$state"
+    rm -f "$state"
+    ENCRYPT=$ENCRYPT_PLANNED
 }
 
 # ── Step 9: User creation ──
 setup_user() {
+    if $AUTO; then
+        USERNAME="${ANS[username]}" USERPASS="${ANS[password]}" HOSTNAME_VAL="${ANS[hostname]:-tebian}"
+        [[ "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]] || die "Answers file: invalid username"
+        return 0
+    fi
     while true; do
         USERNAME=$(input "Enter your username:" "") || return 1
         # Validate username
@@ -833,6 +1015,11 @@ setup_user() {
 
 # ── Step 10: Mode selection ──
 select_mode() {
+    if $AUTO; then
+        MODE="${ANS[mode]:-desktop}"
+        case "$MODE" in desktop|server-bare|server-secure) ;; *) die "Answers file: bad mode '$MODE'" ;; esac
+        return 0
+    fi
     MODE=$(wt --title "  System Mode" --menu "\
 Choose what to install:\n" \
         $WT_HEIGHT $WT_WIDTH $WT_MENU \
@@ -853,20 +1040,28 @@ Choose server configuration:\n" \
 # ── Step 11: Confirmation ──
 confirm() {
     local encrypt_str="No"
-    $ENCRYPT && encrypt_str="Yes (LUKS)"
+    $ENCRYPT_PLANNED && encrypt_str="Yes (LUKS2, separate /boot)"
 
-    local efi_str="BIOS (MBR)"
-    $IS_EFI && efi_str="UEFI (GPT)"
+    local efi_str="Legacy BIOS"
+    $IS_EFI && efi_str="UEFI"
 
     local mode_str="Desktop"
     [ "$MODE" = "server-secure" ] && mode_str="Server (SSH + Firewall)"
     [ "$MODE" = "server-bare" ] && mode_str="Server (Bare)"
 
+    local disk_str
+    case "$PART_MODE" in
+        erase)     disk_str="ERASE ALL of ${DISK}" ;;
+        alongside) disk_str="Shrink ${SHRINK_PART} to $((SHRINK_TO_BYTES / 1073741824))GB, install in freed space" ;;
+        manual)    disk_str="Format ${PARTITION_ROOT} as root${PARTITION_BOOT:+, ${PARTITION_BOOT} as /boot}" ;;
+    esac
+
+    $AUTO && return 0
     wt --title "  Confirm Installation" --yesno "\
-Ready to install Tebian.
+Ready to install Tebian. Nothing has been written yet.
 
   Disk:        ${DISK}
-  Root:        ${PARTITION_ROOT}
+  Changes:     ${disk_str}
   Boot mode:   ${efi_str}
   Encryption:  ${encrypt_str}
   Keyboard:    ${KB_LAYOUT}
@@ -875,18 +1070,25 @@ Ready to install Tebian.
   Hostname:    ${HOSTNAME_VAL}
   Mode:        ${mode_str}
 
-This is your last chance to cancel.
-Proceed with installation?" 20 $WT_WIDTH || return 1
+Select Yes to begin. This is the point of no return." 21 $WT_WIDTH || return 1
 }
 
 # ── Install error handler ──
 install_failed() {
-    local exit_code=$?
+    if $AUTO; then
+        grep -o 'INSTALL_FAILED: .*' "$INSTALL_LOG" | tail -1 >&2
+        cleanup
+        poweroff
+    fi
     local fail_reason=""
     if grep -q "No network" "$INSTALL_LOG" 2>/dev/null; then
         fail_reason="\n\nCause: No internet connection.\nConnect to WiFi/Ethernet and retry."
     elif grep -q "debootstrap failed" "$INSTALL_LOG" 2>/dev/null; then
         fail_reason="\n\nCause: Package download failed.\nCheck internet connection and retry."
+    else
+        local last
+        last=$(grep -o 'INSTALL_FAILED: .*' "$INSTALL_LOG" 2>/dev/null | tail -1 | cut -c17-120)
+        [ -n "$last" ] && fail_reason="\n\nFailed step: ${last}"
     fi
     wt --title "  Installation Failed" --msgbox "\
 An error occurred during installation.${fail_reason}
@@ -900,6 +1102,7 @@ Press OK to drop to a shell." $WT_HEIGHT $WT_WIDTH
     echo "  Type 'sudo tebian-installer' to try again."
     echo ""
     cleanup
+    $AUTO && poweroff
     exit 1
 }
 
@@ -962,18 +1165,26 @@ sanitize_sway_configs_for_user() {
 
 # ── Step 12: Install base system ──
 install_base() {
-    # Initialize log
-    echo "=== Tebian Install $(date) ===" > "$INSTALL_LOG"
-
     mkdir -p "$TARGET"
     mount "$PARTITION_ROOT" "$TARGET"
-
+    if [ -n "$PARTITION_BOOT" ]; then
+        mkdir -p "$TARGET/boot"
+        mount "$PARTITION_BOOT" "$TARGET/boot"
+    fi
     if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
         mkdir -p "$TARGET/boot/efi"
         mount "$PARTITION_EFI" "$TARGET/boot/efi"
     fi
 
+    # errexit inside the gauge subshell: bash ignores `set -e` for anything
+    # on the left of `||` or inside `if`, which is how this used to run —
+    # a failed kernel install or chpasswd still ended in "installed
+    # successfully". Now any failing command stops the install and the ERR
+    # trap records which one.
+    set +e
     (
+        set -eE
+        trap 'echo "INSTALL_FAILED: \"$BASH_COMMAND\" (line $LINENO)" >> "$INSTALL_LOG"' ERR
         echo 2; echo "# Verifying network connectivity..."
         if ! curl -sfm10 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
             echo "INSTALL_FAILED: No network — cannot reach deb.debian.org" >> "$INSTALL_LOG"
@@ -986,7 +1197,7 @@ install_base() {
         # mirror's HTTP Date header — same HTTP we already use, no NTP needed.
         echo 3; echo "# Syncing clock for package verification..."
         # GET (not HEAD) — the mirror CDN strips Date from HEAD responses.
-        _http_date=$(curl -sf -m10 -o /dev/null -D - http://deb.debian.org/debian/ 2>/dev/null | grep -i '^date:' | head -1 | cut -d' ' -f2- | tr -d '\r')
+        _http_date=$(curl -sf -m10 -o /dev/null -D - http://deb.debian.org/debian/ 2>/dev/null | grep -i '^date:' | head -1 | cut -d' ' -f2- | tr -d '\r' || true)
         if [ -n "$_http_date" ]; then
             date -s "$_http_date" >> "$INSTALL_LOG" 2>&1 || true
             hwclock --systohc 2>/dev/null || true
@@ -1015,39 +1226,27 @@ install_base() {
 
         echo 35; echo "# Configuring system..."
 
-        # fstab
-        local root_uuid
-        if $ENCRYPT; then
-            root_uuid=$(blkid -o value -s UUID "/dev/mapper/$CRYPT_NAME")
-        else
-            root_uuid=$(blkid -o value -s UUID "$PARTITION_ROOT")
-        fi
-
+        # fstab (no swap partition: zram is configured below)
+        local root_uuid boot_uuid efi_uuid
+        root_uuid=$(blkid -o value -s UUID "$PARTITION_ROOT")
         echo "UUID=$root_uuid / ext4 errors=remount-ro 0 1" > "$TARGET/etc/fstab"
-
+        if [ -n "$PARTITION_BOOT" ]; then
+            boot_uuid=$(blkid -o value -s UUID "$PARTITION_BOOT")
+            echo "UUID=$boot_uuid /boot ext4 defaults 0 2" >> "$TARGET/etc/fstab"
+        fi
         if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
-            local efi_uuid
             efi_uuid=$(blkid -o value -s UUID "$PARTITION_EFI")
             echo "UUID=$efi_uuid /boot/efi vfat umask=0077 0 1" >> "$TARGET/etc/fstab"
         fi
 
-        if [ -n "$PARTITION_SWAP" ]; then
-            local swap_uuid
-            swap_uuid=$(blkid -o value -s UUID "$PARTITION_SWAP")
-            echo "UUID=$swap_uuid none swap sw 0 0" >> "$TARGET/etc/fstab"
-        fi
-
-        # crypttab
+        # crypttab — the raw partition recorded when it was encrypted, not
+        # "the first LUKS partition on the disk", which on a dual-boot disk
+        # can belong to another system
         if $ENCRYPT; then
-            local luks_part_uuid
-            # Get the UUID of the raw LUKS partition (not the decrypted mapper)
-            for p in $(lsblk -lnpo NAME "$DISK" | grep -v "^${DISK}$"); do
-                if cryptsetup isLuks "$p" 2>/dev/null; then
-                    luks_part_uuid=$(blkid -o value -s UUID "$p")
-                    break
-                fi
-            done
-            echo "$CRYPT_NAME UUID=$luks_part_uuid none luks" > "$TARGET/etc/crypttab"
+            local luks_uuid
+            luks_uuid=$(blkid -o value -s UUID "$LUKS_PART")
+            [ -n "$luks_uuid" ]
+            echo "$CRYPT_NAME UUID=$luks_uuid none luks" > "$TARGET/etc/crypttab"
         fi
 
         # Hostname
@@ -1103,7 +1302,7 @@ APT
 
         # CPU microcode
         local cpu_vendor
-        cpu_vendor=$(grep -m1 "vendor_id" /proc/cpuinfo 2>/dev/null | awk '{print $3}')
+        cpu_vendor=$(grep -m1 "vendor_id" /proc/cpuinfo 2>/dev/null | awk '{print $3}' || true)
         if [ "$cpu_vendor" = "GenuineIntel" ]; then
             echo 53; echo "# Installing Intel microcode..."
             chroot_apt_install intel-microcode
@@ -1113,7 +1312,7 @@ APT
         fi
 
         # Laptop detection — install power management
-        if ls /sys/class/power_supply/ 2>/dev/null | grep -qi bat; then
+        if grep -qsx Battery /sys/class/power_supply/*/type; then
             echo 54; echo "# Laptop detected — installing power management..."
             chroot_apt_install tlp powertop
             chroot "$TARGET" systemctl enable tlp >> "$INSTALL_LOG" 2>&1
@@ -1123,7 +1322,15 @@ APT
         chroot_apt_install \
             sudo bash-completion curl git nano \
             locales console-setup \
-            dbus libpam-systemd
+            dbus libpam-systemd \
+            systemd-timesyncd zram-tools
+
+        # Compressed swap in RAM instead of a swap partition: no partition
+        # to size or encrypt (a plain swap partition leaked decrypted pages
+        # on encrypted installs), and faster than disk swap on low-RAM PCs.
+        # zram-tools, with the same settings tebian-onboard and Settings >
+        # Performance > RAM Boost manage.
+        printf 'ALGO=zstd\nPERCENT=60\n' > "$TARGET/etc/default/zramswap"
 
         echo 57; echo "# Configuring locale..."
         # Locale
@@ -1150,18 +1357,31 @@ KBEOF
 
         echo 62; echo "# Installing bootloader..."
         if $IS_EFI; then
+            # Signed shim + GRUB so the installed system boots with Secure
+            # Boot on (the default on most PCs). The signed GRUB looks for
+            # its config under \EFI\debian, so the bootloader id must stay
+            # "debian". The extra copy at \EFI\BOOT\BOOTX64.EFI is what
+            # firmware falls back to when it ignores or loses NVRAM entries
+            # (common on some HP/MSI boards); the debconf answer keeps grub
+            # package upgrades maintaining that copy.
+            echo "grub-efi-amd64 grub2/force_efi_extra_removable boolean true" |
+                chroot "$TARGET" debconf-set-selections
             chroot_apt_install \
-                grub-efi-amd64 os-prober efibootmgr
-            if ! chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=tebian >> "$INSTALL_LOG" 2>&1; then
-                echo "GRUB_INSTALL_FAILED" >> "$INSTALL_LOG"
-                die "Bootloader installation failed. Check $INSTALL_LOG for details."
+                shim-signed grub-efi-amd64-signed grub-efi-amd64 efibootmgr os-prober
+            if ! chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+                    --bootloader-id=debian --uefi-secure-boot --force-extra-removable >> "$INSTALL_LOG" 2>&1; then
+                echo "INSTALL_FAILED: GRUB could not be installed to the EFI partition" >> "$INSTALL_LOG"
+                exit 1
             fi
         else
             chroot_apt_install \
                 grub-pc os-prober
-            if ! chroot "$TARGET" grub-install "$DISK" >> "$INSTALL_LOG" 2>&1; then
-                echo "GRUB_INSTALL_FAILED" >> "$INSTALL_LOG"
-                die "Bootloader installation failed. Check $INSTALL_LOG for details."
+            # Keep future grub-pc upgrades installing to the right disk
+            echo "grub-pc grub-pc/install_devices multiselect $DISK" |
+                chroot "$TARGET" debconf-set-selections
+            if ! chroot "$TARGET" grub-install --target=i386-pc "$DISK" >> "$INSTALL_LOG" 2>&1; then
+                echo "INSTALL_FAILED: GRUB could not be installed to $DISK" >> "$INSTALL_LOG"
+                exit 1
             fi
         fi
 
@@ -1169,8 +1389,10 @@ KBEOF
         # Enable os-prober for dual-boot detection
         echo "GRUB_DISABLE_OS_PROBER=false" >> "$TARGET/etc/default/grub"
 
-        # Clean boot splash — no terminal text flash
-        sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=0 systemd.show_status=false rd.udev.log_level=0 vt.global_cursor_default=0 vt.default_red=0,0,0,0,0,0,0,0 vt.default_grn=0,0,0,0,0,0,0,0 vt.default_blu=0,0,0,0,0,0,0,0"/' "$TARGET/etc/default/grub"
+        # Clean boot: Plymouth covers the text. No console palette tricks —
+        # zeroing vt.default_* made every TTY, rescue shell and fsck prompt
+        # black-on-black. loglevel=3 still hides noise but shows real errors.
+        sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 systemd.show_status=auto rd.udev.log_level=3"/' "$TARGET/etc/default/grub"
         sed -i 's/^#\?GRUB_GFXMODE=.*/GRUB_GFXMODE=auto/' "$TARGET/etc/default/grub"
         if $DUAL_BOOT; then
             sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$TARGET/etc/default/grub"
@@ -1197,25 +1419,33 @@ KBEOF
         if $ENCRYPT; then
             chroot_apt_install \
                 cryptsetup-initramfs
+            # The passphrase prompt runs in the initramfs, before the
+            # system's keymap loads — include it, or a non-US user types
+            # their passphrase on a US layout and can't unlock
+            if [ "$KB_LAYOUT" != us ]; then
+                sed -i 's/^#\?KEYMAP=.*/KEYMAP=y/' "$TARGET/etc/initramfs-tools/initramfs.conf"
+            fi
         fi
-
-        echo 72; echo "# Building initial ramdisk..."
-        chroot "$TARGET" update-initramfs -u >> "$INSTALL_LOG" 2>&1
-        chroot "$TARGET" update-grub >> "$INSTALL_LOG" 2>&1
+        # initramfs and grub.cfg are built once, at the very end, after
+        # every setting that feeds them (theme, background, crypttab) exists
 
         echo 75; echo "# Creating user ${USERNAME}..."
         chroot "$TARGET" useradd -m -s /bin/bash -G sudo,audio,video,input,render,netdev "$USERNAME"
         echo "${USERNAME}:${USERPASS}" | chroot "$TARGET" chpasswd
         unset USERPASS
 
-        # Passwordless sudo (user can lock it down later via tebian-settings)
-        echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "$TARGET/etc/sudoers.d/$USERNAME"
-        chmod 440 "$TARGET/etc/sudoers.d/$USERNAME"
+        # sudo asks for the user's password (sudo group membership above).
+        # Passwordless sudo is an opt-in in Settings > Security: on by
+        # default it meant any process running as the user — a browser
+        # exploit, a curl|bash script — silently had root.
 
         # Network
         echo 80; echo "# Configuring network..."
+        # wpasupplicant is only a Recommends of network-manager, and this
+        # helper skips recommends — without naming it, WiFi (including the
+        # network carried over below) could not connect at all
         chroot_apt_install \
-            network-manager
+            network-manager wpasupplicant
         chroot "$TARGET" systemctl enable NetworkManager >> "$INSTALL_LOG" 2>&1
 
         # Carry WiFi credentials from live session to installed system.
@@ -1240,7 +1470,13 @@ KBEOF
         # Copy Tebian repo
         local user_home="$TARGET/home/$USERNAME"
         cp -r "$TEBIAN_SRC" "$user_home/Tebian"
-        chroot "$TARGET" chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/Tebian"
+        # Seed tebian-update's manifest (sha256 of every shipped file) so
+        # the first update can tell the user's edits from upstream changes,
+        # instead of backing up every file it touches
+        mkdir -p "$user_home/.local/share/tebian"
+        ( cd "$user_home/Tebian" && find . -type f ! -path './.git/*' ! -name tebian.conf -printf '%P\0' |
+            sort -z | xargs -0 -r sha256sum ) > "$user_home/.local/share/tebian/manifest.sha256"
+        chroot "$TARGET" chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/Tebian" "/home/$USERNAME/.local"
 
         # Install tebian-bootstrap system-wide
         cp "$TEBIAN_SRC/bootstrap.sh" "$TARGET/usr/local/bin/tebian-bootstrap"
@@ -1279,16 +1515,25 @@ KBEOF
                 fonts-noto fonts-jetbrains-mono
 
             echo 93; echo "# Downloading Nerd Font..."
-            # Nerd font
-            chroot "$TARGET" bash -c "
-                export DEBIAN_FRONTEND=noninteractive
-                apt-get install -y --no-install-recommends xz-utils >/dev/null 2>&1
-                mkdir -p /usr/local/share/fonts
-                curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz -o /tmp/nf.tar.xz && \
-                    tar -xf /tmp/nf.tar.xz -C /usr/local/share/fonts && \
-                    fc-cache -f /usr/local/share/fonts && \
-                    rm -f /tmp/nf.tar.xz
-            " >/dev/null 2>&1 || true
+            # Pinned release + checksum (from upstream's SHA-256.txt): a
+            # "latest" download changes under us and can't be verified. Not
+            # fatal — the desktop falls back to Debian's JetBrains Mono,
+            # just without the icon glyphs.
+            local nf_ver="v3.5.1"
+            local nf_sha="04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf"
+            chroot_apt_install xz-utils
+            if curl -fsSL --retry 3 -o "$TARGET/tmp/nf.tar.xz" \
+                    "https://github.com/ryanoasis/nerd-fonts/releases/download/${nf_ver}/JetBrainsMono.tar.xz" &&
+               echo "${nf_sha}  $TARGET/tmp/nf.tar.xz" | sha256sum -c --quiet - >> "$INSTALL_LOG" 2>&1; then
+                mkdir -p "$TARGET/usr/local/share/fonts/JetBrainsMonoNerd"
+                # Extracted inside the target: xz-utils was just installed
+                # there, the live session doesn't have it
+                chroot "$TARGET" tar -xf /tmp/nf.tar.xz -C /usr/local/share/fonts/JetBrainsMonoNerd
+                chroot "$TARGET" fc-cache -f /usr/local/share/fonts >> "$INSTALL_LOG" 2>&1
+            else
+                echo "WARNING: Nerd Font download failed or checksum mismatch — skipped" >> "$INSTALL_LOG"
+            fi
+            rm -f "$TARGET/tmp/nf.tar.xz"
 
             echo 94; echo "# Configuring login manager..."
             # Set up greeter
@@ -1309,13 +1554,27 @@ KBEOF
             cp "$TEBIAN_SRC/configs/nwg-hello/tebian.glade" "$TARGET/etc/nwg-hello/" 2>/dev/null || true
             cp "$TEBIAN_SRC/configs/nwg-hello/sway-config" "$TARGET/etc/nwg-hello/" 2>/dev/null || true
 
-            # Fix nwg-hello upstream bug: session combo uses name instead of exec
-            chroot "$TARGET" bash -c '
-                NWG_UI="/usr/lib/python3/dist-packages/nwg_hello/ui.py"
-                if [ -f "$NWG_UI" ] && grep -q "sessions\[0\]\[\"name\"\]" "$NWG_UI"; then
-                    sed -i "s/sessions\[0\]\[\"name\"\]/sessions[0][\"exec\"]/" "$NWG_UI"
-                fi
-            ' 2>/dev/null || true
+            # Fix nwg-hello upstream bug (still in trixie's 0.3.0): the
+            # session combo uses the session name instead of its exec. ui.py
+            # belongs to the package, so an upgrade would silently undo an
+            # in-place edit — an apt hook re-applies it after every dpkg run.
+            # Same fix as desktop.sh installs.
+            mkdir -p "$TARGET/usr/local/sbin"
+            cat > "$TARGET/usr/local/sbin/tebian-nwg-hello-fix" << 'NWGFIX'
+#!/bin/sh
+# Re-applies Tebian's one-line nwg-hello fix; run by apt after every dpkg run.
+# Safe to delete (with /etc/apt/apt.conf.d/80-tebian-nwg-hello) once Debian's
+# nwg-hello selects sessions by exec.
+f=/usr/lib/python3/dist-packages/nwg_hello/ui.py
+if [ -f "$f" ] && grep -q 'sessions\[0\]\["name"\]' "$f"; then
+    sed -i 's/sessions\[0\]\["name"\]/sessions[0]["exec"]/' "$f"
+fi
+exit 0
+NWGFIX
+            chmod 755 "$TARGET/usr/local/sbin/tebian-nwg-hello-fix"
+            echo 'DPkg::Post-Invoke { "if [ -x /usr/local/sbin/tebian-nwg-hello-fix ]; then /usr/local/sbin/tebian-nwg-hello-fix; fi"; };' \
+                > "$TARGET/etc/apt/apt.conf.d/80-tebian-nwg-hello"
+            chroot "$TARGET" /usr/local/sbin/tebian-nwg-hello-fix
 
             # Clean greetd PAM (remove gnome-keyring/kwallet which cause auth failures)
             if [ -f "$TARGET/etc/pam.d/greetd" ]; then
@@ -1553,12 +1812,14 @@ BASHRC
                 chroot_apt_install \
                     ufw fail2ban btop unzip
 
-                chroot "$TARGET" bash -c "
-                    ufw default deny incoming
-                    ufw allow ssh
-                    ufw --force enable
-                    systemctl enable fail2ban
-                " >/dev/null 2>&1
+                # ufw's commands here only write rule files. `ufw enable` is
+                # avoided on purpose: inside the chroot it would load the
+                # rules into the *live session's* kernel. ENABLED=yes plus
+                # the unit brings it up on the installed system's first boot.
+                chroot "$TARGET" ufw default deny incoming >> "$INSTALL_LOG" 2>&1
+                chroot "$TARGET" ufw allow OpenSSH >> "$INSTALL_LOG" 2>&1
+                sed -i 's/^ENABLED=.*/ENABLED=yes/' "$TARGET/etc/ufw/ufw.conf"
+                chroot "$TARGET" systemctl enable ufw fail2ban >> "$INSTALL_LOG" 2>&1
             fi
         fi
 
@@ -1595,17 +1856,24 @@ STEAMEOF
             fi
         done
 
-        echo 95; echo "# Final cleanup..."
+        echo 97; echo "# Building boot files..."
+        chroot "$TARGET" update-initramfs -u -k all >> "$INSTALL_LOG" 2>&1
+        chroot "$TARGET" update-grub >> "$INSTALL_LOG" 2>&1
+
+        echo 98; echo "# Final cleanup..."
         chroot_apt_clean
 
         # Ensure unique machine-id is generated on first boot (not copied from live session)
         truncate -s 0 "$TARGET/etc/machine-id"
 
         echo 100; echo "# Installation complete!"
-    ) | progress "Installing Tebian..." || {
-        echo "INSTALL_FAILED: installer stage exited with non-zero status" >> "$INSTALL_LOG"
+    ) | progress "Installing Tebian..."
+    local rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        grep -q INSTALL_FAILED "$INSTALL_LOG" || echo "INSTALL_FAILED: installer stage exited $rc" >> "$INSTALL_LOG"
         install_failed
-    }
+    fi
 
     # Check if install succeeded (look for failure marker in log)
     if grep -q "INSTALL_FAILED" "$INSTALL_LOG" 2>/dev/null; then
@@ -1613,10 +1881,16 @@ STEAMEOF
     fi
 
     # Verify critical files exist on installed system
-    if [ ! -f "$TARGET/etc/fstab" ] || [ ! -d "$TARGET/boot" ]; then
-        echo "INSTALL_FAILED: base system incomplete" >> "$INSTALL_LOG"
+    if [ ! -f "$TARGET/etc/fstab" ] || ! ls "$TARGET"/boot/vmlinuz-* &>/dev/null ||
+       ! ls "$TARGET"/boot/initrd.img-* &>/dev/null || [ ! -f "$TARGET/boot/grub/grub.cfg" ]; then
+        echo "INSTALL_FAILED: base system incomplete (kernel, initramfs or grub.cfg missing)" >> "$INSTALL_LOG"
         install_failed
     fi
+
+    # Keep the log on the installed system, like Debian's /var/log/installer,
+    # and which ISO it came from (version + commit, written by build-iso.sh)
+    install -m 600 "$INSTALL_LOG" "$TARGET/var/log/tebian-install.log"
+    [ -f /etc/tebian-release ] && install -m 644 /etc/tebian-release "$TARGET/etc/tebian-release"
 }
 
 # ── Cleanup ──
@@ -1624,7 +1898,9 @@ cleanup() {
     # Unmount efivars first (bind mount inside /sys won't unmount with -R reliably)
     umount "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
     umount -R "$TARGET" 2>/dev/null || true
-    [ "$ENCRYPT" = true ] && cryptsetup close "$CRYPT_NAME" 2>/dev/null || true
+    # By mapping, not $ENCRYPT: a failure mid-partitioning can leave the
+    # volume open before ENCRYPT is set
+    [ -e "/dev/mapper/$CRYPT_NAME" ] && cryptsetup close "$CRYPT_NAME" 2>/dev/null || true
 }
 
 # ── Main (step-based with back navigation) ──
@@ -1636,11 +1912,25 @@ main() {
         die "The installer must be run as root.\n\nRun: sudo tebian-installer"
     fi
 
+    echo "=== Tebian Install $(date) ===" > "$INSTALL_LOG"
+    chmod 600 "$INSTALL_LOG"
+
+    local fwcfg=/sys/firmware/qemu_fw_cfg/by_name/opt/org.tebian/answers/raw
+    if [ "${1:-}" = "--answers" ]; then
+        load_answers "${2:?--answers needs a file}"
+    else
+        modprobe qemu_fw_cfg 2>/dev/null || true
+        [ -r "$fwcfg" ] && load_answers "$fwcfg"
+    fi
+
     detect_efi
 
-    # Steps array — cancel on any step goes back to previous
+    # Steps only collect answers; cancel on any step goes back to the
+    # previous one. Nothing touches the disk until apply_disk_plan, after
+    # confirm. Encryption is asked before partitioning because an
+    # encrypted install needs a separate /boot partition.
     local step=0
-    local steps=(welcome select_keyboard select_timezone setup_network select_disk select_partition_mode setup_encryption setup_user select_mode confirm)
+    local steps=(welcome select_keyboard select_timezone setup_network select_disk setup_encryption select_partition_mode setup_user select_mode confirm)
 
     while [ $step -lt ${#steps[@]} ]; do
         if ${steps[$step]}; then
@@ -1659,10 +1949,16 @@ main() {
         fi
     done
 
-    # All steps passed — install
+    # All steps passed — now write to disk
+    apply_disk_plan
     install_base
 
     cleanup
+
+    if $AUTO; then
+        echo "INSTALL_OK" >> "$INSTALL_LOG"
+        poweroff
+    fi
 
     wt --title "  Installation Complete" --msgbox "\
 Tebian has been installed successfully!

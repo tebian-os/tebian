@@ -54,27 +54,45 @@ fun refresh_callback() {
 
 Plymouth.SetRefreshFunction(refresh_callback);
 
-// Password prompt
+// Password prompt (LUKS unlock). The sprites must live at the top level:
+// Plymouth script frees a function's local variables when it returns, so
+// a Sprite() created inside the callback vanished at once and the prompt
+// was never visible — encrypted installs showed only the spinner.
+prompt_sprite = Sprite();
+bullet_sprite = Sprite();
+prompt_sprite.SetZ(10);
+bullet_sprite.SetZ(10);
+
 fun display_password_callback(prompt, bullets) {
-    pass_sprite = Sprite();
-    pass_label = Image.Text(prompt, 0.80, 0.84, 0.96, 1, "Sans 16");
-    pass_sprite.SetImage(pass_label);
-    pass_sprite.SetX(screen_width / 2 - pass_label.GetWidth() / 2);
-    pass_sprite.SetY(screen_height / 2 + 80);
+    prompt_image = Image.Text(prompt, 0.80, 0.84, 0.96, 1, "Sans 16");  // #cdd6f4
+    prompt_sprite.SetImage(prompt_image);
+    prompt_sprite.SetX(screen_width / 2 - prompt_image.GetWidth() / 2);
+    prompt_sprite.SetY(screen_height / 2 + 80);
+    prompt_sprite.SetOpacity(1);
 
-    bullet_str = "";
-    for (i = 0; i < bullets; i++)
-        bullet_str += "● ";
-
-    if (bullet_str != "") {
-        bullet_sprite.SetImage(Image.Text(bullet_str, 0.54, 0.71, 0.98, 1, "Sans 18"));
-        bullet_sprite.SetX(screen_width / 2 - bullet_sprite.GetImage().GetWidth() / 2);
-        bullet_sprite.SetY(screen_height / 2 + 115);
+    // A placeholder bar before the first keypress, so it reads as a field
+    if (bullets == 0)
+        bullet_str = "_";
+    else {
+        bullet_str = "";
+        for (i = 0; i < bullets && i < 32; i++)
+            bullet_str += "● ";
     }
+    bullet_image = Image.Text(bullet_str, 0.54, 0.71, 0.98, 1, "Sans 18");  // #89b4fa
+    bullet_sprite.SetImage(bullet_image);
+    bullet_sprite.SetX(screen_width / 2 - bullet_image.GetWidth() / 2);
+    bullet_sprite.SetY(screen_height / 2 + 115);
+    bullet_sprite.SetOpacity(1);
+}
+
+// Back to the plain splash once the passphrase is accepted
+fun display_normal_callback() {
+    prompt_sprite.SetOpacity(0);
+    bullet_sprite.SetOpacity(0);
 }
 
 Plymouth.SetDisplayPasswordFunction(display_password_callback);
-bullet_sprite = Sprite();
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
 
 // Hide messages/details
 fun message_callback(text) {
