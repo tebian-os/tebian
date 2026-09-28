@@ -3,12 +3,20 @@
 # TEBIAN ISO BUILDER
 # Builds bootable x86_64 PC live ISO using Debian live-build
 # The live session boots to a whiptail installer (tebian-installer)
-# Requires: sudo apt install live-build
+# Requires: a Debian host (or ~/build.sh, which runs this in a container).
+# Runs as root or as a user with sudo; missing build tools are installed.
 #
 # Usage: build-iso.sh [debian-version] [--release]
 #   --release  Build from committed git state only (git archive HEAD).
 #              Untracked files and uncommitted edits will NOT ship.
 #              Use this for distribution ISOs; plain mode for dev iteration.
+#
+# Environment:
+#   TEBIAN_OUTPUT_DIR  where the ISO and its .sha256 land (default: current dir)
+#   TEBIAN_ISO_NAME    output file name (default: tebian-YYYYMMDD.iso) — the
+#                      container wrapper passes this so the host and the
+#                      container (which runs on UTC) agree on the date
+#   TEBIAN_BUILD_DIR   scratch build tree (default: /tmp/tebian-build-amd64)
 #
 # For ARM boards (Pi, Armbian, etc.), use the remote installer instead:
 #   curl -sL tebian.org/install | bash
@@ -31,7 +39,19 @@ for arg in "$@"; do
         *) DEBIAN_VERSION="$arg" ;;
     esac
 done
-OUTPUT_DIR="$(pwd)"
+OUTPUT_DIR="${TEBIAN_OUTPUT_DIR:-$(pwd)}"
+ISO_NAME="${TEBIAN_ISO_NAME:-tebian-$(date +%Y%m%d).iso}"
+
+# Root in a container has no sudo installed and doesn't need it
+SUDO=""
+[ "$EUID" -ne 0 ] && SUDO="sudo"
+
+# Run a live-build stage as root. sudo resets the environment, so pass
+# SOURCE_DATE_EPOCH through explicitly or release builds would silently
+# lose their fixed timestamp on host builds.
+lb_run() {
+    $SUDO env ${SOURCE_DATE_EPOCH:+SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"} lb "$@"
+}
 
 # Auto-detect Tebian source directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,10 +79,33 @@ echo -e "${BLUE}  Building Tebian x86_64 ISO${NC}"
 echo -e "${BLUE}════════════════════════════════════════${NC}"
 echo ""
 
-# Install build dependencies
-echo -e "${YELLOW}Installing build dependencies...${NC}"
-sudo apt update
-sudo apt install -y live-build ${RELEASE_BUILD:+git}
+# Install build dependencies — only what's missing, so container builds
+# (image already has them) don't hit the network for apt on every run
+missing=()
+command -v lb >/dev/null || missing+=(live-build)
+command -v rsync >/dev/null || missing+=(rsync)
+[ -n "$RELEASE_BUILD" ] && ! command -v git >/dev/null && missing+=(git)
+if [ "${#missing[@]}" -gt 0 ]; then
+    echo -e "${YELLOW}Installing build dependencies: ${missing[*]}${NC}"
+    $SUDO apt-get update
+    $SUDO apt-get install -y "${missing[@]}"
+fi
+
+# Build in Linux-native FS by default (WSL /mnt/* mounts are often nodev/noexec and break debootstrap).
+BUILD_DIR="${TEBIAN_BUILD_DIR:-/tmp/tebian-build-amd64}"
+
+# Set before anything that can fail partway: a failed bootstrap or chroot
+# stage must still unmount the /dev bind mounts and drop the release export
+cleanup() {
+    $SUDO umount "$BUILD_DIR/chroot/dev/pts" 2>/dev/null || true
+    $SUDO umount "$BUILD_DIR/chroot/dev" 2>/dev/null || true
+    [ -n "$EXPORT_DIR" ] && rm -rf "$EXPORT_DIR"
+    return 0
+}
+trap cleanup EXIT
+
+TEBIAN_VERSION="$(cat "$TEBIAN_SRC/VERSION" 2>/dev/null || echo 0.0.0)"
+RELEASE_ID="dev-$(date +%Y%m%d)"
 
 # ── Release mode: export committed tree and build only from that ──
 # git archive HEAD excludes .git, untracked files, and uncommitted edits,
@@ -78,6 +121,10 @@ if [ -n "$RELEASE_BUILD" ]; then
     fi
 
     COMMIT=$(git -C "$TEBIAN_SRC" rev-parse --short HEAD)
+    RELEASE_ID="$COMMIT"
+    # Reproducible-builds convention, honoured by live-build: every
+    # timestamp in the image comes from the commit, not the build clock
+    export SOURCE_DATE_EPOCH="$(git -C "$TEBIAN_SRC" log -1 --format=%ct HEAD)"
     if [ -n "$(git -C "$TEBIAN_SRC" status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}Warning: uncommitted changes in $TEBIAN_SRC will NOT be included in the ISO${NC}"
         git -C "$TEBIAN_SRC" status --short | head -20
@@ -86,15 +133,12 @@ if [ -n "$RELEASE_BUILD" ]; then
     EXPORT_DIR=$(mktemp -d /tmp/tebian-release-XXXXXX)
     git -C "$TEBIAN_SRC" archive HEAD | tar -x -C "$EXPORT_DIR"
     TEBIAN_SRC="$EXPORT_DIR"
+    TEBIAN_VERSION="$(cat "$TEBIAN_SRC/VERSION" 2>/dev/null || echo 0.0.0)"
     echo -e "${GREEN}[release]${NC} Building from commit $COMMIT (clean git export)"
 fi
 
-# Build in Linux-native FS by default (WSL /mnt/* mounts are often nodev/noexec and break debootstrap).
-BUILD_DIR="${TEBIAN_BUILD_DIR:-/tmp/tebian-build-amd64}"
-ISO_NAME="tebian-$(date +%Y%m%d).iso"
-
-# Clean old build (needs sudo — lb build creates root-owned files)
-sudo rm -rf "$BUILD_DIR"
+# Clean old build (needs root — lb build creates root-owned files)
+$SUDO rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
@@ -105,6 +149,9 @@ lb config \
     --binary-images iso-hybrid \
     --bootloaders "grub-pc,grub-efi" \
     --bootappend-live "boot=live components toram quiet splash loglevel=0 vt.global_cursor_default=0 cfg80211.ieee80211_regdom=00" \
+    --iso-volume "TEBIAN_${TEBIAN_VERSION//./_}" \
+    --iso-application "Tebian OS ${TEBIAN_VERSION}" \
+    --iso-publisher "Tebian OS; https://tebian.org" \
     --debian-installer none \
     --mode debian \
     --apt-recommends false \
@@ -115,16 +162,12 @@ lb config \
     --mirror-binary http://deb.debian.org/debian
 
 # ── Bootloader branding ──
+# live-build reads only config/bootloaders/grub-pc and installs it as
+# /boot/grub for BIOS and UEFI alike — the UEFI image just loads that same
+# grub.cfg — so a single directory serves both.
 if [ -d "$TEBIAN_SRC/config/bootloaders" ]; then
     cp -r "$TEBIAN_SRC/config/bootloaders" config/
     find config/bootloaders -type f -name '._*' -delete
-
-    # Keep UEFI and BIOS menus in sync; UEFI falls back to plain text without grub-efi assets.
-    if [ -d "config/bootloaders/grub-pc" ] && [ ! -d "config/bootloaders/grub-efi" ]; then
-        mkdir -p "config/bootloaders/grub-efi"
-        cp -r config/bootloaders/grub-pc/* config/bootloaders/grub-efi/
-    fi
-
     echo -e "${GREEN}[iso]${NC} Custom boot theme applied"
 fi
 
@@ -187,12 +230,25 @@ network-manager
 # Clean boot splash
 plymouth
 plymouth-themes
+
+# Console keyboard layouts. kbd alone ships no keymaps; console-setup's
+# ckbcomp compiles the same XKB layout names the installed system uses,
+# so the live console can match the layout picked in the installer.
+kbd
+console-setup
+keyboard-configuration
 EOF
 
 # ── Copy Tebian repo into live filesystem ──
+# The .gitignore filter keeps dev builds from shipping anything git would
+# never track (VM disks, site build output, caches); the explicit excludes
+# cover dev-only files that are tracked elsewhere or never belong in an ISO.
 mkdir -p config/includes.chroot/home/user/Tebian
-rsync -a --exclude='node_modules' --exclude='dist' --exclude='.astro' --exclude='.git' \
-    --exclude='CLAUDE.md' --exclude='.claude' --exclude='MEMORY.md' --exclude='*.iso' --exclude='._*' \
+rsync -a --filter=':- .gitignore' \
+    --exclude='.git' --exclude='.vm' --exclude='tebian-site' --exclude='node_modules' \
+    --exclude='dist' --exclude='.astro' --exclude='__pycache__' --exclude='*.pyc' \
+    --exclude='.DS_Store' --exclude='._*' --exclude='*.iso' --exclude='*.qcow2' \
+    --exclude='CLAUDE.md' --exclude='.claude' --exclude='MEMORY.md' \
     "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
 
 # Install tebian-installer system-wide
@@ -206,6 +262,14 @@ chmod +x config/includes.chroot/usr/local/bin/tebian-bootstrap
 
 cp "$TEBIAN_SRC/scripts/tebian-session" config/includes.chroot/usr/local/bin/tebian-session
 chmod +x config/includes.chroot/usr/local/bin/tebian-session
+
+# Which build this is: `cat /etc/tebian-release` on a live session or in a
+# bug report ties it back to a commit (release) or a build date (dev)
+mkdir -p config/includes.chroot/etc
+cat > config/includes.chroot/etc/tebian-release << RELEOF
+TEBIAN_VERSION=$TEBIAN_VERSION
+TEBIAN_BUILD=$RELEASE_ID
+RELEOF
 
 # System wallpaper
 mkdir -p config/includes.chroot/usr/share/backgrounds/tebian
@@ -291,22 +355,15 @@ echo -e "${YELLOW}Building ISO (this takes 10-20 minutes)...${NC}"
 fix_chroot_dev() {
     if [ -d chroot/dev ] && ! mountpoint -q chroot/dev; then
         echo -e "${YELLOW}Bind-mounting /dev into chroot...${NC}"
-        sudo mount --bind /dev chroot/dev
-        sudo mount --bind /dev/pts chroot/dev/pts 2>/dev/null || true
+        $SUDO mount --bind /dev chroot/dev
+        $SUDO mount --bind /dev/pts chroot/dev/pts 2>/dev/null || true
     fi
 }
 
-cleanup_chroot_dev() {
-    sudo umount chroot/dev/pts 2>/dev/null || true
-    sudo umount chroot/dev 2>/dev/null || true
-    [ -n "$EXPORT_DIR" ] && rm -rf "$EXPORT_DIR"
-}
-
 # Split lb build into stages so we can fix /dev between bootstrap/chroot/binary
-sudo lb bootstrap
+lb_run bootstrap
 fix_chroot_dev
-trap cleanup_chroot_dev EXIT
-sudo lb chroot
+lb_run chroot
 
 # Resolve kernel version and patch grub.cfg before binary stage
 KVER=$(ls chroot/boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|.*/vmlinuz-||')
@@ -319,11 +376,17 @@ fi
 
 # Create includes.binary to override loopback.cfg with Ventoy-compatible version
 mkdir -p config/includes.binary/boot/grub
+# Entries mirror config/bootloaders/grub-pc/grub.cfg — keep the two in step
 cat > config/includes.binary/boot/grub/loopback.cfg << LOOPEOF
 # Ventoy/loopback boot support — \$iso_path is set by Ventoy/GRUB loopback
 menuentry "Tebian OS" {
     set gfxpayload=keep
     linux /live/vmlinuz-${KVER} boot=live components toram quiet splash cfg80211.ieee80211_regdom=00 findiso=\$iso_path
+    initrd /live/initrd.img-${KVER}
+}
+menuentry "Tebian OS (low memory — run from USB)" {
+    set gfxpayload=keep
+    linux /live/vmlinuz-${KVER} boot=live components quiet splash cfg80211.ieee80211_regdom=00 findiso=\$iso_path
     initrd /live/initrd.img-${KVER}
 }
 menuentry "Tebian OS (safe graphics)" {
@@ -335,25 +398,33 @@ LOOPEOF
 
 # lb chroot unmounts /dev when it finishes — re-mount for binary stage
 fix_chroot_dev
-sudo lb binary
+lb_run binary
 
 shopt -s nullglob
 isos=(live-image-*.iso *.hybrid.iso live-image-*.hybrid.iso)
 shopt -u nullglob
 
 if [ "${#isos[@]}" -gt 0 ]; then
+    mkdir -p "$OUTPUT_DIR"
     mv "${isos[0]}" "$OUTPUT_DIR/$ISO_NAME"
+    # Relative name inside the file, so `sha256sum -c` works from the ISO's folder
+    (cd "$OUTPUT_DIR" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
+    # Run via `sudo build-iso.sh`: hand both files back to the invoking user
+    if [ -n "${SUDO_UID:-}" ]; then
+        chown "$SUDO_UID:$SUDO_GID" "$OUTPUT_DIR/$ISO_NAME" "$OUTPUT_DIR/$ISO_NAME.sha256" 2>/dev/null || true
+    fi
     SIZE=$(du -h "$OUTPUT_DIR/$ISO_NAME" | awk '{print $1}')
     echo ""
     echo -e "${GREEN}════════════════════════════════════════${NC}"
     echo -e "${GREEN}  Created: $ISO_NAME ($SIZE)${NC}"
     echo -e "${GREEN}════════════════════════════════════════${NC}"
     echo ""
-    echo "  Output: $OUTPUT_DIR/$ISO_NAME"
+    echo "  Output:  $OUTPUT_DIR/$ISO_NAME"
+    echo "  SHA256:  $(cut -d' ' -f1 "$OUTPUT_DIR/$ISO_NAME.sha256")"
+    echo "  Build:   $TEBIAN_VERSION ($RELEASE_ID)"
     echo ""
     echo "  Test in QEMU:"
-    echo "    qemu-img create -f qcow2 tebian-test.qcow2 20G"
-    echo "    qemu-system-x86_64 -m 2048 -enable-kvm -cdrom $OUTPUT_DIR/$ISO_NAME -hda tebian-test.qcow2"
+    echo "    bash tebian-os/scripts/test-vm.sh --boot-only   (UEFI; --bios / --secureboot also available)"
     echo ""
     echo "  Flash to USB:"
     echo "    dd if=$OUTPUT_DIR/$ISO_NAME of=/dev/sdX bs=4M status=progress && sync"

@@ -1,5 +1,5 @@
 desktop-color: "#1e1e2e"
-desktop-image: "/boot/grub/live-theme/background.png"
+desktop-image: "/boot/grub/splash.png"
 title-color: "#cdd6f4"
 title-font: "Unicode Regular 16"
 title-text: ""

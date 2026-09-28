@@ -1,59 +1,115 @@
 # Tebian
 
-A usability layer for Debian. One ISO. One menu. Desktop, server, gaming, or security workstation — all from a single bootable image.
+A usability layer for Debian. Debian 13 (trixie) underneath, a Sway (Wayland)
+desktop on top, and one fuzzel-driven Control Center for everything in
+between. Everything is plain, readable bash.
 
 **Website:** [tebian.org](https://tebian.org)
-**Current version:** v0.1.0 (Early Release)
+**Version:** see [VERSION](./VERSION) — 3.2.0 at the time of writing
 **License:** MIT
 
 ## Install
 
-### From ISO (new machines)
+### From the ISO (x86_64 PCs)
 
-Download the latest ISO and flash it to a USB drive:
+Download the latest ISO and its checksum from
+[GitHub Releases](https://github.com/tebian-os/tebian/releases/latest), verify
+it, and write it to a USB stick (Ventoy, Rufus in DD mode, balenaEtcher, or
+`dd` all work):
 
+```bash
+sha256sum -c tebian-*.iso.sha256
+sudo dd if=tebian-YYYYMMDD.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
-https://github.com/tebian-os/tebian/releases/latest/download/tebian.iso
-```
 
-Boot, follow the installer, done.
+The ISO boots on UEFI and legacy BIOS machines. The live session logs in
+automatically and starts the text-mode installer, which offers:
 
-### On existing Debian-based systems
+- erase a disk, or install alongside Windows / another Linux (dual-boot)
+- optional full-disk encryption
+- **Desktop** (Sway), **Server with SSH + firewall**, or **bare server** modes
+- WiFi set up in the installer carries over to the installed system
+
+Boot menu entries: the default copies the live system into RAM (fast, and the
+USB can be removed); **low memory** runs straight from the USB for machines
+with around 2 GB of RAM; **safe graphics** adds `nomodeset` for GPUs that show
+a black screen.
+
+**Live session login:** user `user`, password `user` (passwordless sudo). You
+only need this if you leave the installer — restart it with
+`sudo tebian-installer`. `cat /etc/tebian-release` shows which build you are
+running.
+
+### On an existing Debian 13 system
 
 ```bash
 curl -sL tebian.org/install | bash
 ```
 
-Works on Debian, Raspberry Pi OS, Armbian, Ubuntu, and any Debian-based distro. Run on Pi OS Lite for ARM boards, or Debian netinst for minimal x86_64 setups.
+Needs Debian 13 (trixie) or newer, including Raspberry Pi OS and Armbian
+images built on trixie — this is the way to install on ARM boards. It asks
+whether to set up the Tebian desktop or a hardened headless server.
 
-## What it is
+## Using it
 
-- **Sway + fuzzel** as the sole UI entry point — no desktop icons, no start menu
-- **tebian.conf** is the single source of truth — every feature is declaratively defined
-- **`tebian-rebuild`** applies the manifest: install a container template, swap the theme, harden the box, toggle a service
-- **9 themes** ship in-tree (glass, cyber, nord, dracula, rose-pine, everforest, tokyo-night, paper, solid) with matching wallpapers, mako, swaylock, kitty configs
-- **Strips back to headless Debian** — delete the config folder, reboot, you have base Debian server
+| Keys | Action |
+|---|---|
+| `Super+D` | App launcher |
+| `Super+S` | Control Center (settings) |
+| `Super+A` | App drawer |
+| `Super+Enter` | Terminal |
+| `Super+Shift+/` | Keybinding cheat sheet |
+
+The Control Center (`Super+S`) covers WiFi, Bluetooth, audio, displays,
+themes, updates and power, with more under **More**, including:
+
+- **Desktop & UI → Font Rendering** — hinting and subpixel toggles
+  (defaults: medium hinting, RGB subpixel)
+- **Software → Graphics Drivers** — switch Mesa between Debian stable and
+  trixie-backports for newer GPU drivers
+- **Drives** — USB automount, a Windows-style repair offer for drives with
+  filesystem errors, safe eject, and formatting a USB drive back into one
+  partition (Drive Doctor)
+- security profiles, performance tweaks, containers and self-hosting
+  templates, backups
+
+11 themes ship in-tree (glass — the default — cyber, dracula, everforest,
+gruvbox, material, nord, paper, rose-pine, solid, tokyo-night), each with
+matching wallpaper, bar, notification, lock screen and terminal colours.
 
 ## Structure
 
 ```
-bootstrap.sh        # First-boot init
-install.sh          # Remote installer
-tebian.conf         # System manifest
-scripts/            # Menus, settings, launchers (~40 scripts)
-configs/            # sway, kitty, greetd, themes
-modules/            # core/, hw/ (x86, pi)
-config/             # live-build inputs (bootloaders, templates)
+bootstrap.sh        # Mode picker (desktop / server) used by install.sh
+install.sh          # Remote installer (curl | bash)
+tebian.conf         # Per-machine manifest applied by tebian-rebuild
+scripts/            # Control Center, menus, installer, ISO builder, tools
+configs/            # sway, kitty, mako, greetd, udev rules, themes
+modules/            # core/ (security), hw/ (x86, pi)
+config/             # live-build inputs (boot menu, templates)
 assets/             # wallpapers, plymouth splash
 ```
 
+## Building the ISO
+
+On a Debian 13 machine with Podman, from the directory that contains
+`tebian-os/`:
+
+```bash
+./build.sh --release   # container build of the committed tree
+```
+
+or directly on a Debian host: `bash tebian-os/scripts/build-iso.sh --release`.
+`--release` builds only committed files (`git archive HEAD`) and records the
+commit in `/etc/tebian-release`; without it the working tree ships as-is,
+which is meant for development. A `.sha256` file is written next to the ISO.
+Test boots: `bash tebian-os/scripts/test-vm.sh --boot-only` (add `--bios` or
+`--secureboot`).
+
 ## Uninstall
 
-If you decide to return to pure Debian, run `bash ~/Tebian/bootstrap.sh` and pick **[2] Server** — it strips all Tebian scripts, configs, state, and environment files. Or do it manually: remove `~/.config/tebian/`, `~/Tebian/`, `~/.local/bin/tebian-*`, `~/.local/state/tebian-*`, `~/.config/environment.d/tebian-*.conf`. Full manual procedure: [tebian.org/docs/un-tebian-guide](https://tebian.org/docs/un-tebian-guide).
-
-## Source
-
-Everything is bash. The website is a Neutron app (Preact + Vite, TypeScript). Browse the install script and installer directly at [tebian.org/source](https://tebian.org/source).
+`bash ~/Tebian/scripts/uninstall.sh` removes Tebian's scripts and configs
+and, asking before each step, reverts the system changes it made.
 
 ## Manifesto
 
