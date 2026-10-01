@@ -149,10 +149,15 @@ do_mount() {
     return 1
 }
 
+# The Modern bar's USB indicator (tebian-bar-status drives) listens on
+# signal 8; poke it so the icon appears/disappears at once, not next poll
+bar_refresh() { pkill -RTMIN+8 -x waybar 2>/dev/null; }
+
 announce_mount() {
     local label="$1" mnt="$2" note="${3:-}" used total
     read -r used total < <(df -h --output=used,size "$mnt" 2>/dev/null | tail -1)
     notify "$label mounted${note:+ ($note)}" "$mnt — ${used:-?} used of ${total:-?}"
+    bar_refresh
 }
 
 ignore_dev() { touch "$RUN_DIR/ignored/$(basename "$1")"; }
@@ -380,6 +385,7 @@ cmd_eject() {
     # genuinely safe to pull — unmounting alone doesn't guarantee that
     udisksctl power-off --no-user-interaction -b "$disk" >/dev/null 2>&1
     notify "$label ejected" "Safe to remove."
+    bar_refresh
 }
 
 # Erase a whole USB drive into a single partition — Windows' "Format" on a
@@ -546,7 +552,7 @@ cmd_watch() {
     while read -r _tag _time action devpath _rest <&3; do
         case "$action" in
             add)    handle "/dev/${devpath##*/}" & ;;
-            remove) rm -f "$RUN_DIR/ignored/${devpath##*/}" ;;
+            remove) rm -f "$RUN_DIR/ignored/${devpath##*/}"; bar_refresh ;;
         esac
     done
 }

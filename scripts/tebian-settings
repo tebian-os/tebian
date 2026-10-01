@@ -116,6 +116,18 @@ elif [[ "$1" == "--feel" ]]; then
     feel_menu
 elif [[ "$1" == "--packages" ]]; then
     package_browser
+elif [[ "$1" == "--menu" ]]; then
+    # One menu, opened straight from a bar button (tebian-bar-menu)
+    case "${2:-}" in
+        wifi)      wifi_menu ;;
+        bluetooth) bluetooth_menu ;;
+        audio)     audio_menu ;;
+        screen)    screen_all_menu ;;
+        power)     power_menu ;;
+        drives)    drives_menu ;;
+        update)    $TERM_CMD update-all; pkill -RTMIN+7 -x waybar 2>/dev/null ;;
+        *)         show_main_menu ;;
+    esac
 else
     show_main_menu
 fi

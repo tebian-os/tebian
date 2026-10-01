@@ -63,6 +63,13 @@ whether to set up the Tebian desktop or a hardened headless server.
 The Control Center (`Super+S`) covers WiFi, Bluetooth, audio, displays,
 themes, updates and power, with more under **More**, including:
 
+- **Desktop & UI → Bar Style** — *Modern*: a Waybar bar whose icons are
+  hover-highlighted buttons (WiFi, Bluetooth, volume, brightness, battery,
+  power) opening their menus as drop-downs from the bar, with scroll for
+  volume/brightness, a calendar tooltip, and indicators that appear only when
+  relevant (updates waiting, USB drive mounted, do-not-disturb, Caps Lock).
+  *Classic*: sway's own lean bar. Desktop mode starts on Modern, Base on
+  Classic.
 - **Desktop & UI → Font Rendering** — hinting and subpixel toggles
   (defaults: medium hinting, RGB subpixel)
 - **Software → Graphics Drivers** — switch Mesa between Debian stable and

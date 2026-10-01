@@ -66,7 +66,15 @@ ui_menu() {
         FX_LABEL="󰖲 Window Effects (Not Installed)"
     fi
 
+    # Bar style: Modern (Waybar: hover buttons, drop-down menus) or Classic
+    if tebian_block_has bar-style; then
+        STYLE_LABEL="󰕮 Bar Style (Current: Modern)"
+    else
+        STYLE_LABEL="󰕮 Bar Style (Current: Classic)"
+    fi
+
     UI_OPTS="$ICON_LABEL
+$STYLE_LABEL
 $BAR_LABEL
 $POS_LABEL
 $FLOAT_LABEL
@@ -89,6 +97,12 @@ ${SNAP_LABEL:+$SNAP_LABEL
     elif [[ "$U_CHOICE" =~ "Enable UI Icons" ]]; then
         rm -f "$HOME/.config/tebian/no_icons"
         tnotify "Tebian UI" "Icon Mode Enabled"
+    elif [[ "$U_CHOICE" =~ "Bar Style" ]]; then
+        if tebian_block_has bar-style; then
+            bar_style_set classic
+        else
+            bar_style_set modern
+        fi
     elif [[ "$U_CHOICE" =~ "Show Bar Always" ]]; then
         bar_set_mode dock
         tnotify "UI" "Bar set to always visible"
@@ -303,6 +317,23 @@ Fast (0.5)
 bar_set_mode() {
     swaymsg "bar bar-0 mode $1" >/dev/null 2>&1 &
     tebian_block_set bar-mode "bar bar-0 mode $1"
+}
+
+# Modern = Waybar through tebian-bar, set as sway's swaybar_command. Classic
+# = sway's own swaybar + status.sh (the lean default, and Base mode's bar).
+# tebian-bar itself falls back to swaybar if Waybar ever goes missing.
+bar_style_set() {
+    if [ "$1" = modern ]; then
+        # Install first; only switch once Waybar is really there
+        tebian_term_apt_install waybar || return
+        tebian_block_set bar-style "bar bar-0 swaybar_command $HOME/.local/bin/tebian-bar"
+        tnotify "UI" "Modern bar on — hover the icons, click for menus"
+    else
+        tebian_block_remove bar-style
+        tnotify "UI" "Classic bar on"
+    fi
+    # The bar process is replaced on reload
+    swaymsg reload >/dev/null 2>&1 &
 }
 
 bar_set_position() {

@@ -179,6 +179,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             btop
             zram-tools
             python3-i3ipc
+            waybar
         )
 
         # x86-only extras
@@ -302,6 +303,14 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         idempotent_append "# tebian-floating-mode" "$HOME/.config/sway/config.user"
         idempotent_append "focus_follows_mouse yes" "$HOME/.config/sway/config.user"
         echo "  Floating mode with title bars enabled"
+
+        # Modern bar (Waybar: hover buttons, drop-down menus). Base mode
+        # keeps the lean Classic bar; either can be switched in Settings >
+        # Desktop & UI > Bar Style.
+        if command -v waybar >/dev/null && [ -x "$HOME/.local/bin/tebian-bar" ]; then
+            tebian_block_set bar-style "bar bar-0 swaybar_command $HOME/.local/bin/tebian-bar"
+            echo "  Modern bar enabled"
+        fi
         
         # Apply default theme (Nord) so kitty/fuzzel/mako have sane configs
         if command -v tebian-theme &>/dev/null; then

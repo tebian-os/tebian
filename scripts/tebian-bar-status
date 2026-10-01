@@ -1,0 +1,87 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN BAR STATUS
+# Custom Waybar modules, as one JSON line each. An empty "text" makes Waybar
+# hide the module: indicators exist only while there is something to say
+# (the Law of Zero applied to the bar).
+#
+#   tebian-bar-status update   apt updates waiting       (hourly + signal 7)
+#   tebian-bar-status drives   USB drives mounted        (signal 8)
+#   tebian-bar-status dnd      do-not-disturb is on      (signal 9)
+#   tebian-bar-status perf     CPU / RAM, if Bar Stats on (every 5s)
+#
+# Producers refresh a module immediately with: pkill -RTMIN+<n> -x waybar
+# ==============================================================================
+
+# JSON-escape a string (backslash, quote, newline)
+j() {
+    local s="${1//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "${s//$'\n'/\\n}"
+}
+emit() {  # text tooltip [class]
+    printf '{"text": "%s", "tooltip": "%s", "class": "%s"}\n' "$(j "$1")" "$(j "$2")" "${3:-}"
+}
+
+case "${1:-}" in
+update)
+    # Simulated upgrade against the package lists apt already has (Debian's
+    # apt-daily timer refreshes them) — no network, no root, no lock
+    n=$(apt-get -s -q -o Debug::NoLocking=1 dist-upgrade 2>/dev/null | grep -c '^Inst ')
+    if [ "${n:-0}" -gt 0 ]; then
+        emit "󰚰" "$n update$([ "$n" -ne 1 ] && echo s) available — click to install" "pending"
+    else
+        emit "" ""
+    fi
+    ;;
+drives)
+    lines="" count=0
+    while read -r disk; do
+        while read -r name mnt; do
+            [ -n "$mnt" ] || continue
+            label=$(lsblk -dno LABEL "$name" 2>/dev/null)
+            lines+="${label:-${name##*/}}  →  $mnt"$'\n'
+            count=$((count + 1))
+        done < <(lsblk -nrpo NAME,MOUNTPOINT "$disk" 2>/dev/null)
+    done < <(lsblk -dnrpo NAME,TRAN 2>/dev/null | awk '$2 == "usb" { print $1 }')
+    if [ "$count" -gt 0 ]; then
+        emit "󰕓" "${lines}Click to eject or manage drives" "mounted"
+    else
+        emit "" ""
+    fi
+    ;;
+dnd)
+    if makoctl mode 2>/dev/null | grep -qx do-not-disturb; then
+        emit "󰂛" "Do not disturb — notifications are held back. Click to turn off." "active"
+    else
+        emit "" ""
+    fi
+    ;;
+perf)
+    # Same switch as the Classic bar's stats (Settings > Screen > Bar Stats)
+    if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
+        emit "" ""
+        exit 0
+    fi
+    # CPU from the delta between two /proc/stat reads, the previous one kept
+    # in the runtime dir so each call costs a single read
+    state="${XDG_RUNTIME_DIR:-/tmp}/tebian-bar/cpu"
+    read -r _ u n s i w x y z _ < /proc/stat
+    total=$((u + n + s + i + w + x + y + z)) idle=$((i + w))
+    cpu=0
+    if read -r ptotal pidle 2>/dev/null < "$state" && [ "$total" -gt "$ptotal" ]; then
+        cpu=$(( 100 * ((total - ptotal) - (idle - pidle)) / (total - ptotal) ))
+    fi
+    mkdir -p "${state%/*}"; echo "$total $idle" > "$state"
+    mt="" ma=""
+    while read -r k v _; do
+        case "$k" in MemTotal:) mt=$v ;; MemAvailable:) ma=$v ;; esac
+        [ -n "$mt" ] && [ -n "$ma" ] && break
+    done < /proc/meminfo
+    mem=$(( 100 * (mt - ma) / mt ))
+    emit "󰍛 ${cpu}%  󰘚 ${mem}%" "CPU ${cpu}% · RAM ${mem}% used of $((mt / 1024)) MB
+Click for btop · toggle in Settings > Screen > Bar Stats" "perf"
+    ;;
+*)
+    echo "usage: tebian-bar-status update|drives|dnd|perf" >&2; exit 2 ;;
+esac

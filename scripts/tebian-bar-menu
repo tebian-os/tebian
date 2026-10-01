@@ -1,0 +1,16 @@
+#!/bin/bash
+# Opens a Tebian menu as a drop-down from the bar (Waybar on-click actions).
+# Usage: tebian-bar-menu <wifi|bluetooth|audio|screen|power|drives|update|settings|launcher> [left]
+# The anchor follows the bar's edge (TEBIAN_BAR_POSITION, set by tebian-bar);
+# tfuzzel picks it up from TEBIAN_MENU_ANCHOR, so every submenu opened from
+# there drops down in the same place.
+edge=top
+[ "${TEBIAN_BAR_POSITION:-top}" = bottom ] && edge=bottom
+side=right
+[ "${2:-}" = left ] && side=left
+export TEBIAN_MENU_ANCHOR="$edge-$side"
+
+case "${1:-settings}" in
+    launcher) exec tebian-menu ;;
+    *)        exec tebian-settings --menu "${1:-settings}" ;;
+esac

@@ -1,0 +1,182 @@
+// Tebian's Modern bar (Waybar). Started by tebian-bar, which fills in the
+// position from sway and the colours from the active theme.
+//
+// Icons only; details live in tooltips. Indicators appear only while they
+// have something to say. Left-click opens the matching Settings menu as a
+// drop-down from the bar; right-click, middle-click and scroll do the
+// quick things.
+//
+// To customise, copy this file to ~/.config/waybar/config.jsonc — tebian-bar
+// then uses yours (and ~/.config/waybar/style.css, if present).
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 2,
+  // Follow sway's bar mode (Hide Bar / show on Super) via `bar bar-0`
+  "ipc": true,
+  "id": "bar-0",
+
+  "modules-left": ["custom/tebian", "sway/workspaces", "sway/mode"],
+  "modules-center": ["clock", "custom/dnd", "keyboard-state"],
+  "modules-right": [
+    "custom/perf",
+    "group/tray-drawer",
+    "custom/update",
+    "custom/drives",
+    "bluetooth",
+    "network",
+    "pulseaudio",
+    "backlight",
+    "battery",
+    "custom/power"
+  ],
+
+  "custom/tebian": {
+    "format": "\uf306",
+    "tooltip-format": "Apps — Super+D\nRight-click: Settings — Super+S",
+    "on-click": "tebian-bar-menu launcher left",
+    "on-click-right": "tebian-bar-menu settings left"
+  },
+
+  "sway/workspaces": {
+    "disable-scroll": false,
+    "all-outputs": false,
+    "format": "{name}"
+  },
+
+  "sway/mode": {
+    "format": "󰩨 {}"
+  },
+
+  "clock": {
+    "format": "{:%a %d %b  %H:%M}",
+    "format-alt": "{:%A %d %B %Y  ·  week %V}",
+    "tooltip-format": "<tt>{calendar}</tt>\n<small>Click: full date · Right-click: do not disturb</small>",
+    "calendar": {
+      "mode": "month",
+      "weeks-pos": "left",
+      "format": {
+        "today": "<b><u>{}</u></b>",
+        "weeks": "<span alpha='60%'>{}</span>"
+      }
+    },
+    "on-click-right": "makoctl mode -t do-not-disturb >/dev/null; pkill -RTMIN+9 -x waybar"
+  },
+
+  "custom/dnd": {
+    "exec": "tebian-bar-status dnd",
+    "return-type": "json",
+    "interval": "once",
+    "signal": 9,
+    "on-click": "makoctl mode -t do-not-disturb >/dev/null; pkill -RTMIN+9 -x waybar"
+  },
+
+  // Shown only while Caps Lock is on
+  "keyboard-state": {
+    "capslock": true,
+    "format": { "capslock": "{icon}" },
+    "format-icons": { "locked": "󰪛 CAPS", "unlocked": "" }
+  },
+
+  "custom/perf": {
+    "exec": "tebian-bar-status perf",
+    "return-type": "json",
+    "interval": 5,
+    "on-click": "kitty -e btop"
+  },
+
+  // Tray icons stay tucked away until hovered
+  "group/tray-drawer": {
+    "orientation": "inherit",
+    "drawer": { "transition-duration": 300, "children-class": "tray-item" },
+    "modules": ["custom/tray-handle", "tray"]
+  },
+  "custom/tray-handle": {
+    "format": "󰅃",
+    "tooltip-format": "Background apps"
+  },
+  "tray": { "icon-size": 14, "spacing": 10 },
+
+  "custom/update": {
+    "exec": "tebian-bar-status update",
+    "return-type": "json",
+    "interval": 3600,
+    "signal": 7,
+    "on-click": "tebian-bar-menu update"
+  },
+
+  // Appears while a USB drive is mounted (Drive Doctor sends signal 8)
+  "custom/drives": {
+    "exec": "tebian-bar-status drives",
+    "return-type": "json",
+    "interval": 60,
+    "signal": 8,
+    "on-click": "tebian-bar-menu drives"
+  },
+
+  "bluetooth": {
+    "format": "󰂯",
+    "format-connected": "󰂱",
+    "format-off": "󰂲",
+    "format-disabled": "󰂲",
+    "format-no-controller": "",
+    "tooltip-format": "Bluetooth: {status}",
+    "tooltip-format-connected": "Connected:\n{device_enumerate}",
+    "tooltip-format-enumerate-connected": "{device_alias}",
+    "tooltip-format-enumerate-connected-battery": "{device_alias}  {device_battery_percentage}%",
+    "on-click": "tebian-bar-menu bluetooth"
+  },
+
+  "network": {
+    "format-wifi": "{icon}",
+    "format-ethernet": "󰈀",
+    "format-linked": "󰤫",
+    "format-disconnected": "󰤮",
+    "format-disabled": "󰤭",
+    "format-icons": ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"],
+    "tooltip-format-wifi": "{essid}  ·  {signalStrength}%\n{ipaddr}",
+    "tooltip-format-ethernet": "Wired  ·  {ipaddr}",
+    "tooltip-format-disconnected": "Not connected — click to pick a network",
+    "interval": 5,
+    "on-click": "tebian-bar-menu wifi"
+  },
+
+  "pulseaudio": {
+    "format": "{icon}",
+    "format-muted": "󰝟",
+    "format-icons": { "headphone": "󰋋", "headset": "󰋎", "default": ["󰕿", "󰖀", "󰕾"] },
+    "tooltip-format": "Volume {volume}%  ·  {desc}\nScroll: volume · Right-click: mute",
+    "scroll-step": 5,
+    "on-click": "tebian-bar-menu audio",
+    "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+  },
+
+  "backlight": {
+    "format": "{icon}",
+    "format-icons": ["󰃞", "󰃟", "󰃠"],
+    "tooltip-format": "Brightness {percent}%\nScroll to adjust",
+    "on-scroll-up": "brightnessctl -q set 5%+",
+    "on-scroll-down": "brightnessctl -q set 5%-",
+    "on-click": "tebian-bar-menu screen"
+  },
+
+  "battery": {
+    "interval": 10,
+    "states": { "warning": 20, "critical": 10 },
+    "format": "{icon}",
+    "format-charging": "󰂄",
+    "format-plugged": "󰚥",
+    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "format-warning": "{icon} {capacity}%",
+    "format-critical": "{icon} {capacity}%",
+    "tooltip-format": "{capacity}%  ·  {timeTo}",
+    "on-click": "tebian-bar-menu power"
+  },
+
+  "custom/power": {
+    "format": "⏻",
+    "tooltip-format": "Power — lock, sleep, restart, shut down",
+    "on-click": "tebian-bar-menu power"
+  }
+}

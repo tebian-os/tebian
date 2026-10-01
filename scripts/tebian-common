@@ -121,13 +121,31 @@ is_back() {
 # Fuzzel Wrapper (Handles Icon Toggling + Separator Filtering)
 tfuzzel() {
     local RESULT
+    # Opened from the Modern bar: drop down from it instead of the screen
+    # centre (tebian-bar-menu sets the edge). Inherited by every submenu.
+    # A drop-down is also sized to its items: themes fix fuzzel at 15
+    # lines, which left short menus as a tall box hanging off the bar.
+    local -a anchor=()
+    local input=""
+    if [ -n "${TEBIAN_MENU_ANCHOR:-}" ]; then
+        input=$(cat)
+        local n
+        n=$(printf '%s\n' "$input" | grep -c .)
+        [ "$n" -gt 15 ] && n=15
+        [ "$n" -lt 1 ] && n=1
+        anchor=(--anchor "$TEBIAN_MENU_ANCHOR" --x-margin 8 --y-margin 6 --lines "$n")
+        exec 3< <(printf '%s\n' "$input")
+    else
+        exec 3<&0
+    fi
     if [ -f "$HOME/.config/tebian/no_icons" ]; then
         # Text Mode: Strip Nerd Fonts (PUA: E000-F8FF, F0000-FFFFD) and Emoji (1F300-1FAFF)
-        RESULT=$(perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@")
+        RESULT=$(perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' <&3 | fuzzel "${anchor[@]}" "$@")
     else
         # Icon Mode (Default): Pass through
-        RESULT=$(fuzzel "$@")
+        RESULT=$(fuzzel "${anchor[@]}" "$@" <&3)
     fi
+    exec 3<&-
     # Filter out separator lines — treat as no selection
     if [[ "$RESULT" =~ ^─+$ ]]; then
         return 1

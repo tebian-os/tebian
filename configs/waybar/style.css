@@ -1,0 +1,116 @@
+/* Tebian Modern bar. Colours (@base, @text, @surface0, @surface1, @overlay0,
+   @accent, @red, @green, ...) are defined above this file by tebian-bar from
+   the active theme's sway palette. */
+
+* {
+    font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 13px;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+}
+
+window#waybar {
+    background: alpha(@base, 0.92);
+    color: @text;
+}
+
+tooltip {
+    background: @base;
+    border: 1px solid @surface1;
+    border-radius: 10px;
+}
+tooltip label {
+    color: @text;
+    padding: 4px 6px;
+}
+
+/* Every clickable item is a soft pill that lights up under the pointer */
+#custom-tebian,
+#workspaces button,
+#mode,
+#clock,
+#custom-dnd,
+#keyboard-state,
+#custom-perf,
+#custom-tray-handle,
+#tray,
+#custom-update,
+#custom-drives,
+#bluetooth,
+#network,
+#pulseaudio,
+#backlight,
+#battery,
+#custom-power {
+    padding: 0 10px;
+    margin: 4px 1px;
+    border-radius: 8px;
+    background: transparent;
+    color: @text;
+    transition: background-color 150ms ease, color 150ms ease;
+}
+
+#custom-tebian:hover,
+#workspaces button:hover,
+#clock:hover,
+#custom-dnd:hover,
+#custom-perf:hover,
+#custom-tray-handle:hover,
+#custom-update:hover,
+#custom-drives:hover,
+#bluetooth:hover,
+#network:hover,
+#pulseaudio:hover,
+#backlight:hover,
+#battery:hover,
+#custom-power:hover {
+    background: @surface0;
+}
+
+#custom-tebian {
+    color: @accent;
+    font-size: 15px;
+    margin-left: 6px;
+}
+#custom-power { margin-right: 6px; }
+
+/* Workspaces: dim when empty of focus, accent pill when focused */
+#workspaces button {
+    padding: 0 9px;
+    color: @overlay0;
+    box-shadow: none;
+    text-shadow: none;
+}
+#workspaces button.focused {
+    background: @accent;
+    color: @base;
+}
+#workspaces button.urgent {
+    background: @red;
+    color: @base;
+}
+
+#mode {
+    background: @accent;
+    color: @base;
+}
+
+/* Indicators that mean "look at me" */
+#custom-update.pending,
+#custom-drives.mounted { color: @accent; }
+#custom-dnd.active,
+#keyboard-state label.locked { color: @red; }
+#keyboard-state label:not(.locked) { padding: 0; }
+
+#battery.charging, #battery.plugged { color: @green; }
+#battery.warning:not(.charging) { color: @accent; }
+#battery.critical:not(.charging) { color: @red; }
+
+#network.disconnected,
+#network.disabled,
+#bluetooth.off,
+#bluetooth.disabled,
+#pulseaudio.muted { color: @overlay0; }
+
+#custom-perf { color: @overlay0; }

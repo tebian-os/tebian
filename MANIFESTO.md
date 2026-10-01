@@ -1,4 +1,4 @@
-# THE TEBIAN MANIFESTO (v3.1)
+# THE TEBIAN MANIFESTO (v3.2)
 
 > "Sovereignty through minimalism. Power through the Fleet."
 
@@ -38,13 +38,19 @@ Every script, every config, and every architectural decision is documented and a
 
 ---
 
-## Current Reality (v3.1)
+## Current Reality (v3.2)
 
 What Tebian is today:
 - **Minimal base**: 3 packages (sway + fuzzel + network-manager)
 - **First boot choice**: Base (minimal) or Desktop (familiar)
 - **Install Essentials menu**: Add what you want, when you want
-- A portable, hardware-agnostic status bar (Intel/AMD, laptop/desktop, Pi)
+- A portable, hardware-agnostic status bar (Intel/AMD, laptop/desktop, Pi):
+  the lean Classic bar, or the Modern bar — hover buttons with drop-down
+  menus, and indicators that exist only while they have something to say
+- Drive Doctor: USB drives mount on plug-in; drives with filesystem errors
+  get a repair offer, like Windows' "scan and fix"
+- An installer verified end to end: encrypted installs, Secure Boot, and
+  dual-boot beside Windows
 - A working Sway + Wayland desktop with coordinated theming
 - A unified Control Center (16+ categories, fuzzel-based):
   - System Updates (apt + flatpak unified)
@@ -65,6 +71,6 @@ What Tebian is not (yet):
 
 ---
 
-*Updated: Feb 19, 2026*
+*Updated: Sep 30, 2026*
 *Architecture: Tyler (Tebian)*
-*Version: 3.1 - Minimal Release*
+*Version: 3.2*
