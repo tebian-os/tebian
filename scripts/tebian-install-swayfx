@@ -1,8 +1,17 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN SWAYFX INSTALLER
-# Builds SwayFX 0.5.3 from source for Debian Trixie using meson subprojects
-# Drop-in replacement for sway with blur, rounded corners, shadows, dim
+# Builds SwayFX 0.6 from source for Debian Trixie using meson subprojects
+# Drop-in replacement for sway with blur, rounded corners, shadows, dim and
+# window/workspace animations
+#
+# Installs into its own prefix, /opt/tebian-swayfx, with /usr/local/bin/sway
+# and swaymsg symlinked to it. SwayFX 0.6 needs newer wlroots, wayland,
+# libdrm, pixman and xkbcommon than trixie ships; they are built here and kept
+# in /opt/tebian-swayfx/lib, which only the swayfx binary uses (RUNPATH). The
+# rest of the system never sees them — installing them into /usr/local/lib
+# would shadow the system copies for every program, Mesa included.
+# Removing SwayFX = rm -rf /opt/tebian-swayfx and the two symlinks.
 # ==============================================================================
 
 set -euo pipefail
@@ -14,24 +23,34 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
     source "$HOME/.local/bin/tebian-common"
 fi
 
-SWAYFX_VERSION="0.5.3"
-WLROOTS_VERSION="0.19.0"
-SCENEFX_VERSION="0.4.1"
+SWAYFX_VERSION="0.6"
+# Pinned release tags — each the version SwayFX 0.6 / wlroots 0.20 /
+# scenefx 0.5 require, where trixie's own package is too old:
+WLROOTS_VERSION="0.20.2"              # trixie: 0.18
+SCENEFX_VERSION="0.5"                 # not packaged
+WAYLAND_VERSION="1.24.0"              # trixie: 1.23 (scenefx needs >=1.24)
+WAYLAND_PROTOCOLS_VERSION="1.47"      # trixie: 1.44 (wlroots needs >=1.47)
+PIXMAN_VERSION="pixman-0.46.4"        # trixie: 0.44 (wlroots needs >=0.46)
+LIBDRM_VERSION="libdrm-2.4.131"       # trixie: 2.4.124 (scenefx needs >=2.4.129)
+XKBCOMMON_VERSION="xkbcommon-1.13.1"  # trixie: 1.7 (scenefx needs >=1.8)
+
+PREFIX="/opt/tebian-swayfx"
 BUILD_DIR="$HOME/.cache/tebian-swayfx-build"
+# Holds the installed version; an empty marker means the old 0.5.3 build
 MARKER="$HOME/.config/tebian/swayfx-installed"
 
-if [ -f "$MARKER" ]; then
-    echo "SwayFX is already installed."
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SWAYFX_VERSION" ] && [ -x "$PREFIX/bin/sway" ]; then
+    echo "SwayFX $SWAYFX_VERSION is already installed."
     echo "To reinstall, remove $MARKER and run again."
     exit 0
 fi
 
 echo ""
 echo "  ┌─────────────────────────┐"
-echo "  │  SwayFX $SWAYFX_VERSION Installer  │"
+echo "  │  SwayFX $SWAYFX_VERSION Installer    │"
 echo "  └─────────────────────────┘"
 echo ""
-echo "  This will build SwayFX from source (~5 min)."
+echo "  This will build SwayFX from source (~3-10 min; ~500MB of build tools)."
 echo "  Your sway config is fully compatible — no changes needed."
 echo ""
 
@@ -39,7 +58,7 @@ echo ""
 echo "[1/4] Installing build dependencies..."
 sudo apt update
 sudo apt install -y \
-    meson ninja-build cmake pkg-config \
+    build-essential meson ninja-build cmake pkg-config \
     libwayland-dev libwayland-egl-backend-dev wayland-protocols \
     libinput-dev libxkbcommon-dev libpixman-1-dev \
     libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev \
@@ -51,8 +70,9 @@ sudo apt install -y \
     libpcre2-dev libjson-c-dev libpango1.0-dev libcairo2-dev \
     libgdk-pixbuf-2.0-dev libevdev-dev \
     scdoc gettext \
-    libsystemd-dev \
+    libsystemd-dev libudev-dev \
     liblcms2-dev libliftoff-dev libdisplay-info-dev \
+    bison libffi-dev libexpat1-dev libxml2-dev \
     git
 
 echo ""
@@ -61,32 +81,104 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Download SwayFX
-git clone --depth 1 --branch "$SWAYFX_VERSION" https://github.com/WillPower3309/swayfx.git
-cd swayfx
+clone() {  # <tag> <url> [dir]
+    git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$1" "$2" ${3:+"$3"}
+}
 
-# Set up meson subprojects (bundles correct wlroots + scenefx versions)
+clone "$SWAYFX_VERSION" https://github.com/wlrfx/swayfx.git
+cd swayfx
 mkdir -p subprojects
 cd subprojects
 
-git clone --depth 1 --branch "$WLROOTS_VERSION" https://gitlab.freedesktop.org/wlroots/wlroots.git
-git clone --depth 1 --branch "$SCENEFX_VERSION" https://github.com/wlrfx/scenefx.git
+clone "$WLROOTS_VERSION" https://gitlab.freedesktop.org/wlroots/wlroots.git
+clone "$SCENEFX_VERSION" https://github.com/wlrfx/scenefx.git
+# wlroots ships wraps for these, but they track git HEAD — pin them instead
+rm -rf wlroots/subprojects
+
+# Each library also gets a wrap file whose [provide] section tells meson
+# which dependency names this directory supplies. Together with
+# --force-fallback-for below, every user (swayfx, wlroots, scenefx) links
+# the same pinned copy instead of mixing in trixie's older one.
+subproject() {  # <dir> <url> <tag> <dependency names>
+    clone "$3" "$2" "$1"
+    printf '[wrap-git]\ndirectory = %s\nurl = %s\nrevision = %s\ndepth = 1\n\n[provide]\ndependency_names = %s\n' \
+        "$1" "$2" "$3" "$4" > "$1.wrap"
+}
+subproject wayland https://gitlab.freedesktop.org/wayland/wayland.git "$WAYLAND_VERSION" \
+    "wayland-server, wayland-client, wayland-cursor, wayland-egl, wayland-scanner"
+subproject wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git \
+    "$WAYLAND_PROTOCOLS_VERSION" "wayland-protocols"
+subproject pixman https://gitlab.freedesktop.org/pixman/pixman.git "$PIXMAN_VERSION" "pixman-1"
+subproject libdrm https://gitlab.freedesktop.org/mesa/drm.git "$LIBDRM_VERSION" "libdrm"
+subproject libxkbcommon https://github.com/xkbcommon/libxkbcommon.git "$XKBCOMMON_VERSION" "xkbcommon"
 
 cd ..
 
 echo ""
 echo "[3/4] Building SwayFX (this takes a few minutes)..."
-meson setup build/ --prefix=/usr/local -Dman-pages=disabled -Dswaybar=false -Dswaynag=false
+# RUNPATH points the binary at the private libs. Because the dynamic linker
+# loads each soname once, Mesa's EGL/GBM inside the sway process reuse these
+# same copies of libdrm and libwayland-server rather than loading trixie's.
+# libdrm: core only (Mesa's own libdrm_amdgpu etc. come from the system).
+# xkbcommon: built here, so point it at the system keyboard data explicitly —
+# its default would look under /opt and find no layouts.
+meson setup build/ --prefix="$PREFIX" --libdir=lib --buildtype=release \
+    --force-fallback-for=wayland-server,wayland-client,wayland-cursor,wayland-egl,wayland-scanner,wayland-protocols,pixman-1,libdrm,xkbcommon \
+    -Dc_link_args="-Wl,-rpath,$PREFIX/lib" \
+    -Dman-pages=disabled -Dswaybar=false -Dswaynag=false \
+    -Dwlroots:examples=false \
+    -Dwayland:documentation=false -Dwayland:tests=false -Dwayland:dtd_validation=false \
+    -Dpixman:tests=disabled -Dpixman:demos=disabled -Dpixman:gtk=disabled \
+    -Dpixman:libpng=disabled -Dpixman:openmp=disabled \
+    -Dlibdrm:intel=disabled -Dlibdrm:radeon=disabled -Dlibdrm:amdgpu=disabled \
+    -Dlibdrm:nouveau=disabled -Dlibdrm:vmwgfx=disabled -Dlibdrm:omap=disabled \
+    -Dlibdrm:exynos=disabled -Dlibdrm:freedreno=disabled -Dlibdrm:tegra=disabled \
+    -Dlibdrm:vc4=disabled -Dlibdrm:etnaviv=disabled -Dlibdrm:cairo-tests=disabled \
+    -Dlibdrm:man-pages=disabled -Dlibdrm:valgrind=disabled -Dlibdrm:tests=false \
+    -Dlibxkbcommon:enable-tools=false -Dlibxkbcommon:enable-x11=false \
+    -Dlibxkbcommon:enable-docs=false -Dlibxkbcommon:enable-wayland=false \
+    -Dlibxkbcommon:enable-bash-completion=false \
+    -Dlibxkbcommon:xkb-config-root=/usr/share/X11/xkb \
+    -Dlibxkbcommon:x-locale-root=/usr/share/X11/locale \
+    -Dlibxkbcommon:xkb-config-extra-path=/etc/xkb
 ninja -C build/
 
 echo ""
 echo "[4/4] Installing..."
-sudo ninja -C build/ install
+# Only now that the build succeeded: a failed build leaves the old SwayFX
+# (or plain sway) working.
+sudo rm -rf "$PREFIX"
+sudo meson install -C build/ --quiet
+
+# Remove the SwayFX 0.5.3 install, which went straight into /usr/local.
+# Exact paths only — anything else in /usr/local is the user's.
+for old in \
+    /usr/local/bin/sway /usr/local/bin/swaymsg \
+    /usr/local/share/wayland-sessions/sway.desktop \
+    /usr/local/share/backgrounds/sway \
+    /usr/local/share/bash-completion/completions/sway \
+    /usr/local/share/bash-completion/completions/swaymsg \
+    /usr/local/share/fish/vendor_completions.d/sway.fish \
+    /usr/local/share/fish/vendor_completions.d/swaymsg.fish \
+    /usr/local/share/zsh/site-functions/_sway \
+    /usr/local/share/zsh/site-functions/_swaymsg \
+    /usr/local/include/wlroots-0.19 /usr/local/include/scenefx-0.4; do
+    if [ -e "$old" ] || [ -L "$old" ]; then sudo rm -rf "$old"; fi
+done
+for libdir in /usr/local/lib /usr/local/lib/x86_64-linux-gnu; do
+    sudo rm -f "$libdir"/libwlroots-0.19.so* "$libdir"/libscenefx-0.4.so* \
+        "$libdir"/pkgconfig/wlroots-0.19.pc "$libdir"/pkgconfig/scenefx-0.4.pc
+done
 sudo ldconfig
 
-# Mark as installed
+# /usr/local/bin comes before /usr/bin in PATH, so these take over from
+# Debian's sway 1.10 — which stays installed as the fallback
+sudo ln -sfn "$PREFIX/bin/sway" /usr/local/bin/sway
+sudo ln -sfn "$PREFIX/bin/swaymsg" /usr/local/bin/swaymsg
+
+# Mark as installed (with version, so a newer installer knows to upgrade)
 mkdir -p "$HOME/.config/tebian"
-touch "$MARKER"
+echo "$SWAYFX_VERSION" > "$MARKER"
 
 # Enable effects in config
 if [ -f "$HOME/.config/sway/config.user" ]; then
@@ -99,15 +191,19 @@ if [ -f "$HOME/.config/sway/config.user" ]; then
             "corner_radius 8" "shadows enable" "shadow_blur_radius 20" \
             "default_dim_inactive 0.1"
     fi
+    # Animations get their own block: Settings > Window Effects rewrites
+    # the whole "swayfx" block from its own list of settings. 250ms is
+    # SwayFX's recommended value.
+    tebian_block_has swayfx-anim || tebian_block_set swayfx-anim "animation_duration_ms 250"
 fi
 
 echo ""
 echo "  ✅ SwayFX $SWAYFX_VERSION installed!"
 echo ""
-echo "  SwayFX replaces sway at /usr/local/bin/sway."
+echo "  SwayFX lives in $PREFIX; /usr/local/bin/sway points to it."
 echo "  /usr/local/bin takes priority over /usr/bin in PATH."
 echo ""
-echo "  Effects enabled: blur, corner radius, shadows, dim inactive"
+echo "  Effects enabled: blur, corner radius, shadows, dim inactive, animations"
 echo "  Toggle effects in: Settings > More > Desktop & UI > Window Effects"
 echo ""
 echo "  Log out and back in (or reboot) to activate."

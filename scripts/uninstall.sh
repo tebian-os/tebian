@@ -125,6 +125,22 @@ fi
 sudo rm -f /etc/fonts/conf.d/40-tebian-font-rendering.conf
 step "Tebian helpers removed from /usr/local and /etc"
 
+# SwayFX (built by tebian-install-swayfx into its own prefix). Only the
+# sway/swaymsg symlinks that point into that prefix are removed, so Debian's
+# /usr/bin/sway takes over again. (Its effect blocks in config.user went
+# with ~/.config/sway above — on plain sway they'd be config errors.)
+if [ -d /opt/tebian-swayfx ]; then
+    for bin in sway swaymsg; do
+        if readlink "/usr/local/bin/$bin" 2>/dev/null | grep -q '^/opt/tebian-swayfx/'; then
+            sudo rm -f "/usr/local/bin/$bin"
+        fi
+    done
+    sudo rm -rf /opt/tebian-swayfx
+    sudo ldconfig 2>/dev/null
+    rm -f "$HOME/.config/tebian/swayfx-installed"
+    step "SwayFX removed (Debian's sway is used again)"
+fi
+
 # Firejail links: only /usr/local/bin entries that point at firejail
 for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable; do
     if [ -L "/usr/local/bin/$bin" ] && readlink "/usr/local/bin/$bin" | grep -q firejail; then
