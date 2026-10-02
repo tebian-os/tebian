@@ -112,9 +112,11 @@ PanelWindow {
     return Math.round(Math.min(desired, maxHeight))
   }
 
-  // Right-aligned against the screen edge, just off the bar
+  // Right-aligned against the screen edge, just off the bar — where
+  // Waybar's status icons sit. centerOnBar centres it instead (the clock).
+  property bool centerOnBar: false
   readonly property point cardOrigin: {
-    var x = screenW - contentWidth - margin
+    var x = centerOnBar ? Math.round((screenW - contentWidth) / 2) : screenW - contentWidth - margin
     var y = barPos === "bottom" ? screenH - barH - contentHeight - gap : barH + gap
     x = Math.max(margin, x)
     y = Math.max(margin, Math.min(y, screenH - contentHeight - margin))

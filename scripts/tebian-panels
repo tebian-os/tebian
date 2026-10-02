@@ -7,7 +7,7 @@
 #
 #   tebian-panels run            run the daemon (tebian-bar starts it beside Waybar)
 #   tebian-panels toggle <name>  open/close a panel (network, bluetooth, audio,
-#                                power); exits non-zero
+#                                power, calendar, display, drives); exits non-zero
 #                                if no daemon answers, so callers can fall back
 # ==============================================================================
 set -u

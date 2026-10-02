@@ -1,6 +1,6 @@
 #!/bin/bash
 # Opens a Tebian menu as a drop-down from the bar (Waybar on-click actions).
-# Usage: tebian-bar-menu <wifi|bluetooth|audio|screen|power|drives|update|settings|launcher> [left]
+# Usage: tebian-bar-menu <wifi|bluetooth|audio|screen|display|calendar|power|drives|update|settings|launcher> [left]
 # The anchor follows the bar's edge (TEBIAN_BAR_POSITION, set by tebian-bar);
 # tfuzzel picks it up from TEBIAN_MENU_ANCHOR, so every submenu opened from
 # there drops down in the same place.
@@ -18,9 +18,15 @@ case "${1:-}" in
     bluetooth) tebian-panels toggle bluetooth && exit 0 ;;
     audio)     tebian-panels toggle audio && exit 0 ;;
     power)     tebian-panels toggle power && exit 0 ;;
+    screen|display) tebian-panels toggle display && exit 0 ;;
+    calendar)  tebian-panels toggle calendar && exit 0 ;;
+    drives)    tebian-panels toggle drives && exit 0 ;;
 esac
 
 case "${1:-settings}" in
     launcher) exec tebian-menu ;;
+    display)  exec tebian-settings --menu screen ;;
+    # No fuzzel calendar: a plain month view in a notification instead
+    calendar) exec notify-send -a Calendar "$(date '+%A %d %B %Y')" "$(cal 2>/dev/null)" ;;
     *)        exec tebian-settings --menu "${1:-settings}" ;;
 esac

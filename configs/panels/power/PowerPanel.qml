@@ -389,7 +389,7 @@ Panel {
               textFormat: Text.PlainText
               text: (root.batteryPresent ? root.heroStatusText
                      : (root.uptimeText ? "Up " + root.uptimeText : "")).toUpperCase()
-              color: Qt.darker(root.bar.foreground, 1.4)
+              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true

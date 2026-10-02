@@ -743,7 +743,7 @@ Panel {
               id: heroStatus
               textFormat: Text.PlainText
               text: root.heroStatusText.toUpperCase()
-              color: Qt.darker(root.bar.foreground, 1.4)
+              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -862,7 +862,7 @@ Panel {
           text: !root.adapter ? "No Bluetooth adapter"
               : !root.adapter.enabled ? "Turn Bluetooth on to scan"
               : "Scanning for devices…"
-          color: Qt.darker(root.bar.foreground, 1.5)
+          color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.5)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
@@ -917,7 +917,7 @@ Panel {
     readonly property color statusColor: {
       if (isConnected) return root.bar.foreground
       if (action !== "" || devState === 3 || dev.pairing === true) return root.bar.foreground
-      return Qt.darker(root.bar.foreground, 1.5)
+      return Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.5)
     }
 
     implicitHeight: rowContent.implicitHeight + Style.spacing.rowPaddingX

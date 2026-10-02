@@ -1,0 +1,107 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANEL DISPLAY
+# Data and actions behind the Modern bar's Display panel (UI ported from
+# Omarchy 4's monitor panel). Same mechanisms as Settings > Screen:
+# brightnessctl, sway outputs, wlsunset for night light.
+#
+#   tebian-panel-display state
+#       line 1: brightness percent, or "unavailable" (no backlight: desktops)
+#       line 2: focused output name
+#       line 3: focused output scale
+#       line 4: JSON [{name, enabled, focused, width, height, scale}]
+#       line 5: night light: off | <kelvin>
+#       line 6: 1 if wlsunset is installed, else 0
+#   tebian-panel-display brightness <percent>
+#   tebian-panel-display scale <output> <scale>     (kept in config.user)
+#   tebian-panel-display output <output> enable|disable
+#   tebian-panel-display nightlight off|<kelvin>
+# ==============================================================================
+set -u
+
+NL_CONF="$HOME/.config/tebian/nightlight.conf"
+
+common() {
+    local d
+    for d in "$(dirname "$(readlink -f "$0")")" "$HOME/.local/bin"; do
+        [ -f "$d/tebian-common" ] && { . "$d/tebian-common"; return 0; }
+    done
+    return 1
+}
+
+brightness_percent() {
+    if command -v brightnessctl >/dev/null && [ -n "$(ls -A /sys/class/backlight 2>/dev/null)" ]; then
+        # -m: device,class,current,percent%,max
+        brightnessctl -m -c backlight 2>/dev/null | head -1 | cut -d, -f4 | tr -d '%'
+    fi
+}
+
+case "${1:-}" in
+state)
+    b=$(brightness_percent)
+    echo "${b:-unavailable}"
+    swaymsg -r -t get_outputs 2>/dev/null | python3 -c '
+import json, sys
+try:
+    outs = json.load(sys.stdin)
+except Exception:
+    outs = []
+focused = next((o for o in outs if o.get("focused")), outs[0] if outs else {})
+print(focused.get("name", ""))
+print(focused.get("scale", 1))
+rows = []
+for o in outs:
+    m = o.get("current_mode") or {}
+    rows.append({"name": o.get("name", ""), "enabled": bool(o.get("active")),
+                 "focused": bool(o.get("focused")), "width": m.get("width", 0),
+                 "height": m.get("height", 0), "scale": o.get("scale", 1),
+                 "model": " ".join(x for x in (o.get("make"), o.get("model")) if x and x != "Unknown")})
+print(json.dumps(rows))
+' || printf '\n1\n[]\n'
+    if pgrep -x wlsunset >/dev/null; then cat "$NL_CONF" 2>/dev/null || echo 3500; else echo off; fi
+    command -v wlsunset >/dev/null && echo 1 || echo 0
+    ;;
+brightness)
+    p="${2:?percent}"
+    [[ "$p" =~ ^[0-9]+$ ]] || exit 2
+    [ "$p" -lt 1 ] && p=1
+    [ "$p" -gt 100 ] && p=100
+    exec brightnessctl -q -c backlight set "${p}%"
+    ;;
+scale)
+    out="${2:?output}" s="${3:?scale}"
+    [[ "$out" =~ ^[A-Za-z0-9._-]+$ ]] && [[ "$s" =~ ^[0-9]+(\.[0-9]+)?$ ]] || exit 2
+    swaymsg "output $out scale $s" >/dev/null || exit 1
+    # Keep it across logins: one line per output in a config.user block
+    if common; then
+        mapfile -t lines < <(tebian_block_get output-scale 2>/dev/null | grep -v "^output $out scale ")
+        tebian_block_set output-scale "${lines[@]}" "output $out scale $s"
+    fi
+    ;;
+output)
+    out="${2:?output}" act="${3:?enable|disable}"
+    [[ "$out" =~ ^[A-Za-z0-9._-]+$ ]] || exit 2
+    case "$act" in
+        enable) exec swaymsg "output $out enable" >/dev/null ;;
+        disable)
+            # Never switch off the last screen
+            n=$(swaymsg -r -t get_outputs | python3 -c 'import json,sys; print(sum(1 for o in json.load(sys.stdin) if o.get("active")))')
+            [ "${n:-0}" -gt 1 ] || exit 1
+            exec swaymsg "output $out disable" >/dev/null ;;
+        *) exit 2 ;;
+    esac
+    ;;
+nightlight)
+    v="${2:?off|kelvin}"
+    pkill -x wlsunset 2>/dev/null
+    [ "$v" = off ] && exit 0
+    [[ "$v" =~ ^[0-9]{4}$ ]] || exit 2
+    command -v wlsunset >/dev/null || exit 1
+    mkdir -p "${NL_CONF%/*}"; echo "$v" > "$NL_CONF"
+    # Near-constant warmth, as Settings > Screen does: with the default
+    # sun-based schedule (lat/long 0) daytime would stay at 6500K
+    setsid wlsunset -t "$v" -T $((v + 100)) >/dev/null 2>&1 &
+    ;;
+*)
+    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

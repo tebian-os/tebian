@@ -1093,7 +1093,7 @@ Panel {
               return ""
             }
             visible: text !== ""
-            color: Qt.darker(root.bar.foreground, 1.4)
+            color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
@@ -1462,7 +1462,7 @@ Panel {
       if (isFailed) return root.bar.urgent
       if (isBusy) return root.bar.foreground
       if (isConnected) return root.bar.foreground
-      return Qt.darker(root.bar.foreground, 1.5)
+      return Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.5)
     }
 
     implicitHeight: rowBody.implicitHeight + (isPasswordOpen ? passwordPanel.implicitHeight + Style.spacing.md : 0)
@@ -1542,7 +1542,7 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           horizontalAlignment: Text.AlignHCenter
           text: row.forgetVisible ? "󰅙" : "󰌾"
-          color: row.forgetVisible ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.4)
+          color: row.forgetVisible ? root.bar.urgent : Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.subtitle
         }

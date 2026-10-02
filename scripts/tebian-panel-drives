@@ -1,0 +1,63 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANEL DRIVES
+# Data and actions behind the Modern bar's Drives panel. Mounting goes
+# through Drive Doctor, so a drive with filesystem errors still gets its
+# repair offer instead of failing quietly.
+#
+#   tebian-panel-drives list              JSON: USB disks and their filesystems
+#   tebian-panel-drives mount <partition> (tebian-drive-doctor handle)
+#   tebian-panel-drives eject <disk>      (tebian-drive-doctor eject)
+#   tebian-panel-drives open <mountpoint> (file manager)
+# ==============================================================================
+set -u
+
+valid_dev() { [[ "$1" =~ ^/dev/[a-zA-Z0-9]+$ ]] && [ -b "$1" ]; }
+
+case "${1:-}" in
+list)
+    lsblk -J -b -o PATH,TRAN,TYPE,MODEL,VENDOR,SIZE,LABEL,FSTYPE,MOUNTPOINT,FSUSE%,HOTPLUG 2>/dev/null | python3 -c '
+import json, sys
+try:
+    devs = json.load(sys.stdin).get("blockdevices", [])
+except Exception:
+    devs = []
+def human(b):
+    b = float(b or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if b < 1000 or unit == "TB":
+            return ("%.0f" if unit in ("B", "KB") or b >= 100 else "%.1f") % b + " " + unit
+        b /= 1000
+def entry(d):
+    use = d.get("fsuse%")
+    return {"dev": d.get("path"), "label": d.get("label") or "", "fstype": d.get("fstype") or "",
+            "size": human(d.get("size")), "mount": d.get("mountpoint") or "",
+            "used": int(use.rstrip("%")) if use else -1}
+out = []
+for d in devs:
+    if d.get("type") != "disk" or d.get("tran") != "usb":
+        continue
+    parts = [entry(c) for c in d.get("children", []) if c.get("fstype")]
+    if not parts and d.get("fstype"):
+        parts = [entry(d)]
+    name = " ".join(x.strip() for x in (d.get("vendor"), d.get("model")) if x and x.strip()) or "USB drive"
+    out.append({"disk": d.get("path"), "name": name, "size": human(d.get("size")), "parts": parts})
+print(json.dumps(out))
+'
+    ;;
+mount)
+    valid_dev "${2:-}" || exit 2
+    exec tebian-drive-doctor handle "$2"
+    ;;
+eject)
+    valid_dev "${2:-}" || exit 2
+    exec tebian-drive-doctor eject "$2"
+    ;;
+open)
+    [ -d "${2:-}" ] || exit 2
+    if command -v thunar >/dev/null; then exec thunar "$2"; fi
+    exec xdg-open "$2"
+    ;;
+*)
+    sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
