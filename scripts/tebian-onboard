@@ -180,16 +180,30 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             zram-tools
             python3-i3ipc
             waybar upower
+            qt5-gtk-platformtheme qt6-gtk-platformtheme
         )
 
         # x86-only extras
         ARCH=$(uname -m)
         if [[ "$ARCH" == "x86_64" ]]; then
-            DESKTOP_PKGS+=(bluez-firmware qt5-style-plugins)
+            DESKTOP_PKGS+=(bluez-firmware)
         fi
 
         sudo apt update
-        sudo apt install -y "${DESKTOP_PKGS[@]}" || {
+        # apt refuses the whole list if any one name is unknown — which is
+        # how a single package missing from trixie (qt5-style-plugins)
+        # silently skipped every desktop extra. Install what exists and
+        # say which ones do not.
+        AVAILABLE=() MISSING=()
+        for pkg in "${DESKTOP_PKGS[@]}"; do
+            if apt-cache policy "$pkg" 2>/dev/null | grep -q "Candidate: [^(]"; then
+                AVAILABLE+=("$pkg")
+            else
+                MISSING+=("$pkg")
+            fi
+        done
+        [ ${#MISSING[@]} -gt 0 ] && echo "  ⚠ Not available on this system, skipped: ${MISSING[*]}"
+        sudo apt install -y "${AVAILABLE[@]}" || {
             echo "  ⚠ Some packages failed to install. Continuing..."
         }
         echo "  ✓ Desktop extras installed"
@@ -355,7 +369,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
 
         # QT theme integration (use GTK theme for consistency)
         mkdir -p "$HOME/.config/environment.d"
-        idempotent_append "QT_QPA_PLATFORMTHEME=gtk2" "$HOME/.config/environment.d/tebian-qt.conf"
+        idempotent_append "QT_QPA_PLATFORMTHEME=gtk3" "$HOME/.config/environment.d/tebian-qt.conf"
         echo "  QT theme integration configured"
 
         # HiDPI scaling (idempotent)
