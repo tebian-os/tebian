@@ -276,8 +276,9 @@ info "Scripts synced to $LOCAL_BIN"
 # runs them. Refreshed only when content differs; greeter files only on
 # systems where they are Tebian's (an nwg-hello greetd config).
 ROOT_SRC=() ROOT_DST=() ROOT_MODE=()
-queue_root() {  # <repo path> <destination> <mode> <install-if-missing yes|no>
+queue_root() {  # <repo path or absolute path> <destination> <mode> <install-if-missing yes|no>
     local src="$TEBIAN_DIR/$1"
+    [[ "$1" == /* ]] && src="$1"
     [ -f "$src" ] || return 0
     if [ ! -e "$2" ]; then
         [ "$4" = yes ] || return 0
@@ -292,7 +293,16 @@ queue_root scripts/tebian-session             /usr/local/bin/tebian-session     
 queue_root scripts/tebian-drive-probe         /usr/local/bin/tebian-drive-probe  755 yes
 queue_root configs/udev/90-tebian-drive-doctor.rules /etc/udev/rules.d/90-tebian-drive-doctor.rules 644 yes
 if grep -qs "nwg-hello" /etc/greetd/config.toml; then
-    queue_root configs/greetd/config.toml     /etc/greetd/config.toml            644 no
+    # The shipped config plus the user's autologin section, if they have one
+    # (tebian-autologin owns that section) — a plain copy would silently
+    # turn "skip login after disk unlock" off on every update
+    greetd_new="$WORK/greetd-config.toml"
+    if bash "$TEBIAN_DIR/scripts/tebian-autologin" render "$TEBIAN_DIR/configs/greetd/config.toml" \
+            /etc/greetd/config.toml > "$greetd_new" 2>/dev/null; then
+        queue_root "$greetd_new"              /etc/greetd/config.toml            644 no
+    else
+        queue_root configs/greetd/config.toml /etc/greetd/config.toml            644 no
+    fi
     queue_root configs/greetd/environments    /etc/greetd/environments           644 no
     for f in nwg-hello.json nwg-hello.css tebian.glade sway-config; do
         queue_root "configs/nwg-hello/$f"     "/etc/nwg-hello/$f"                644 no
@@ -312,6 +322,36 @@ if [ "${#ROOT_DST[@]}" -gt 0 ]; then
         info "System files refreshed"
     else
         warn "No sudo — system files not refreshed. Run tebian-update in a terminal to finish."
+    fi
+fi
+
+# --- 3b. Main sway config -------------------------------------------------------
+# ~/.config/sway/config is Tebian's file (personal settings belong in
+# config.user, which is never touched). It is replaced only if it is exactly
+# what Tebian last installed — the recorded checksum proves that. A config
+# with local edits, or one from before checksums were recorded, is left
+# alone; the new default is saved next to it, with a one-time note.
+SWAY_NEW="$TEBIAN_DIR/configs/sway/config"
+SWAY_CUR="$HOME/.config/sway/config"
+SWAY_REC="$STATE_DIR/sway-config.sha256"
+if [ -f "$SWAY_NEW" ] && [ -f "$SWAY_CUR" ]; then
+    if ! cmp -s "$SWAY_NEW" "$SWAY_CUR"; then
+        if [ "$(cat "$SWAY_REC" 2>/dev/null)" = "$(file_sum "$SWAY_CUR")" ]; then
+            cp -p "$SWAY_CUR" "$SWAY_CUR.before-update"
+            replace_file "$SWAY_NEW" "$SWAY_CUR"
+            info "Sway config updated (previous copy: ~/.config/sway/config.before-update)"
+        elif ! cmp -s "$SWAY_NEW" "$SWAY_CUR.tebian-new"; then
+            cp "$SWAY_NEW" "$SWAY_CUR.tebian-new"
+            warn "Your ~/.config/sway/config has local changes, so it was left as is."
+            warn "The new default is in ~/.config/sway/config.tebian-new — keep personal"
+            warn "settings in config.user, then copy the new file over to get the fixes."
+        fi
+    fi
+    # Record whenever it matches what Tebian ships, so the next update can
+    # tell "untouched" from "edited"
+    if cmp -s "$SWAY_NEW" "$SWAY_CUR"; then
+        file_sum "$SWAY_CUR" > "$SWAY_REC"
+        rm -f "$SWAY_CUR.tebian-new"
     fi
 fi
 

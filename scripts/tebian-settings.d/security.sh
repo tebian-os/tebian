@@ -106,9 +106,19 @@ security_menu() {
         SUDO_LABEL="🔑 Passwordless sudo (Current: Off)"
     fi
 
+    # Skip the login screen after the disk passphrase — only offered when the
+    # system disk really is encrypted (tebian-autologin decides)
+    AUTOLOGIN_LABEL=""
+    case "$(tebian-autologin status 2>/dev/null)" in
+        on)  AUTOLOGIN_LABEL="🔓 Skip Login After Disk Unlock (Current: On)" ;;
+        off) AUTOLOGIN_LABEL="🔓 Skip Login After Disk Unlock (Current: Off)" ;;
+    esac
+
     SEC_OPTS="$PARANOID_LABEL
 $SEC_LABEL
-$SUDO_LABEL
+🔑 Change Password
+${AUTOLOGIN_LABEL:+$AUTOLOGIN_LABEL
+}$SUDO_LABEL
 $SSH_LABEL
 $SSH_KEY_LABEL
 $KERN_LABEL
@@ -202,6 +212,16 @@ $AUTOUPDATE_LABEL
         fi
     elif [[ "$S_CHOICE" =~ "Passwordless sudo" ]]; then
         passwordless_sudo_toggle "$S_CHOICE"
+    elif [[ "$S_CHOICE" =~ "Change Password" ]]; then
+        change_password_flow
+    elif [[ "$S_CHOICE" =~ "Skip Login After Disk Unlock" ]]; then
+        if [[ "$S_CHOICE" =~ "Current: On" ]]; then
+            $TERM_CMD bash -c 'tebian-autologin disable; echo; read -rp "Press Enter to close. "'
+            tnotify "Security" "Login screen shown after disk unlock"
+        else
+            $TERM_CMD bash -c 'tebian-autologin enable; echo; read -rp "Press Enter to close. "'
+            tnotify "Security" "Desktop opens after disk unlock (applies next boot)"
+        fi
     elif [[ "$S_CHOICE" =~ "Enable Remote Access" ]]; then
         $TERM_CMD bash -c "echo 'Enabling SSH Server...';
         sudo apt update && sudo apt install -y openssh-server;
@@ -901,4 +921,37 @@ Architecture:
         "
     fi
     done
+}
+
+# Change the login password and, on an encrypted system, offer to make it the
+# disk passphrase too — passwd alone would let the two drift apart, and with
+# "Skip Login After Disk Unlock" the disk passphrase is what opens the desktop.
+change_password_flow() {
+    $TERM_CMD bash -c '
+        echo "Change your login password"
+        echo "(used for the lock screen, sudo and the login screen)"
+        echo
+        passwd || { echo; read -rp "Password not changed. Press Enter to close. "; exit 1; }
+
+        src=$(findmnt -no SOURCE / 2>/dev/null)
+        # lsblk -s walks from / down to the disk; the row after "crypt" is
+        # the encrypted partition itself
+        luks=$(lsblk -snrpo NAME,TYPE "$src" 2>/dev/null | awk "f { print \$1; exit } \$2 == \"crypt\" { f = 1 }")
+        if [ -n "$luks" ]; then
+            echo
+            echo "Your disk is encrypted ($luks)."
+            read -rp "Use the new password to unlock the disk too? [Y/n] " a
+            if [ -z "$a" ] || [[ "$a" =~ ^[Yy] ]]; then
+                echo
+                echo "cryptsetup will ask for the CURRENT disk passphrase, then the new one twice."
+                if sudo cryptsetup luksChangeKey "$luks"; then
+                    echo; echo "Disk passphrase updated."
+                else
+                    echo; echo "Disk passphrase NOT changed — it is still the old one."
+                fi
+            fi
+        fi
+        echo
+        read -rp "Done. Press Enter to close. "
+    '
 }

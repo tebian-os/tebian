@@ -49,6 +49,7 @@ SHRINK_PART=""
 SHRINK_FSTYPE=""
 SHRINK_TO_BYTES=0
 MANUAL_FORMAT_EFI=false
+AUTOLOGIN=false          # one-password encrypted desktop: skip greeter once per boot
 CRYPT_NAME="tebian_crypt"
 USERNAME=""
 USERPASS=""
@@ -760,35 +761,16 @@ plan_manual() {
 # Asked before partitioning: an encrypted install needs a separate /boot,
 # which changes the layout. Only collects the passphrase.
 setup_encryption() {
+    # Only the yes/no here: it changes the disk layout (a separate /boot),
+    # so it must come before partitioning. The passphrase is chosen with
+    # the user's password in setup_user, where it can simply reuse it.
     ENCRYPT_PLANNED=false LUKS_PASS=""
-    local want=false
     if $AUTO; then
-        [ "${ANS[encrypt]:-no}" = yes ] && want=true
-    else
-        yesno "Enable disk encryption (LUKS)?\n\nEncrypts the whole Tebian system. You'll type a passphrase\nat every boot. Recommended for laptops.\n\nIf you forget the passphrase, your data cannot be recovered." && want=true
+        [ "${ANS[encrypt]:-no}" = yes ] && ENCRYPT_PLANNED=true
+        return 0
     fi
-    $want || return 0
-
-    local pass1 pass2
-    if $AUTO; then
-        LUKS_PASS="${ANS[encrypt_passphrase]:-}"
-        [ -n "$LUKS_PASS" ] || die "Answers file: encrypt=yes needs encrypt_passphrase"
-    else
-        while true; do
-            pass1=$(password "Enter encryption passphrase:") || return 1
-            pass2=$(password "Confirm encryption passphrase:") || return 1
-            if [ "$pass1" != "$pass2" ] || [ -z "$pass1" ]; then
-                msg "Passphrases don't match or are empty. Try again."
-                continue
-            fi
-            if [ ${#pass1} -lt 8 ] && ! yesno "That passphrase is only ${#pass1} characters — short\npassphrases can be guessed offline.\n\nUse it anyway?"; then
-                continue
-            fi
-            break
-        done
-        LUKS_PASS="$pass1"
-    fi
-    ENCRYPT_PLANNED=true
+    yesno "Enable disk encryption (LUKS)?\n\nEncrypts the whole Tebian system: nothing on the disk can be\nread without your passphrase, e.g. if the laptop is stolen.\nYou'll type it once at every boot. Recommended for laptops.\n\nIf you forget it, your data cannot be recovered." && ENCRYPT_PLANNED=true
+    return 0
 }
 
 # ── Apply the disk plan (runs only after the final confirmation) ──
@@ -978,9 +960,12 @@ apply_disk_plan() {
 
 # ── Step 9: User creation ──
 setup_user() {
+    LUKS_PASS=""
     if $AUTO; then
         USERNAME="${ANS[username]}" USERPASS="${ANS[password]}" HOSTNAME_VAL="${ANS[hostname]:-tebian}"
         [[ "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]] || die "Answers file: invalid username"
+        # No separate encrypt_passphrase = one password for both
+        if $ENCRYPT_PLANNED; then LUKS_PASS="${ANS[encrypt_passphrase]:-$USERPASS}"; fi
         return 0
     fi
     while true; do
@@ -992,17 +977,47 @@ setup_user() {
         msg "Invalid username. Use lowercase letters, numbers, hyphens.\nMust start with a letter."
     done
 
+    local pass1 pass2
     while true; do
-        local pass1 pass2
         pass1=$(password "Enter password for ${USERNAME}:") || return 1
         pass2=$(password "Confirm password:") || return 1
-
-        if [ "$pass1" = "$pass2" ] && [ -n "$pass1" ]; then
-            USERPASS="$pass1"
-            break
+        if [ "$pass1" != "$pass2" ] || [ -z "$pass1" ]; then
+            msg "Passwords don't match or are empty. Try again."
+            continue
         fi
-        msg "Passwords don't match or are empty. Try again."
+        # It may also guard the disk, where it can be attacked offline
+        if $ENCRYPT_PLANNED && [ ${#pass1} -lt 8 ] &&
+           ! yesno "That password is only ${#pass1} characters. It may also protect\nyour encrypted disk, where short passwords can be guessed\noffline.\n\nUse it anyway?"; then
+            continue
+        fi
+        USERPASS="$pass1"
+        break
     done
+
+    if $ENCRYPT_PLANNED; then
+        # One password, like FileVault: the user's password unlocks the disk
+        # and, since that is the authentication, the desktop opens without a
+        # second login screen. Sharing it doesn't weaken the disk: LUKS2
+        # stretches it with argon2id, and the login hash lives inside the
+        # encrypted disk where it can't be attacked until it's unlocked.
+        if yesno "Use this password to unlock the disk too?\n\nYes (recommended): one password. Type it once at boot and\nTebian opens your desktop — no second login screen. The\nlock screen and admin tasks still ask for it.\n\nNo: choose a separate disk passphrase, and log in as usual."; then
+            LUKS_PASS="$USERPASS"
+        else
+            while true; do
+                pass1=$(password "Enter disk encryption passphrase:") || return 1
+                pass2=$(password "Confirm disk encryption passphrase:") || return 1
+                if [ "$pass1" != "$pass2" ] || [ -z "$pass1" ]; then
+                    msg "Passphrases don't match or are empty. Try again."
+                    continue
+                fi
+                if [ ${#pass1} -lt 8 ] && ! yesno "That passphrase is only ${#pass1} characters — short\npassphrases can be guessed offline.\n\nUse it anyway?"; then
+                    continue
+                fi
+                LUKS_PASS="$pass1"
+                break
+            done
+        fi
+    fi
 
     while true; do
         HOSTNAME_VAL=$(input "Enter hostname:" "tebian") || return 1
@@ -1049,6 +1064,16 @@ confirm() {
     [ "$MODE" = "server-secure" ] && mode_str="Server (SSH + Firewall)"
     [ "$MODE" = "server-bare" ] && mode_str="Server (Bare)"
 
+    # Decided here, while both passwords are still known (LUKS_PASS is
+    # cleared once the disk is encrypted)
+    AUTOLOGIN=false
+    if $ENCRYPT_PLANNED && [ "$MODE" = desktop ] && [ -n "$LUKS_PASS" ] && [ "$LUKS_PASS" = "$USERPASS" ]; then
+        AUTOLOGIN=true
+    fi
+    local login_str="Login screen"
+    $AUTOLOGIN && login_str="Automatic after disk unlock (one password)"
+    [ "$MODE" = desktop ] || login_str="Console / SSH"
+
     local disk_str
     case "$PART_MODE" in
         erase)     disk_str="ERASE ALL of ${DISK}" ;;
@@ -1069,8 +1094,9 @@ Ready to install Tebian. Nothing has been written yet.
   Username:    ${USERNAME}
   Hostname:    ${HOSTNAME_VAL}
   Mode:        ${mode_str}
+  Login:       ${login_str}
 
-Select Yes to begin. This is the point of no return." 21 $WT_WIDTH || return 1
+Select Yes to begin. This is the point of no return." 22 $WT_WIDTH || return 1
 }
 
 # ── Install error handler ──
@@ -1547,6 +1573,15 @@ KBEOF
             cp "$TEBIAN_SRC/configs/greetd/config.toml" "$TARGET/etc/greetd/"
             cp "$TEBIAN_SRC/configs/greetd/environments" "$TARGET/etc/greetd/"
 
+            # One-password installs open the desktop after the disk unlocks
+            # (greetd initial_session, once per boot). Only when the disk
+            # passphrase IS the login password: then it already proved who
+            # this is. A separate passphrase keeps the normal login screen.
+            if $AUTOLOGIN; then
+                bash "$TEBIAN_SRC/scripts/tebian-autologin" enable --user "$USERNAME" \
+                    --file "$TARGET/etc/greetd/config.toml" --assume-encrypted >> "$INSTALL_LOG" 2>&1
+            fi
+
             # Copy nwg-hello configs
             mkdir -p "$TARGET/etc/nwg-hello"
             cp "$TEBIAN_SRC/configs/nwg-hello/nwg-hello.json" "$TARGET/etc/nwg-hello/" 2>/dev/null || true
@@ -1675,6 +1710,11 @@ input type:keyboard {
 KBSWAY
             fi
             sanitize_sway_configs_for_user "$user_home"
+            # Checksum of the config as installed: tebian-update replaces it
+            # on later updates only while it still matches (i.e. unedited)
+            mkdir -p "$user_home/.local/share/tebian"
+            sha256sum "$user_home/.config/sway/config" | awk '{ print $1 }' \
+                > "$user_home/.local/share/tebian/sway-config.sha256"
 
             # Kitty config
             mkdir -p "$user_home/.config/kitty"

@@ -1,0 +1,104 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN AUTOLOGIN
+# Skip the login screen once per boot on encrypted installs — the disk
+# passphrase typed at boot is the authentication (the FileVault model; Omarchy
+# does the same). Uses greetd's own [initial_session], which runs a session
+# exactly once per greetd start: logging out, or any later login, still goes
+# through the greeter. The lock screen and sudo still ask for the password.
+#
+#   tebian-autologin status                 on | off | unavailable (not encrypted)
+#   tebian-autologin enable  [--user U]     needs root (re-runs itself via sudo)
+#   tebian-autologin disable
+#   tebian-autologin render <base.toml> [<live.toml>]
+#        print base + the autologin section from live (tebian-update uses
+#        this so refreshing greetd's config keeps the user's choice)
+#
+# Installer-only flags: --file <config.toml> (a target being installed) and
+# --assume-encrypted (it knows; the target root isn't mounted at /).
+#
+# Refuses to enable on an unencrypted root: autologin there would hand the
+# desktop to anyone who powers the machine on.
+# ==============================================================================
+set -euo pipefail
+
+CONF=/etc/greetd/config.toml
+SESSION=/usr/local/bin/tebian-session
+BEGIN="# tebian:autologin {"
+END="# tebian:autologin }"
+
+# True when / sits on a dm-crypt device, directly or under LVM
+root_encrypted() {
+    local src
+    src=$(findmnt -no SOURCE / 2>/dev/null) || return 1
+    lsblk -snro TYPE "$src" 2>/dev/null | grep -qx crypt
+}
+
+# The config without our section
+strip_block() {
+    awk -v b="$BEGIN" -v e="$END" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$1"
+}
+
+# Our section, if the file has one
+get_block() {
+    awk -v b="$BEGIN" -v e="$END" '$0 == b { on = 1 } on { print } $0 == e { on = 0 }' "$1" 2>/dev/null
+}
+
+cmd="${1:-status}"; shift || true
+user="" file="$CONF" assume=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --user) user="$2"; shift 2 ;;
+        --file) file="$2"; shift 2 ;;
+        --assume-encrypted) assume=1; shift ;;
+        *) break ;;
+    esac
+done
+
+case "$cmd" in
+status)
+    if [ -z "$assume" ] && ! root_encrypted; then echo unavailable
+    elif [ -n "$(get_block "$file")" ]; then echo on
+    else echo off
+    fi
+    ;;
+enable|disable)
+    if [ "$cmd" = enable ] && [ -z "$assume" ] && ! root_encrypted; then
+        echo "Refusing: the system disk isn't encrypted, so skipping the login screen would let anyone in." >&2
+        exit 1
+    fi
+    if [ "$(id -u)" -ne 0 ]; then
+        exec sudo "$0" "$cmd" --user "${user:-$(id -un)}" --file "$file" ${assume:+--assume-encrypted}
+    fi
+    [ -f "$file" ] || { echo "No greetd config at $file" >&2; exit 1; }
+    user="${user:-${SUDO_USER:-}}"
+    if [ "$cmd" = enable ]; then
+        # A real login account, never root (or an injected TOML value)
+        [[ "$user" =~ ^[a-z_][a-z0-9_-]*$ ]] && [ "$user" != root ] ||
+            { echo "Invalid user: '$user'" >&2; exit 1; }
+    fi
+    tmp=$(mktemp "$file.XXXXXX")
+    strip_block "$file" > "$tmp"
+    if [ "$cmd" = enable ]; then
+        cat >> "$tmp" << TOML
+$BEGIN
+# Skip the login screen once per boot: the disk passphrase already
+# authenticated. Manage in Settings > Security.
+[initial_session]
+command = "$SESSION"
+user = "$user"
+$END
+TOML
+    fi
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$file"
+    echo "Login screen skip after disk unlock: $([ "$cmd" = enable ] && echo on || echo off)"
+    ;;
+render)
+    base="${1:?render needs <base.toml>}" live="${2:-$CONF}"
+    strip_block "$base"
+    get_block "$live"
+    ;;
+*)
+    sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

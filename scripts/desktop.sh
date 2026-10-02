@@ -167,6 +167,9 @@ if [ ! -f "$TEBIAN_DIR/configs/sway/config" ]; then
     exit 1
 fi
 cp "$TEBIAN_DIR/configs/sway/config" "$CONFIG_DIR/sway/config"
+# Lets tebian-update replace it later while it's still unedited
+mkdir -p "$HOME/.local/share/tebian"
+sha256sum "$CONFIG_DIR/sway/config" | awk '{ print $1 }' > "$HOME/.local/share/tebian/sway-config.sha256"
 
 if [ ! -f "$TEBIAN_DIR/configs/themes/glass/sway-theme" ]; then
     log_error "Glass theme not found"
