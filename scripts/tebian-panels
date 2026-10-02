@@ -6,7 +6,8 @@
 # When it isn't running, the bar's buttons fall back to the fuzzel menus.
 #
 #   tebian-panels run            run the daemon (tebian-bar starts it beside Waybar)
-#   tebian-panels toggle <name>  open/close a panel (network); exits non-zero
+#   tebian-panels toggle <name>  open/close a panel (network, bluetooth, audio,
+#                                power); exits non-zero
 #                                if no daemon answers, so callers can fall back
 # ==============================================================================
 set -u
@@ -32,7 +33,7 @@ case "${1:-}" in
         exec quickshell ipc -p "$DIR" call "tebian.${2:?usage: tebian-panels toggle <name>}" toggle >/dev/null 2>&1
         ;;
     *)
-        sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'
         exit 2
         ;;
 esac

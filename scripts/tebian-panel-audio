@@ -1,0 +1,61 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANEL AUDIO
+# Default-device switching behind the Modern bar's Audio panel. Portions from
+# Omarchy's omarchy-audio-* helpers (MIT), (c) David Heinemeier Hansson — see
+# configs/panels/LICENSE-omarchy.
+#
+#   tebian-panel-audio set-output <node-id> <sink-name>
+#   tebian-panel-audio set-input <node-id> <source-name>
+#   tebian-panel-audio sinks      one "name<TAB>1|0" line per sink (available)
+#
+# wpctl does the switching; WirePlumber moves streams that follow the
+# default by itself. pactl (pulseaudio-utils) is optional: when present it
+# also moves streams pinned to the old device and reports which outputs
+# are actually plugged in — without it every output counts as available.
+# ==============================================================================
+set -u
+
+case "${1:-}" in
+set-output)
+    [[ ${2:-} =~ ^[0-9]+$ && -n ${3:-} ]] || { echo "usage: tebian-panel-audio set-output <id> <sink>" >&2; exit 2; }
+    timeout 2 wpctl set-default "$2" 2>/dev/null
+    command -v pactl >/dev/null || exit 0
+    timeout 2 pactl set-default-sink "$3" 2>/dev/null
+    # Real application streams only: a DSP filter's own output is also a
+    # sink input but has no application.name, and moving it rewires the DSP
+    timeout 2 pactl list sink-inputs 2>/dev/null | awk '
+        /^Sink Input #/ { id = substr($3, 2) }
+        /application\.name = / {
+            app = $0; sub(/.*application\.name = "/, "", app); sub(/"$/, "", app)
+            if (app != "EasyEffects") print id
+        }' | while read -r input; do
+        [ -n "$input" ] && timeout 2 pactl move-sink-input "$input" "$3" 2>/dev/null
+    done
+    ;;
+set-input)
+    [[ ${2:-} =~ ^[0-9]+$ && -n ${3:-} ]] || { echo "usage: tebian-panel-audio set-input <id> <source>" >&2; exit 2; }
+    timeout 2 wpctl set-default "$2" 2>/dev/null
+    command -v pactl >/dev/null || exit 0
+    timeout 2 pactl set-default-source "$3" 2>/dev/null
+    timeout 2 pactl list short source-outputs 2>/dev/null | awk '{ print $1 }' | while read -r out; do
+        [ -n "$out" ] && timeout 2 pactl move-source-output "$out" "$3" 2>/dev/null
+    done
+    ;;
+sinks)
+    # A sink with ports but none plugged in (e.g. an empty headphone jack)
+    # is unavailable; sinks without ports (Bluetooth, USB) always count
+    command -v pactl >/dev/null || exit 0
+    timeout 2 pactl list sinks 2>/dev/null | awk '
+        function emit() { if (name != "") print name "\t" ((ports == 0 || avail) ? 1 : 0) }
+        /^Sink #/ { emit(); name = ""; inports = 0; ports = 0; avail = 0; next }
+        /^[[:space:]]*Name:/ { name = $2; next }
+        /^[[:space:]]*Ports:$/ { inports = 1; next }
+        inports && /^\tActive Port:/ { inports = 0; next }
+        inports && /^\t\t/ { ports++; if ($0 !~ /not available/) avail = 1; next }
+        END { emit() }'
+    ;;
+*)
+    echo "usage: tebian-panel-audio set-output|set-input <id> <name> | sinks" >&2; exit 2 ;;
+esac
+exit 0

@@ -1,0 +1,68 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANEL BLUETOOTH
+# Device actions behind the Modern bar's Bluetooth panel (configs/panels).
+# Portions from Omarchy's omarchy-bluetooth-device (MIT), (c) David Heinemeier
+# Hansson — see configs/panels/LICENSE-omarchy.
+#
+#   tebian-panel-bluetooth pair|connect|disconnect|forget <address>
+#   tebian-panel-bluetooth power on|off
+#
+# Power uses bluetoothctl like Settings > Bluetooth does, so the two never
+# disagree. "on" also lifts an rfkill soft block first: BlueZ refuses to
+# power an adapter that is blocked.
+# ==============================================================================
+set -u
+
+usage() {
+    echo "usage: tebian-panel-bluetooth pair|connect|disconnect|forget <address> | power on|off" >&2
+    exit 2
+}
+
+power_on() {
+    [[ $(timeout 2s bluetoothctl show 2>/dev/null) == *"Powered: yes"* ]] && return 0
+    rfkill unblock bluetooth 2>/dev/null || true
+    timeout 5s bluetoothctl power on >/dev/null 2>&1
+}
+
+action=${1:-}
+case "$action" in
+    power)
+        case "${2:-}" in
+            on)  power_on ;;
+            off) timeout 5s bluetoothctl power off >/dev/null 2>&1 ;;
+            *)   usage ;;
+        esac
+        exit 0
+        ;;
+    pair|connect|disconnect|forget) ;;
+    *) usage ;;
+esac
+
+address=${2:-}
+[[ $address =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || usage
+
+# Every step tolerates failure: the panel watches BlueZ for the outcome and
+# clears its pending state on a timeout, so a failed step must not abort
+# the ones after it
+case "$action" in
+    pair)
+        power_on
+        timeout 20s bluetoothctl pair "$address" >/dev/null 2>&1
+        timeout 5s bluetoothctl trust "$address" >/dev/null 2>&1
+        timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1
+        ;;
+    connect)
+        power_on
+        timeout 5s bluetoothctl trust "$address" >/dev/null 2>&1
+        timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1
+        ;;
+    disconnect)
+        timeout 10s bluetoothctl disconnect "$address" >/dev/null 2>&1
+        ;;
+    forget)
+        timeout 10s bluetoothctl disconnect "$address" >/dev/null 2>&1
+        timeout 10s bluetoothctl remove "$address" >/dev/null 2>&1
+        ;;
+esac
+exit 0

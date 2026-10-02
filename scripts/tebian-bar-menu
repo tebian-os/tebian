@@ -14,7 +14,10 @@ export TEBIAN_MENU_ANCHOR="$edge-$side"
 # daemon isn't running (not installed, or Classic-era session) the fuzzel
 # menu below is the fallback
 case "${1:-}" in
-    wifi) tebian-panels toggle network && exit 0 ;;
+    wifi)      tebian-panels toggle network && exit 0 ;;
+    bluetooth) tebian-panels toggle bluetooth && exit 0 ;;
+    audio)     tebian-panels toggle audio && exit 0 ;;
+    power)     tebian-panels toggle power && exit 0 ;;
 esac
 
 case "${1:-settings}" in

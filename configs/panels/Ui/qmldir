@@ -14,3 +14,4 @@ PanelSeparator 1.0 PanelSeparator.qml
 PanelToolTip 1.0 PanelToolTip.qml
 TextField 1.0 TextField.qml
 ToggleSwitch 1.0 ToggleSwitch.qml
+PanelSlider 1.0 PanelSlider.qml

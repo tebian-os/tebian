@@ -179,7 +179,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             btop
             zram-tools
             python3-i3ipc
-            waybar
+            waybar upower
         )
 
         # x86-only extras

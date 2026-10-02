@@ -1,0 +1,107 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANEL POWER
+# Data and actions behind the Modern bar's Power panel. The battery report is
+# ported from Omarchy's omarchy-battery-status (MIT), (c) David Heinemeier
+# Hansson — see configs/panels/LICENSE-omarchy.
+#
+#   tebian-panel-power battery         key<TAB>value lines (empty: no battery)
+#   tebian-panel-power profiles        "name<TAB>1|0" per power profile (1 = active)
+#   tebian-panel-power set-profile <p>
+#   tebian-panel-power uptime
+#   tebian-panel-power lock|sleep|logout|reboot|poweroff
+#
+# Power profiles exist only with power-profiles-daemon. Tebian laptops use
+# TLP instead, so there the list is empty and the panel hides the picker
+# rather than fighting TLP. Session actions are the same commands as
+# Settings > Power.
+# ==============================================================================
+set -u
+PS_DIR="${TEBIAN_POWER_SUPPLY_PATH:-/sys/class/power_supply}"
+
+battery_report() {
+    local bat="" path="" key val
+    local percentage="" state="" capacity="" time="" rate_raw=""
+    if command -v upower >/dev/null; then
+        bat=$(upower -e 2>/dev/null | grep -m1 BAT)
+    fi
+    if [ -n "$bat" ]; then
+        local info; info=$(upower -i "$bat" 2>/dev/null)
+        percentage=$(awk '/percentage/ { print int($2); exit }' <<<"$info")
+        capacity=$(awk '/energy-full:/ { printf "%d", $2; exit }' <<<"$info")
+        state=$(awk '/^ *state/ { print $2; exit }' <<<"$info")
+        rate_raw=$(awk '/energy-rate/ { print $2; exit }' <<<"$info")
+        time=$(awk '/time to (empty|full)/ {
+            v = $4; u = $5
+            if (u ~ /^minute/) printf "%dm", int(v)
+            else { h = int(v); m = int((v - h) * 60); if (m > 0) printf "%dh %dm", h, m; else printf "%dh", h }
+            exit }' <<<"$info")
+        path="$PS_DIR/$(awk '/native-path/ { print $2; exit }' <<<"$info")"
+    else
+        # No UPower: read the kernel directly (no time estimate then)
+        for p in "$PS_DIR"/*; do
+            [ "$(cat "$p/type" 2>/dev/null)" = Battery ] || continue
+            path=$p; break
+        done
+        [ -n "$path" ] || return 0
+        percentage=$(cat "$path/capacity" 2>/dev/null)
+        state=$(tr 'A-Z ' 'a-z-' < "$path/status" 2>/dev/null)
+        [ -r "$path/energy_full" ] && capacity=$(( $(cat "$path/energy_full") / 1000000 ))
+    fi
+    [ -n "$percentage" ] || return 0
+
+    # The kernel's instantaneous reading; UPower's rate lags by tens of seconds
+    if [ -r "$path/power_now" ]; then
+        rate_raw=$(awk -v uw="$(cat "$path/power_now")" 'BEGIN { print uw / 1000000 }')
+    elif [ -r "$path/current_now" ] && [ -r "$path/voltage_now" ]; then
+        rate_raw=$(awk -v ua="$(cat "$path/current_now")" -v uv="$(cat "$path/voltage_now")" \
+            'BEGIN { print ua * uv / 1000000000000 }')
+    fi
+    local rate; rate=$(awk -v r="${rate_raw:-0}" 'BEGIN { s = sprintf("%.1f", r); sub(/\.0$/, "", s); print s }')
+    local t_end t_start
+    t_end=$(cat "$path/charge_control_end_threshold" 2>/dev/null)
+    t_start=$(cat "$path/charge_control_start_threshold" 2>/dev/null)
+
+    printf 'percentage\t%s%%\n' "$percentage"
+    printf 'state\t%s\n' "$state"
+    printf 'rate\t%sW\n' "$rate"
+    [ -n "$capacity" ] && printf 'size\t%sWh\n' "$capacity"
+    printf 'time\t%s\n' "$time"
+    key=$(cat "$path/cycle_count" 2>/dev/null); [ -n "$key" ] && [ "$key" != 0 ] && printf 'cycles\t%s\n' "$key"
+    if [ -n "$t_end" ] && [ "$t_end" -lt 100 ] 2>/dev/null; then
+        if [ -n "$t_start" ] && [ "$t_start" != "$t_end" ] && [ "$t_start" != 0 ]; then val="$t_start-$t_end%"; else val="$t_end%"; fi
+        printf 'threshold\t%s\n' "$val"
+    fi
+}
+
+case "${1:-}" in
+    battery) battery_report ;;
+    profiles)
+        command -v powerprofilesctl >/dev/null || exit 0
+        powerprofilesctl list 2>/dev/null | awk '/^[[:space:]]*[* ][[:space:]]*[a-zA-Z0-9-]+:$/ {
+            active = ($1 == "*") ? 1 : 0; gsub(/^[*[:space:]]+|:$/, ""); print $0 "\t" active }' | tac
+        ;;
+    set-profile)
+        [[ ${2:-} =~ ^[a-z-]+$ ]] || exit 2
+        command -v powerprofilesctl >/dev/null && powerprofilesctl set "$2"
+        ;;
+    uptime)
+        read -r up _ < /proc/uptime; up=${up%.*}
+        d=$((up / 86400)) h=$((up % 86400 / 3600)) m=$((up % 3600 / 60))
+        if [ $d -gt 0 ]; then echo "${d}d ${h}h"; elif [ $h -gt 0 ]; then echo "${h}h ${m}m"; else echo "${m}m"; fi
+        ;;
+    lock)   exec gtklock -d ;;
+    sleep)  exec systemctl suspend ;;
+    logout) exec swaymsg exit ;;
+    reboot|poweroff)
+        # Blank only once systemd has accepted — same as Settings > Power:
+        # blanking first left a black screen over a live session whenever the
+        # request was refused (an inhibitor, another user logged in)
+        if systemctl "$1"; then
+            swaymsg output '*' power off >/dev/null 2>&1
+        else
+            notify-send "Power" "The system refused to $1 — see: systemd-inhibit --list"
+        fi
+        ;;
+    *) sed -n '8,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

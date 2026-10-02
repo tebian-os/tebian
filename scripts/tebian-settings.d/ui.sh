@@ -325,7 +325,8 @@ bar_set_mode() {
 bar_style_set() {
     if [ "$1" = modern ]; then
         # Install first; only switch once Waybar is really there
-        tebian_term_apt_install waybar || return
+        # upower feeds the Power panel's battery details (optional extra)
+        tebian_term_apt_install waybar upower || return
         # Quickshell draws the rich panels (WiFi so far). Optional: without
         # it the bar's menus fall back to fuzzel drop-downs.
         command -v quickshell >/dev/null || tebian_install_quickshell
