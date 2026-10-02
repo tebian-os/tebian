@@ -1,114 +1,297 @@
 #!/usr/bin/env python3
-"""Tebian Edge Snap - poll-based edge snapping for Sway floating mode"""
-import i3ipc
-import time
+"""Tebian Edge Snap — Windows-style window snapping for sway's floating mode.
+
+Drag a window until it touches a screen edge and let go:
+  left / right edge -> that half of the screen
+  top edge          -> maximized
+  a corner          -> that quarter
+Drag a snapped window away and it gets its previous size back.
+
+  tebian-edge-snap                      the watcher (started from sway config)
+  tebian-edge-snap snap <zone>          snap the focused floating window:
+                                        left right max top-left top-right
+                                        bottom-left bottom-right restore
+  (bound to Super+Ctrl+arrows in floating mode)
+
+Sway reports no drag start/end and no pointer position, so this watches the
+focused floating window (one get_tree per poll, only while a floating window
+has focus) and decides on drop:
+  * a drag = the window's position changes while its size stays the same
+    (a keyboard snap changes the size, so it is never mistaken for one);
+  * the drop = the window has stopped moving AND no mouse button is held.
+    The button state is read from the input devices (the user is in the
+    "input" group). Where that's unavailable — e.g. touchpad tap-and-drag,
+    which only exists inside libinput — stopping still counts as dropping.
+  * zones only fire when the window was pushed to the edge (touching or past
+    it), not merely near it — a large window is always near some edge.
+Geometry is the window's outer frame (title bar and borders included) inside
+the workspace's usable area, so a snapped or maximized window never covers
+the bar. Sizes are set in pixels and corrected once against what sway
+reports: sway's own percentage sizing comes out a few pixels short once
+borders are counted, which left gaps between side-by-side halves.
+"""
+import fcntl
+import glob
+import json
+import os
 import signal
 import sys
+import time
 
-THRESHOLD = 80
-POLL_INTERVAL = 0.10
+import i3ipc
+
+POLL = 0.08          # seconds between checks while a floating window is focused
+IDLE_POLL = 0.4      # when no floating window has focus
+STABLE_POLLS = 2     # unchanged polls (plus buttons up) that count as a drop
+TOUCH = 6            # px: within this of an edge (or past it) = pushed to it
 
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
+# sway also exports I3SOCK (i3 compatibility) and i3ipc prefers it; follow
+# SWAYSOCK when set so the watcher always talks to the session it runs in
+if os.environ.get("SWAYSOCK"):
+    os.environ["I3SOCK"] = os.environ["SWAYSOCK"]
 i3 = i3ipc.Connection()
 
-# Track state to avoid re-snapping
-last_snapped_id = None
-last_snapped_pos = None
-prev_positions = {}
+# --- mouse buttons, straight from the input devices -------------------------
+EV_KEY, BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, KEY_MAX = 0x01, 0x110, 0x111, 0x112, 0x2FF
+NBYTES = KEY_MAX // 8 + 1
 
-def get_focused_floating():
-    tree = i3.get_tree()
-    focused = tree.find_focused()
-    if focused and focused.type == 'floating_con':
-        return focused
-    return None
+def _ioc_read(nr, size):
+    return (2 << 30) | (size << 16) | (ord("E") << 8) | nr
 
-def get_output_for(x, y, w, h):
-    cx, cy = x + w // 2, y + h // 2
-    for out in i3.get_outputs():
-        r = out.rect
-        if r.x <= cx < r.x + r.width and r.y <= cy < r.y + r.height:
+EVIOCGKEY = _ioc_read(0x18, NBYTES)              # keys/buttons currently down
+EVIOCGBIT_KEY = _ioc_read(0x20 + EV_KEY, NBYTES)  # keys/buttons the device has
+
+def _bit(buf, n):
+    return buf[n // 8] >> (n % 8) & 1
+
+_mice, _mice_scanned = [], 0.0
+
+def _scan_mice():
+    global _mice, _mice_scanned
+    for fd in _mice:
+        os.close(fd)
+    _mice = []
+    for path in glob.glob("/dev/input/event*"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        caps = bytearray(NBYTES)
+        try:
+            fcntl.ioctl(fd, EVIOCGBIT_KEY, caps)
+        except OSError:
+            os.close(fd)
+            continue
+        if _bit(caps, BTN_LEFT):
+            _mice.append(fd)
+        else:
+            os.close(fd)
+    _mice_scanned = time.monotonic()
+
+def button_held():
+    """True if any mouse/touchpad reports a button down. Rescans for
+    hot-plugged devices every 10s; with no readable devices, returns False
+    (then a stopped window counts as dropped)."""
+    if time.monotonic() - _mice_scanned > 10:
+        _scan_mice()
+    state = bytearray(NBYTES)
+    for fd in _mice:
+        try:
+            fcntl.ioctl(fd, EVIOCGKEY, state)
+        except OSError:
+            continue
+        if _bit(state, BTN_LEFT) or _bit(state, BTN_RIGHT) or _bit(state, BTN_MIDDLE):
+            return True
+    return False
+
+# --- geometry -----------------------------------------------------------------
+def workspace_rect_at(px, py):
+    """Usable area (excludes the bar) of the visible workspace under a point."""
+    best = None
+    for ws in i3.get_workspaces():
+        if not ws.visible:
+            continue
+        r = ws.rect
+        if r.x <= px < r.x + r.width and r.y <= py < r.y + r.height:
             return r
+        best = best or r
+    return best
+
+def outer(con):
+    """(x, y, w, h) of the whole frame: sway's rect is the area below the
+    title bar (borders included); the title bar is deco_rect."""
+    r, d = con.rect, con.deco_rect
+    th = d.height if d else 0
+    return (r.x, r.y - th, r.width, r.height + th)
+
+def find(cid):
+    return i3.get_tree().find_by_id(cid)
+
+# name -> (x, y, w, h) as fractions of the workspace
+ZONES = {
+    "left": (0, 0, .5, 1),       "right": (.5, 0, .5, 1),
+    "max": (0, 0, 1, 1),
+    "top-left": (0, 0, .5, .5),  "top-right": (.5, 0, .5, .5),
+    "bottom-left": (0, .5, .5, .5), "bottom-right": (.5, .5, .5, .5),
+}
+
+def zone_for(frame, ws):
+    x, y, w, h = frame
+    left = x <= ws.x + TOUCH
+    right = x + w >= ws.x + ws.width - TOUCH
+    top = y <= ws.y + TOUCH
+    bottom = y + h >= ws.y + ws.height - TOUCH
+    if left and right:      # wider than the screen: no clear intent
+        return "max" if top else None
+    if top and left:
+        return "top-left"
+    if top and right:
+        return "top-right"
+    if bottom and left and not top:
+        return "bottom-left"
+    if bottom and right and not top:
+        return "bottom-right"
+    if left:
+        return "left"
+    if right:
+        return "right"
+    if top:
+        return "max"
     return None
 
-while True:
-    time.sleep(POLL_INTERVAL)
+def set_frame(cid, x, y, w, h):
+    """Move/resize so the outer frame is exactly (x, y, w, h), absolute.
+    `resize set` sizes the content, not the frame, so measure and correct."""
+    rw, rh = w, h
+    for _ in range(2):
+        i3.command(f"[con_id={cid}] resize set width {rw} px height {rh} px, "
+                   f"move absolute position {x} {y}")
+        con = find(cid)
+        if not con:
+            return
+        _, _, fw, fh = outer(con)
+        if (fw, fh) == (w, h):
+            return
+        rw, rh = rw + (w - fw), rh + (h - fh)
 
+def snap(cid, zone, ws):
+    fx, fy, fw, fh = ZONES[zone]
+    x = ws.x + round(ws.width * fx)
+    y = ws.y + round(ws.height * fy)
+    # Right/bottom pieces take the remainder, so halves meet exactly
+    w = (ws.x + round(ws.width * (fx + fw))) - x
+    h = (ws.y + round(ws.height * (fy + fh))) - y
+    set_frame(cid, x, y, w, h)
+
+def restore_size(cid, size):
+    con = find(cid)
+    if con:
+        x, y, _, _ = outer(con)
+        set_frame(cid, x, y, size[0], size[1])
+
+# Pre-snap sizes, shared with one-shot `snap restore` calls via the runtime
+# dir (the watcher owns the dict; the file is just its latest copy)
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "tebian-edge-snap.json")
+
+def save_state(snapped):
     try:
-        win = get_focused_floating()
-        if not win:
-            prev_positions.clear()
+        with open(STATE + ".tmp", "w") as f:
+            json.dump({str(k): v for k, v in snapped.items()}, f)
+        os.replace(STATE + ".tmp", STATE)
+    except OSError:
+        pass
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return {int(k): tuple(v) for k, v in json.load(f).items()}
+    except (OSError, ValueError):
+        return {}
+
+def one_shot(zone):
+    con = i3.get_tree().find_focused()
+    if not con:
+        return 1
+    if con.type != "floating_con":
+        return 0          # tiled windows: nothing to snap
+    x, y, w, h = outer(con)
+    ws = workspace_rect_at(x + w // 2, y + 5)
+    if not ws:
+        return 1
+    if zone == "restore":
+        # Back to the size it had before snapping (or 60%), centred
+        size = load_state().get(con.id) or (round(ws.width * .6), round(ws.height * .6))
+        set_frame(con.id, ws.x + (ws.width - size[0]) // 2, ws.y + (ws.height - size[1]) // 2, *size)
+    elif zone in ZONES:
+        snap(con.id, zone, ws)
+    else:
+        print(__doc__)
+        return 2
+    return 0
+
+if len(sys.argv) > 1:
+    if sys.argv[1] == "snap" and len(sys.argv) == 3:
+        sys.exit(one_shot(sys.argv[2]))
+    print(__doc__)
+    sys.exit(2)
+
+# --- main loop ----------------------------------------------------------------
+snapped = {}      # con id -> (w, h) to restore when dragged away
+last = {}         # con id -> (x, y, w, h) at the previous poll
+drag = {}         # con id -> {"moved": bool, "still": int}
+
+_scan_mice()
+while True:
+    try:
+        focused = i3.get_tree().find_focused()
+        if not focused or focused.type != "floating_con":
+            time.sleep(IDLE_POLL)
+            continue
+        cid = focused.id
+        cur = outer(focused)
+        prev = last.get(cid)
+        last[cid] = cur
+        if prev is None:
+            time.sleep(POLL)
             continue
 
-        r = win.rect
-        x, y, w, h = r.x, r.y, r.width, r.height
-        cid = win.id
-        pos = (x, y, w, h)
+        moved = cur[:2] != prev[:2]
+        resized = cur[2:] != prev[2:]
+        d = drag.setdefault(cid, {"moved": False, "still": 0})
 
-        # Only act when position just changed (drag ended)
-        prev = prev_positions.get(cid)
-        prev_positions[cid] = pos
-
-        if prev is None or prev == pos:
-            continue
-
-        # If this is the snapped window, only release it once it's been dragged
-        # clearly away (beyond THRESHOLD from where we snapped it). Clearing on
-        # any tiny movement makes it re-snap every poll and fight the drag.
-        if cid == last_snapped_id and last_snapped_pos is not None:
-            moved = abs(x - last_snapped_pos[0]) + abs(y - last_snapped_pos[1])
-            if moved > THRESHOLD:
-                last_snapped_id = None
-                last_snapped_pos = None
-            else:
-                # Still parked at/near the snap position — leave it alone
-                continue
-
-        out = get_output_for(x, y, w, h)
-        if not out:
-            continue
-
-        ox, oy, ow, oh = out.x, out.y, out.width, out.height
-        half = ow // 2
-        rel_x = x - ox
-        rel_y = y - oy
-        right_gap = (ox + ow) - (x + w)
-        bottom_gap = (oy + oh) - (y + h)
-
-        cmd = None
-
-        # Corner snaps (top)
-        if rel_x <= THRESHOLD and rel_y <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {half} {oh // 2}'
-        elif right_gap <= THRESHOLD and rel_y <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy}; [con_id={cid}] resize set {half} {oh // 2}'
-        # Corner snaps (bottom)
-        elif rel_x <= THRESHOLD and bottom_gap <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox} {oy + oh // 2}; [con_id={cid}] resize set {half} {oh // 2}'
-        elif right_gap <= THRESHOLD and bottom_gap <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy + oh // 2}; [con_id={cid}] resize set {half} {oh // 2}'
-        # Edge snaps
-        elif rel_x <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {half} {oh}'
-        elif right_gap <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox + half} {oy}; [con_id={cid}] resize set {half} {oh}'
-        elif rel_y <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox} {oy}; [con_id={cid}] resize set {ow} {oh}'
-        elif bottom_gap <= THRESHOLD:
-            cmd = f'[con_id={cid}] move absolute position {ox} {oy + oh // 2}; [con_id={cid}] resize set {ow} {oh // 2}'
-
-        if cmd:
-            i3.command(cmd)
-            # Track what we snapped to avoid loop
-            tree2 = i3.get_tree()
-            w2 = tree2.find_by_id(cid)
-            if w2:
-                r2 = w2.rect
-                last_snapped_id = cid
-                last_snapped_pos = (r2.x, r2.y, r2.width, r2.height)
-                prev_positions[cid] = last_snapped_pos
-
+        if resized:
+            # A resize (keyboard snap, border drag, our own commands) is not
+            # a drag. If it came from a keyboard snap, remember the size
+            # before it, so dragging away later restores that.
+            if cid not in snapped and prev[2:] != cur[2:]:
+                ws = workspace_rect_at(cur[0] + cur[2] // 2, cur[1] + 5)
+                if ws and zone_for(cur, ws):
+                    snapped[cid] = prev[2:]
+                    save_state(snapped)
+            d.update(moved=False, still=0)
+        elif moved:
+            if not d["moved"] and cid in snapped:
+                # Dragging a snapped window away: give it its old size back
+                restore_size(cid, snapped.pop(cid))
+                save_state(snapped)
+                last.pop(cid, None)
+            d.update(moved=True, still=0)
+        elif d["moved"]:
+            d["still"] += 1
+            if d["still"] >= STABLE_POLLS and not button_held():
+                d.update(moved=False, still=0)
+                ws = workspace_rect_at(cur[0] + cur[2] // 2, cur[1] + 5)
+                zone = zone_for(cur, ws) if ws else None
+                if zone:
+                    snapped[cid] = cur[2:]
+                    save_state(snapped)
+                    snap(cid, zone, ws)
+                    last.pop(cid, None)
+    except (ConnectionError, BrokenPipeError):
+        sys.exit(1)      # sway is gone; the session restarts us
     except Exception:
         pass
+    time.sleep(POLL)

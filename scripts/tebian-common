@@ -328,6 +328,19 @@ tebian_user_migrate() {
             "$file" | _tebian_rewrite "$file"
     fi
 
+    # Floating mode's keyboard snaps used to position from the output's
+    # corner ("move absolute position 0 0"), so a snapped window covered the
+    # bar. Route the exact shipped lines through tebian-edge-snap, which uses
+    # the workspace's usable area (either line format; custom binds untouched).
+    if grep -q 'bindsym \$mod+Ctrl+\(Left\|Right\|Up\|Down\) resize set' "$file"; then
+        sed -E \
+            -e 's/^bindsym \$mod\+Ctrl\+Left resize set 50 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Left exec tebian-edge-snap snap left\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Right exec tebian-edge-snap snap right\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Up resize set 100 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Up exec tebian-edge-snap snap max\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Down resize set 60 ppt 60 ppt; move position center( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Down exec tebian-edge-snap snap restore\1/' \
+            "$file" | _tebian_rewrite "$file"
+    fi
+
     grep -qE '[^[:space:]#].*[[:space:]]# tebian-[a-z0-9-]+[[:space:]]*$' "$file" || return 0
 
     local moved
@@ -357,7 +370,7 @@ tebian_user_migrate() {
         fi
         # The old edge-snap line killed itself (pkill -f matched its own
         # bash -c); swap in the fixed one rather than carrying the bug over
-        if [[ "$line" == *tebian-edge-snap* ]]; then
+        if [[ "$line" == exec_always*tebian-edge-snap* ]]; then
             tebian_block_set_in "$file" edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
             continue
         fi
@@ -386,10 +399,10 @@ setup_floating_mode() {
     tebian_block_set floating-mode \
         'for_window [app_id=".*"] floating enable' \
         'for_window [class=".*"] floating enable' \
-        'bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0' \
-        'bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0' \
-        'bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0' \
-        'bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center'
+        'bindsym $mod+Ctrl+Left exec tebian-edge-snap snap left' \
+        'bindsym $mod+Ctrl+Right exec tebian-edge-snap snap right' \
+        'bindsym $mod+Ctrl+Up exec tebian-edge-snap snap max' \
+        'bindsym $mod+Ctrl+Down exec tebian-edge-snap snap restore'
     # Separate block so Settings can toggle snapping on its own
     if python3 -c "import i3ipc" 2>/dev/null; then
         tebian_block_set edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
