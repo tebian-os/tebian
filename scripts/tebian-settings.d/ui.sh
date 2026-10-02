@@ -120,7 +120,9 @@ ${SNAP_LABEL:+$SNAP_LABEL
     elif [[ "$U_CHOICE" =~ "Switch to Floating" ]]; then
         setup_floating_mode
         tnotify "UI" "Floating mode enabled"
-        swaymsg reload 2>/dev/null &
+        # for_window rules only reach windows opened later; convert the open
+        # ones too, or tiled and floating windows end up mixed together
+        ( swaymsg reload && swaymsg '[tiling] floating enable' ) >/dev/null 2>&1 &
     elif [[ "$U_CHOICE" =~ "Switch to Tiling" ]]; then
         remove_floating_mode
         swaymsg '[app_id=".*"] floating disable' 2>/dev/null

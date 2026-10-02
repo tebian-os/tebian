@@ -396,7 +396,13 @@ setup_floating_mode() {
         tebian_term_apt_install python3-i3ipc || true
     fi
 
+    # Click to focus while windows overlap: with focus-follows-mouse, just
+    # moving the pointer across a window focuses it, and sway raises a
+    # focused floating window — so windows kept jumping in front of each
+    # other. The block is appended after the user's own setting, so it wins
+    # here and their choice returns when the block goes (tiling mode).
     tebian_block_set floating-mode \
+        'focus_follows_mouse no' \
         'for_window [app_id=".*"] floating enable' \
         'for_window [class=".*"] floating enable' \
         'bindsym $mod+Ctrl+Left exec tebian-edge-snap snap left' \
