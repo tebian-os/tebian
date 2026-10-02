@@ -43,9 +43,9 @@ tooltip label {
 #backlight,
 #battery,
 #custom-power {
-    padding: 0 10px;
-    margin: 4px 1px;
-    border-radius: 8px;
+    padding: 0 9px;
+    margin: 3px 1px;
+    border-radius: 7px;
     background: transparent;
     color: @text;
     transition: background-color 150ms ease, color 150ms ease;
@@ -68,19 +68,31 @@ tooltip label {
     background: @surface0;
 }
 
+/* Icons a touch larger than the text, so they read as buttons */
+#bluetooth, #network, #pulseaudio, #backlight, #custom-power,
+#custom-update, #custom-drives, #custom-dnd, #custom-tray-handle {
+    font-size: 15px;
+}
+#clock { font-size: 13px; }
+
 #custom-tebian {
     color: @accent;
-    font-size: 15px;
+    font-size: 16px;
     margin-left: 6px;
 }
 #custom-power { margin-right: 6px; }
 
-/* Workspaces: dim when empty of focus, accent pill when focused */
+/* Workspaces: empty ones faint, occupied ones plain, the focused one an
+   accent pill */
 #workspaces button {
-    padding: 0 9px;
-    color: @overlay0;
+    padding: 0 8px;
+    min-width: 12px;
+    color: @text;
     box-shadow: none;
     text-shadow: none;
+}
+#workspaces button.empty {
+    color: @overlay0;
 }
 #workspaces button.focused {
     background: @accent;

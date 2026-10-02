@@ -325,6 +325,38 @@ if [ "${#ROOT_DST[@]}" -gt 0 ]; then
     fi
 fi
 
+# --- 3a. Packages the Modern bar needs ---------------------------------------------
+# Updates otherwise only move files: someone who turned the Modern bar on
+# before a release added a dependency (upower for the Power panel,
+# Quickshell for all the panels) would never get it. Only for users who
+# have the Modern bar on; Quickshell exists in Debian only in
+# trixie-backports (NotAutomatic — nothing else upgrades from it).
+if grep -qsx "# tebian:bar-style {" "$HOME/.config/sway/config.user"; then
+    BAR_MISSING=()
+    for pkg in waybar upower; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed" || BAR_MISSING+=("$pkg")
+    done
+    command -v quickshell >/dev/null || BAR_MISSING+=(quickshell)
+    if [ ${#BAR_MISSING[@]} -gt 0 ]; then
+        info "Modern bar: installing ${BAR_MISSING[*]}"
+        if sudo -v; then
+            for pkg in "${BAR_MISSING[@]}"; do
+                if [ "$pkg" = quickshell ]; then
+                    grep -rqs "trixie-backports" /etc/apt/sources.list /etc/apt/sources.list.d/ ||
+                        echo "deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware" |
+                        sudo tee /etc/apt/sources.list.d/tebian-backports.list >/dev/null
+                    { sudo apt-get update -qq && sudo apt-get install -y -t trixie-backports quickshell; } ||
+                        warn "Quickshell could not be installed — the bar keeps its simple menus"
+                else
+                    sudo apt-get install -y "$pkg" || warn "Could not install $pkg"
+                fi
+            done
+        else
+            warn "No sudo — skipped installing ${BAR_MISSING[*]}. Run tebian-update in a terminal."
+        fi
+    fi
+fi
+
 # --- 3b. Main sway config -------------------------------------------------------
 # ~/.config/sway/config is Tebian's file (personal settings belong in
 # config.user, which is never touched). It is replaced only if it is exactly

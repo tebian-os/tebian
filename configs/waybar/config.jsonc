@@ -11,7 +11,7 @@
 {
   "layer": "top",
   "position": "top",
-  "height": 30,
+  "height": 28,
   "spacing": 2,
   // Follow sway's bar mode (Hide Bar / show on Super) via `bar bar-0`
   "ipc": true,
@@ -39,28 +39,24 @@
     "on-click-right": "tebian-bar-menu settings left"
   },
 
+  // 1-5 always shown (like Omarchy and most desktops), so the bar reads as
+  // a row of places rather than a lone number; more appear when used
   "sway/workspaces": {
     "disable-scroll": false,
     "all-outputs": false,
-    "format": "{name}"
+    "format": "{name}",
+    "persistent-workspaces": { "1": [], "2": [], "3": [], "4": [], "5": [] }
   },
 
   "sway/mode": {
     "format": "󰩨 {}"
   },
 
+  // Click: the calendar panel. Right-click: do not disturb.
   "clock": {
-    "format": "{:%a %d %b  %H:%M}",
-    "format-alt": "{:%A %d %B %Y  ·  week %V}",
-    "tooltip-format": "<tt>{calendar}</tt>\n<small>Click: full date · Right-click: do not disturb</small>",
-    "calendar": {
-      "mode": "month",
-      "weeks-pos": "left",
-      "format": {
-        "today": "<b><u>{}</u></b>",
-        "weeks": "<span alpha='60%'>{}</span>"
-      }
-    },
+    "format": "{:%a %d %b  <b>%H:%M</b>}",
+    "tooltip-format": "{:%A %d %B %Y}\n<small>Click: calendar · Right-click: do not disturb</small>",
+    "on-click": "tebian-bar-menu calendar",
     "on-click-right": "makoctl mode -t do-not-disturb >/dev/null; pkill -RTMIN+9 -x waybar"
   },
 
@@ -93,8 +89,8 @@
     "modules": ["custom/tray-handle", "tray"]
   },
   "custom/tray-handle": {
-    "format": "󰅃",
-    "tooltip-format": "Background apps"
+    "format": "󰇘",
+    "tooltip-format": "Background apps — hover to show"
   },
   "tray": { "icon-size": 14, "spacing": 10 },
 
@@ -152,24 +148,26 @@
     "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
   },
 
+  // Sun glyphs that stay recognisable at bar size (the brightness-7 glyph
+  // read as a settings gear)
   "backlight": {
     "format": "{icon}",
-    "format-icons": ["󰃞", "󰃟", "󰃠"],
+    "format-icons": ["󰖨", "󰖨", "󰖙"],
     "tooltip-format": "Brightness {percent}%\nScroll to adjust",
     "on-scroll-up": "brightnessctl -q set 5%+",
     "on-scroll-down": "brightnessctl -q set 5%-",
-    "on-click": "tebian-bar-menu screen"
+    "on-click": "tebian-bar-menu display"
   },
 
   "battery": {
     "interval": 10,
     "states": { "warning": 20, "critical": 10 },
-    "format": "{icon}",
-    "format-charging": "󰂄",
-    "format-plugged": "󰚥",
+    // Percentage always shown, as on Windows/macOS — an unlabelled glyph
+    // is too small to judge at a glance
+    "format": "{icon} {capacity}%",
+    "format-charging": "󰂄 {capacity}%",
+    "format-plugged": "󰚥 {capacity}%",
     "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
-    "format-warning": "{icon} {capacity}%",
-    "format-critical": "{icon} {capacity}%",
     "tooltip-format": "{capacity}%  ·  {timeTo}",
     "on-click": "tebian-bar-menu power"
   },
