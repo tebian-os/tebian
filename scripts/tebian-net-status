@@ -1,0 +1,168 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN NET STATUS
+# Network facts for the Wi-Fi panel (configs/panels), as tab-separated
+# key/value lines. Ported from Omarchy's omarchy-network-status and
+# omarchy-network-band (MIT, (c) David Heinemeier Hansson).
+#
+#   tebian-net-status --verbose        active route: iface, ip, gateway, byte
+#                                      counters, Wi-Fi link, ping samples
+#   tebian-net-status band             current / available / pinned Wi-Fi band
+#   tebian-net-status band auto|2.4|5|6  pin the active connection's band
+#
+# Differences from Omarchy's: no jq (parses `ip` text output), and `iw` is
+# optional — Tebian installs don't always have it, so NetworkManager answers
+# for the Wi-Fi link when it's missing.
+# ==============================================================================
+set -uo pipefail
+
+internet_probe=1.1.1.1
+
+# Values read back from nmcli: C locale so state words match, `-e no` so an
+# SSID containing ':' or '\' isn't escaped
+nm_get() { LC_ALL=C nmcli -e no -g "$@" 2>/dev/null; }
+
+# Sets ssid / freq / signal_dbm / bitrate for a Wi-Fi interface
+read_link() {
+    local dev=$1 link line
+    ssid="" freq="" signal_dbm="" bitrate=""
+    if command -v iw >/dev/null && link=$(iw dev "$dev" link 2>/dev/null) && [ -n "$link" ]; then
+        ssid=$(awk '/SSID:/ { sub(/.*SSID: /, ""); print; exit }' <<<"$link")
+        freq=$(awk '/freq:/ { print $2; exit }' <<<"$link")
+        signal_dbm=$(awk '/signal:/ { print $2; exit }' <<<"$link")
+        bitrate=$(awk '/tx bitrate:/ { print $3 " " $4; exit }' <<<"$link")
+        return
+    fi
+    # IN-USE first, SSID last so one containing ':' can be put back together
+    line=$(nm_get IN-USE,FREQ,RATE,SSID dev wifi list ifname "$dev" --rescan no | awk -F: '$1 == "*" { print; exit }')
+    [ -n "$line" ] || return 0
+    freq=$(cut -d: -f2 <<<"$line" | awk '{ print $1 }')
+    bitrate=$(cut -d: -f3 <<<"$line")
+    ssid=$(cut -d: -f4- <<<"$line")
+}
+
+ping_ms() {
+    LC_ALL=C ping -n -c 1 -W 1 "$1" 2>/dev/null |
+        awk -F'time[=<]' '/time[=<]/ { split($2, p, " "); print p[1]; exit }'
+}
+
+verbose() {
+    local route iface gw src prefix rf if_file
+    # e.g. "1.1.1.1 via 192.168.1.1 dev wlp0s20f3 src 192.168.1.50 uid 1000"
+    route=$(ip route get "$internet_probe" 2>/dev/null | head -1)
+    [ -n "$route" ] || return 0
+    iface=$(awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$route")
+    gw=$(awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }' <<<"$route")
+    src=$(awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }' <<<"$route")
+    [ -n "$iface" ] || return 0
+    prefix=$(ip -o -4 addr show dev "$iface" 2>/dev/null | awk '{ split($4, a, "/"); print a[2]; exit }')
+
+    printf 'iface\t%s\nip\t%s\nprefix\t%s\ngateway\t%s\n' "$iface" "$src" "$prefix" "$gw"
+    for rf in rx_bytes tx_bytes; do
+        if_file=/sys/class/net/$iface/statistics/$rf
+        [ -r "$if_file" ] && printf '%s\t%s\n' "$rf" "$(<"$if_file")"
+    done
+
+    if [ -d "/sys/class/net/$iface/wireless" ]; then
+        printf 'type\twifi\n'
+        read_link "$iface"
+        [ -n "$ssid" ] && printf 'ssid\t%s\n' "$ssid"
+        [ -n "$signal_dbm" ] && printf 'signal_dbm\t%s\n' "$signal_dbm"
+        [ -n "$freq" ] && printf 'freq\t%s\n' "$freq"
+        [ -n "$bitrate" ] && printf 'bitrate\t%s\n' "$bitrate"
+    else
+        printf 'type\tethernet\n'
+        [ -r "/sys/class/net/$iface/speed" ] && printf 'speed\t%s\n' "$(cat "/sys/class/net/$iface/speed" 2>/dev/null)"
+        [ -r "/sys/class/net/$iface/duplex" ] && printf 'duplex\t%s\n' "$(cat "/sys/class/net/$iface/duplex" 2>/dev/null)"
+    fi
+
+    # Router and internet pinged in parallel so a slow one doesn't double
+    # the poll time
+    local tmp; tmp=$(mktemp -d) || return 0
+    [ -n "$gw" ] && { ping_ms "$gw" > "$tmp/router" & }
+    ping_ms "$internet_probe" > "$tmp/internet" &
+    wait
+    [ -n "$gw" ] && printf 'router_ping_ms\t%s\n' "$(cat "$tmp/router")"
+    printf 'internet_ping_ms\t%s\n' "$(cat "$tmp/internet")"
+    rm -rf "$tmp"
+}
+
+# ---- band ----------------------------------------------------------------------
+# NetworkManager 1.44+ pins 5 and 6 GHz separately. Pinning the band rather
+# than a BSSID survives AP BSSID rotation and leaves roaming intact.
+nm_band_for() { case "$1" in 2.4) echo bg ;; 5) echo a ;; 6) echo 6GHz ;; *) return 1 ;; esac; }
+band_from_nm() { case "$1" in bg) echo 2.4 ;; a) echo 5 ;; 6GHz) echo 6 ;; *) echo auto ;; esac; }
+band_for_freq() {
+    local mhz=${1%%[!0-9]*}
+    [ -n "$mhz" ] || return 1
+    if ((mhz >= 2400 && mhz < 2500)); then echo 2.4
+    elif ((mhz >= 4900 && mhz < 5925)); then echo 5
+    elif ((mhz >= 5925 && mhz < 7125)); then echo 6
+    else return 1; fi
+}
+
+wifi_device() { nm_get DEVICE,TYPE,STATE device status | awk -F: '$2 == "wifi" && $3 == "connected" { print $1; exit }'; }
+wifi_profile() { nm_get GENERAL.CONNECTION device show "$1"; }
+
+# Every band the SSID answers on, always including the current one. Reads
+# NetworkManager's scan cache (--rescan no), which the panel keeps warm.
+available_bands() {
+    local dev=$1 want=$2 current=$3
+    {
+        [ -n "$current" ] && echo "$current"
+        nm_get FREQ,SSID dev wifi list ifname "$dev" --rescan no |
+            want="$want" awk -F: 'BEGIN { want = ENVIRON["want"] }
+                { name = $2; for (i = 3; i <= NF; i++) name = name ":" $i; if (name == want) print $1 }' |
+            while read -r f _; do band_for_freq "$f" || true; done
+    } | sort -u -g | tr '\n' ' ' | sed 's/ $//'
+}
+
+band_status() {
+    local dev band profile
+    dev=$(wifi_device); [ -n "$dev" ] || return 0
+    read_link "$dev"; [ -n "$ssid" ] || return 0
+    band=$(band_for_freq "$freq" || true)
+    profile=$(wifi_profile "$dev")
+    printf 'band\t%s\navailable\t%s\n' "$band" "$(available_bands "$dev" "$ssid" "$band")"
+    [ -n "$profile" ] && printf 'selected\t%s\n' "$(band_from_nm "$(nm_get 802-11-wireless.band connection show "$profile")")"
+}
+
+band_set() {
+    local target=$1 dev profile previous desired
+    dev=$(wifi_device)
+    [ -n "$dev" ] || { echo "Error: no connected Wi-Fi device." >&2; exit 1; }
+    profile=$(wifi_profile "$dev")
+    [ -n "$profile" ] || { echo "Error: no active Wi-Fi connection profile." >&2; exit 1; }
+    if [ "$target" = auto ]; then
+        desired=""
+    else
+        read_link "$dev"
+        if [[ " $(available_bands "$dev" "$ssid" "$(band_for_freq "$freq" || true)") " != *" $target "* ]]; then
+            echo "Error: ${target}GHz is not available on this network." >&2; exit 1
+        fi
+        desired=$(nm_band_for "$target")
+    fi
+    previous=$(nm_get 802-11-wireless.band connection show "$profile")
+    [ "$previous" = "$desired" ] && exit 0
+    nmcli connection modify "$profile" 802-11-wireless.band "$desired" >/dev/null || exit 1
+    # Takes effect on reassociation. If the radio can't come back on the
+    # requested band, restore the previous setting rather than strand the
+    # machine offline.
+    if ! nmcli connection up "$profile" >/dev/null 2>&1; then
+        nmcli connection modify "$profile" 802-11-wireless.band "$previous" >/dev/null
+        nmcli connection up "$profile" >/dev/null 2>&1 || true
+        echo "Error: could not connect on ${target}; reverted to previous band." >&2
+        exit 1
+    fi
+}
+
+case "${1:-}" in
+    --verbose) verbose ;;
+    band)
+        case "${2:-}" in
+            "") band_status ;;
+            auto|2.4|5|6) band_set "$2" ;;
+            *) echo "Usage: tebian-net-status band [auto|2.4|5|6]" >&2; exit 2 ;;
+        esac ;;
+    *) echo "Usage: tebian-net-status --verbose | band [auto|2.4|5|6]" >&2; exit 2 ;;
+esac

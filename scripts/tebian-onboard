@@ -310,6 +310,15 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         if command -v waybar >/dev/null && [ -x "$HOME/.local/bin/tebian-bar" ]; then
             tebian_block_set bar-style "bar bar-0 swaybar_command $HOME/.local/bin/tebian-bar"
             echo "  Modern bar enabled"
+            # Rich panels for the bar (trixie-backports only; optional —
+            # the bar falls back to simple menus without it)
+            if ! command -v quickshell >/dev/null; then
+                grep -rqs "trixie-backports" /etc/apt/sources.list /etc/apt/sources.list.d/ ||
+                    echo "deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware" |
+                    sudo tee /etc/apt/sources.list.d/tebian-backports.list >/dev/null
+                sudo apt update -qq && sudo apt install -y -t trixie-backports quickshell ||
+                    echo "  (Quickshell unavailable — bar uses simple menus)"
+            fi
         fi
         
         # Apply default theme (Nord) so kitty/fuzzel/mako have sane configs

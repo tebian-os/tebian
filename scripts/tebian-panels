@@ -1,0 +1,38 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN PANELS
+# The Modern bar's drop-down panels: a Quickshell daemon (configs/panels,
+# UI ported from Omarchy 4). Optional — needs `quickshell` (trixie-backports).
+# When it isn't running, the bar's buttons fall back to the fuzzel menus.
+#
+#   tebian-panels run            run the daemon (tebian-bar starts it beside Waybar)
+#   tebian-panels toggle <name>  open/close a panel (network); exits non-zero
+#                                if no daemon answers, so callers can fall back
+# ==============================================================================
+set -u
+
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+# One canonical path: Quickshell finds a running instance by its config path,
+# so the daemon and every `toggle` must spell it identically
+DIR=$(readlink -f "$TEBIAN_DIR/configs/panels" 2>/dev/null)
+
+command -v quickshell >/dev/null && [ -f "$DIR/shell.qml" ] || exit 1
+
+case "${1:-}" in
+    run)
+        # Replace, don't refuse: on a sway reload the new bar starts this
+        # while the old bar's daemon is still shutting down, and refusing
+        # (-n) would let the new one quit first and leave no daemon at all
+        quickshell kill -p "$DIR" >/dev/null 2>&1
+        exec quickshell -p "$DIR"
+        ;;
+    toggle)
+        # Instances are matched to this display, so a click on one session's
+        # bar never opens a panel in another
+        exec quickshell ipc -p "$DIR" call "tebian.${2:?usage: tebian-panels toggle <name>}" toggle >/dev/null 2>&1
+        ;;
+    *)
+        sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
+        exit 2
+        ;;
+esac

@@ -436,6 +436,31 @@ tebian_term_apt_install() {
     done
 }
 
+# Quickshell (the Modern bar's panels) exists in Debian only in
+# trixie-backports. Enables that repo the same way the Graphics Drivers
+# toggle does — the same list file, and backports is NotAutomatic, so
+# nothing else upgrades from it — then installs just quickshell. Runs in a
+# terminal for sudo; returns non-zero if it didn't end up installed.
+tebian_install_quickshell() {
+    local term="${TERM_CMD:-kitty -e}"
+    $term bash -c '
+        echo "Installing Quickshell (panels for the Modern bar) from trixie-backports..."
+        echo
+        list=/etc/apt/sources.list.d/tebian-backports.list
+        if ! grep -rqs "trixie-backports" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+            echo "deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware" |
+                sudo tee "$list" >/dev/null
+        fi
+        if sudo apt update && sudo apt install -y -t trixie-backports quickshell; then
+            echo; echo "Done."; sleep 1
+        else
+            echo; echo "Quickshell could not be installed — the bar will use simple menus."
+            read -rp "Press Enter to close. "
+        fi
+    '
+    command -v quickshell >/dev/null
+}
+
 # ==============================================================================
 # SCREEN LOCK & IDLE
 # One place builds the swayidle command, so the login autostart and the

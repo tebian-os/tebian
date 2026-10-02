@@ -326,6 +326,9 @@ bar_style_set() {
     if [ "$1" = modern ]; then
         # Install first; only switch once Waybar is really there
         tebian_term_apt_install waybar || return
+        # Quickshell draws the rich panels (WiFi so far). Optional: without
+        # it the bar's menus fall back to fuzzel drop-downs.
+        command -v quickshell >/dev/null || tebian_install_quickshell
         tebian_block_set bar-style "bar bar-0 swaybar_command $HOME/.local/bin/tebian-bar"
         tnotify "UI" "Modern bar on — hover the icons, click for menus"
     else

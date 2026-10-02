@@ -53,6 +53,25 @@ else
     cat "$RUN/colors.css" "$SHIP/style.css" > "$style.tmp" && mv -f "$style.tmp" "$style"
 fi
 
+# The drop-down panels daemon (tebian-panels, optional) lives and dies with
+# the bar. Sway stops a bar by signalling the PID it started — this script —
+# not its process group, so a plain background child would outlive every
+# reload and pile up. Hence supervise both and take both down together.
+panels_pid=""
+if command -v quickshell >/dev/null && [ -x "$(command -v tebian-panels)" ]; then
+    # Sway hands the bar a pre-connected socket (WAYLAND_SOCKET) that only
+    # one client may use — it's Waybar's. The panels connect normally.
+    env -u WAYLAND_SOCKET tebian-panels run >/dev/null 2>&1 &
+    panels_pid=$!
+fi
+
 # sway passes `-b bar-0`; with "ipc": true Waybar then follows sway's bar
 # mode, so Hide Bar / show-on-Super keep working
-exec waybar -c "$config" -s "$style" "$@"
+waybar -c "$config" -s "$style" "$@" &
+bar_pid=$!
+
+trap 'kill $bar_pid $panels_pid 2>/dev/null; exit 0' TERM INT HUP
+wait "$bar_pid"
+# Waybar exited on its own (crash, or killed directly): don't strand the panels
+[ -n "$panels_pid" ] && kill "$panels_pid" 2>/dev/null
+exit 0

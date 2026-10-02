@@ -10,6 +10,13 @@ side=right
 [ "${2:-}" = left ] && side=left
 export TEBIAN_MENU_ANCHOR="$edge-$side"
 
+# Panels with a Quickshell drop-down (tebian-panels) open that; if the
+# daemon isn't running (not installed, or Classic-era session) the fuzzel
+# menu below is the fallback
+case "${1:-}" in
+    wifi) tebian-panels toggle network && exit 0 ;;
+esac
+
 case "${1:-settings}" in
     launcher) exec tebian-menu ;;
     *)        exec tebian-settings --menu "${1:-settings}" ;;

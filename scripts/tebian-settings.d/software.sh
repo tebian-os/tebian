@@ -659,7 +659,14 @@ gfx_drivers_menu() {
                     echo \"Downgrading: \$PKGS\"
                     sudo apt install -y --allow-downgrades \$PKGS
                 fi
-                sudo rm -f /etc/apt/sources.list.d/tebian-backports.list
+                # Keep the repo while anything else still comes from it (e.g.
+                # Quickshell for the Modern bar's panels) — dropping it would
+                # silently stop those packages getting updates
+                if dpkg-query -W -f='\${Version}\n' 2>/dev/null | grep -q bpo; then
+                    echo 'Other backports packages are installed — keeping trixie-backports enabled.'
+                else
+                    sudo rm -f /etc/apt/sources.list.d/tebian-backports.list
+                fi
                 sudo apt update
                 echo ''
                 echo 'Back on Debian stable Mesa — reboot (or log out/in) to apply.'
