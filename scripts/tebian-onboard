@@ -171,7 +171,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             xwayland wget
             libspa-0.2-bluetooth rfkill
             pavucontrol
-            bluez blueman bluez-tools
+            bluez blueman python3-dbus python3-gi
             gvfs gvfs-backends
             adwaita-qt
             thunar thunar-archive-plugin file-roller
@@ -207,7 +207,9 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             echo "  ⚠ Some packages failed to install. Continuing..."
         }
         echo "  ✓ Desktop extras installed"
-        
+        # Login started no pairing agent: BlueZ was not installed yet
+        tebian_bt_agent_start 2>/dev/null || true
+
         # === HARDWARE-SPECIFIC PACKAGES ===
         echo ""
         echo "Installing hardware-specific packages..."

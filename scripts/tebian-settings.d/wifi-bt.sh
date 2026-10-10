@@ -132,8 +132,9 @@ bluetooth_menu() {
             tnotify "Bluetooth" "Downloading Bluetooth..."
             $TERM_CMD bash -c "
                 echo 'Installing Bluetooth...'
-                sudo apt update && sudo apt install -y bluez blueman bluez-tools libspa-0.2-bluetooth rfkill
+                sudo apt update && sudo apt install -y bluez blueman python3-dbus python3-gi libspa-0.2-bluetooth rfkill
                 sudo systemctl enable --now bluetooth
+                source ~/.local/bin/tebian-common && tebian_bt_agent_start
                 systemctl --user restart pipewire wireplumber 2>/dev/null
                 echo ''
                 echo 'Done! Bluetooth is ready.'
@@ -233,11 +234,9 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
                 ACTION=$(echo -e "󰂱 Connect\n Forget (unpair)\n󰌍 Cancel" | tfuzzel -d -p " $DEV_NAME | ")
                 if [[ "$ACTION" =~ "Connect" ]]; then
                     tnotify "Bluetooth" "Connecting to $DEV_NAME..."
-                    if bluetoothctl connect "$DEV_MAC" 2>/dev/null; then
+                    # Explains a failure itself
+                    tebian-panel-bluetooth connect "$DEV_MAC" &&
                         tnotify "Bluetooth" "Connected to $DEV_NAME"
-                    else
-                        tnotify "Bluetooth" "Failed to connect to $DEV_NAME"
-                    fi
                     pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 elif [[ "$ACTION" =~ "Forget" ]]; then
                     bluetoothctl remove "$DEV_MAC" 2>/dev/null
@@ -318,42 +317,11 @@ bt_scan_and_pair() {
 
     tnotify "Bluetooth" "Pairing with $SEL_NAME..."
 
-    # bt-agent handles BLE pairing handshake — bluetoothctl can't register
-    # an agent in non-interactive/scripted mode, so we use bt-agent from
-    # bluez-tools as a standalone background daemon.
-    pkill bt-agent 2>/dev/null; sleep 0.3
-    bt-agent -c NoInputNoOutput &
-    local AGENT_PID=$!
-    sleep 0.5
-
-    # Trust + pair + connect as separate commands (agent handles handshake)
-    bluetoothctl trust "$SEL_MAC" 2>/dev/null
-    sleep 0.5
-    local PAIR_RESULT
-    PAIR_RESULT=$(timeout 10 bluetoothctl pair "$SEL_MAC" 2>&1)
-
-    if echo "$PAIR_RESULT" | grep -qi "pairing successful\|already paired"; then
-        tnotify "Bluetooth" "Paired with $SEL_NAME — connecting..."
-        sleep 1
-
-        local CONN_RESULT
-        CONN_RESULT=$(timeout 10 bluetoothctl connect "$SEL_MAC" 2>&1)
-
-        if echo "$CONN_RESULT" | grep -qi "connection successful\|already connected"; then
-            tnotify "Bluetooth" "Connected to $SEL_NAME"
-        else
-            tnotify "Bluetooth" "Paired but connect failed — try again from main menu"
-        fi
-    else
-        if echo "$PAIR_RESULT" | grep -qi "not available\|timeout\|failed"; then
-            tnotify "Bluetooth" "Pairing failed — make sure $SEL_NAME is in pairing mode"
-        else
-            tnotify "Bluetooth" "Pairing failed with $SEL_NAME"
-        fi
+    # The same pairing as the bar's panel: pair, trust, connect, with
+    # tebian-bt-agent answering BlueZ. It explains failures itself.
+    if tebian-panel-bluetooth pair "$SEL_MAC"; then
+        tnotify "Bluetooth" "Connected to $SEL_NAME"
     fi
-
-    # Clean up agent
-    kill $AGENT_PID 2>/dev/null; wait $AGENT_PID 2>/dev/null
 
     bluetoothctl pairable off 2>/dev/null
     pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &

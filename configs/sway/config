@@ -54,6 +54,10 @@ exec_always bash -c 'pkill -f "^wl-paste --watch cliphist"; command -v wl-paste 
 # from ~/.config/tebian/idle.conf, which Settings -> Lock writes.
 exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_idle_start'
 
+# Bluetooth pairing agent (only if BlueZ is installed): without one, BlueZ
+# refuses to pair anything. Runs as a user service, see tebian-common.
+exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_bt_agent_start restart'
+
 # Keybindings
 bindsym $mod+Return exec $term
 bindsym $mod+Shift+q kill

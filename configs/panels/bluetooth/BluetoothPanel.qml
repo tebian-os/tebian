@@ -281,7 +281,7 @@ Panel {
 
   function connectDevice(device) {
     if (!device || device.connected) return
-    if (device.paired || device.bonded || device.trusted) runDeviceAction(device, "connect", "connecting")
+    if (device.paired || device.bonded) runDeviceAction(device, "connect", "connecting")
     else runDeviceAction(device, "pair", "connecting")
   }
 
@@ -314,7 +314,10 @@ Panel {
         }
       }
 
+      // Connected AND paired: a device being paired connects first and
+      // pairs after, and if the pairing then fails the link is dropped
       var finishedConnecting = action === "connecting" && found && found.connected
+          && (found.paired || found.bonded)
       if (finishedConnecting
           || (action === "disconnecting" && found && !found.connected)
           || (action === "forgetting" && (!found || (!found.paired && !found.bonded && !found.trusted)))) {
@@ -581,9 +584,11 @@ Panel {
     if (adapter !== null && adapter.discovering) adapter.discovering = false
   }
 
+  // Long enough for a pairing that waits on a prompt (tebian-bt-agent) and
+  // BlueZ's own 60s limit; tebian-panel-bluetooth reports failures itself
   Timer {
     id: pendingTimeout
-    interval: 20000
+    interval: 65000
     repeat: false
     onTriggered: root.pendingActions = ({})
   }

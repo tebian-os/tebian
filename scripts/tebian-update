@@ -357,6 +357,31 @@ if grep -qsx "# tebian:bar-style {" "$HOME/.config/sway/config.user"; then
     fi
 fi
 
+# --- 3a'. Bluetooth pairing agent -----------------------------------------------
+# BlueZ refuses every pairing without an agent; tebian-bt-agent (Python)
+# needs python3-dbus and python3-gi, which installs from before it never
+# asked for (they relied on bluez-tools' bt-agent, which wasn't always there)
+if dpkg-query -W -f='${Status}' bluez 2>/dev/null | grep -q "ok installed"; then
+    BT_MISSING=()
+    for pkg in python3-dbus python3-gi; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed" || BT_MISSING+=("$pkg")
+    done
+    if [ ${#BT_MISSING[@]} -gt 0 ]; then
+        info "Bluetooth: installing ${BT_MISSING[*]}"
+        if sudo -v; then
+            sudo apt-get install -y "${BT_MISSING[@]}" || warn "Could not install ${BT_MISSING[*]}"
+        else
+            warn "No sudo — skipped installing ${BT_MISSING[*]}. Run tebian-update in a terminal."
+        fi
+    fi
+    # Pick up the agent just copied to ~/.local/bin (needs a graphical
+    # session for its prompts; otherwise the next login starts it)
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        # shellcheck disable=SC1091
+        ( . "$LOCAL_BIN/tebian-common" && tebian_bt_agent_start restart ) >/dev/null 2>&1 || true
+    fi
+fi
+
 # --- 3b. Main sway config -------------------------------------------------------
 # ~/.config/sway/config is Tebian's file (personal settings belong in
 # config.user, which is never touched). It is replaced only if it is exactly

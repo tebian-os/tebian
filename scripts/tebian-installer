@@ -1323,7 +1323,7 @@ APT
 
         # Bluetooth (always install — needed for laptops, harmless on desktops)
         chroot_apt_install \
-            bluez bluez-tools libspa-0.2-bluetooth
+            bluez libspa-0.2-bluetooth python3-dbus python3-gi
         chroot "$TARGET" systemctl enable bluetooth >> "$INSTALL_LOG" 2>&1
 
         # CPU microcode

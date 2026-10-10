@@ -8,9 +8,16 @@
 #   tebian-panel-bluetooth pair|connect|disconnect|forget <address>
 #   tebian-panel-bluetooth power on|off
 #
+# Settings > Bluetooth calls this too, so there is one way to pair. Exits 0
+# on success; on failure it says why in a notification and exits 1.
+#
 # Power uses bluetoothctl like Settings > Bluetooth does, so the two never
 # disagree. "on" also lifts an rfkill soft block first: BlueZ refuses to
 # power an adapter that is blocked.
+#
+# Pairing talks to BlueZ directly (busctl), so a failure comes back as
+# BlueZ's own reason instead of bluetoothctl's chatter. It needs a pairing
+# agent running (tebian-bt-agent): without one BlueZ refuses every pairing.
 # ==============================================================================
 set -u
 
@@ -42,20 +49,96 @@ esac
 address=${2:-}
 [[ $address =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || usage
 
-# Every step tolerates failure: the panel watches BlueZ for the outcome and
-# clears its pending state on a timeout, so a failed step must not abort
-# the ones after it
+address=${address^^}
+dev=""
+name=$address
+
+# tebian-common, beside this script or in ~/.local/bin
+common() {
+    local d
+    for d in "$(dirname "$(readlink -f "$0")")" "$HOME/.local/bin"; do
+        [ -f "$d/tebian-common" ] && { . "$d/tebian-common"; return 0; }
+    done
+    return 1
+}
+
+fail() {
+    notify-send -a Bluetooth "$1" "$2" 2>/dev/null
+    exit 1
+}
+
+# BlueZ's message for a failed call, as something to do about it
+reason() {
+    case "$1" in
+        *"Authentication Failed"*|*"Authentication Rejected"*)
+            echo "It refused to pair. Put it in pairing mode and try again." ;;
+        *"Authentication Canceled"*)
+            echo "Pairing was cancelled." ;;
+        *"timed out"*|*"Timeout"*|*"Host is down"*|*"not available"*)
+            echo "It didn't answer. Check it's on, nearby and in pairing mode." ;;
+        *"In Progress"*)
+            echo "It's already pairing. Wait a moment." ;;
+        *"No such"*|*"Does Not Exist"*)
+            echo "It isn't in range any more. Scan again." ;;
+        *) echo "${1#Call failed: }" ;;
+    esac
+}
+
+find_device() {
+    dev=$(busctl --list tree org.bluez 2>/dev/null | grep -m1 "/dev_${address//:/_}\$")
+    [ -n "$dev" ] || return 1
+    local alias
+    alias=$(busctl get-property org.bluez "$dev" org.bluez.Device1 Alias 2>/dev/null)
+    alias=${alias#s \"}; alias=${alias%\"}
+    [ -n "$alias" ] && name=$alias
+    return 0
+}
+
+is_true() {
+    [ "$(busctl get-property org.bluez "$dev" org.bluez.Device1 "$1" 2>/dev/null)" = "b true" ]
+}
+
+# Error text on failure, nothing on success (stderr captured, stdout dropped)
+# shellcheck disable=SC2069
+call() {
+    timeout 70s busctl --timeout=60 call org.bluez "$dev" org.bluez.Device1 "$1" 2>&1 >/dev/null
+}
+
+trust() {
+    busctl set-property org.bluez "$dev" org.bluez.Device1 Trusted b "$1" >/dev/null 2>&1
+}
+
+# Pair, then trust, then connect, stopping at the first failure. Order
+# matters: trust before a successful pairing leaves a device marked known
+# that was never paired, and connecting an unpaired device gives a link
+# that looks connected but carries nothing (a mouse doesn't move).
+pair_and_connect() {
+    power_on
+    # Started at login, but a session from before an update has none yet
+    if ! common || ! tebian_bt_agent_start; then
+        fail "Bluetooth can't pair yet" "Its pairing helper isn't installed. Run tebian-update in a terminal."
+    fi
+    find_device || fail "Bluetooth" "That device isn't in range any more. Scan again."
+    local err
+    if ! is_true Paired; then
+        if ! err=$(call Pair) && [[ $err != *"Already Exists"* ]]; then
+            # Undo the half-done state, or it lingers as "connected"
+            call Disconnect >/dev/null
+            trust false
+            fail "Couldn't pair with $name" "$(reason "$err")"
+        fi
+    fi
+    trust true
+    is_true Connected && exit 0
+    err=$(call Connect) || fail "Paired with $name, but it didn't connect" "$(reason "$err")"
+    exit 0
+}
+
 case "$action" in
-    pair)
-        power_on
-        timeout 20s bluetoothctl pair "$address" >/dev/null 2>&1
-        timeout 5s bluetoothctl trust "$address" >/dev/null 2>&1
-        timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1
-        ;;
-    connect)
-        power_on
-        timeout 5s bluetoothctl trust "$address" >/dev/null 2>&1
-        timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1
+    pair|connect)
+        # Same path for both: "connect" on a device that never finished
+        # pairing pairs it first instead of making a link that does nothing
+        pair_and_connect
         ;;
     disconnect)
         timeout 10s bluetoothctl disconnect "$address" >/dev/null 2>&1

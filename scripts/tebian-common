@@ -516,6 +516,37 @@ tebian_idle_set() {
 }
 
 # ==============================================================================
+# BLUETOOTH PAIRING AGENT
+# BlueZ refuses every pairing ("Authentication Failed") unless an agent is
+# registered; tebian-bt-agent is that agent. It runs as the user service
+# tebian-bt-agent, so systemd restarts it if it dies and
+# `systemctl --user status tebian-bt-agent` shows what it was asked.
+# Started at login, and again by anything about to pair, so a session that
+# began before Bluetooth (or this agent) was installed still gets one.
+# ==============================================================================
+tebian_bt_agent_start() {
+    command -v bluetoothctl >/dev/null || return 1
+    python3 -c 'import dbus, gi' 2>/dev/null || return 1
+    local agent
+    agent=$(command -v tebian-bt-agent) || agent="$HOME/.local/bin/tebian-bt-agent"
+    [ -x "$agent" ] || return 1
+
+    # "restart" (login): a running agent may still hold the previous
+    # session's display, and its prompts would open nowhere
+    if [ "${1:-}" != restart ] && systemctl --user -q is-active tebian-bt-agent; then
+        return 0
+    fi
+    systemctl --user stop tebian-bt-agent 2>/dev/null
+    local -a env=()
+    [ -n "${WAYLAND_DISPLAY:-}" ] && env=(-E "WAYLAND_DISPLAY=$WAYLAND_DISPLAY")
+    systemd-run --user --quiet --collect --unit=tebian-bt-agent \
+        -p Restart=on-failure -p RestartSec=2 "${env[@]}" "$agent" || return 1
+    # Registering with BlueZ takes a moment; a pairing started sooner
+    # would still find no agent
+    sleep 1
+}
+
+# ==============================================================================
 # tebian.conf — the per-machine manifest tebian-rebuild reads. Settings that
 # rebuild re-applies (theme, security profile) must be recorded here, or the
 # next rebuild resets them to the defaults.

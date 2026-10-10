@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Tebian Bluetooth agent — answers BlueZ's pairing questions for the session.
+
+BlueZ refuses to pair anything ("Authentication Failed") unless some program
+has registered as a pairing agent, even a mouse that never asks a question.
+This is that program: one per session, registered as BlueZ's default agent,
+so pairing works the same from the bar's panel, Settings, bluetoothctl, or
+the device itself.
+
+  tebian-bt-agent          run the agent (sway starts it as the user service
+                           tebian-bt-agent: `systemctl --user status
+                           tebian-bt-agent` shows what it has been asked)
+
+What it answers, and how:
+  pairing a mouse or headset you picked      nothing to ask — BlueZ and the
+                                             device settle it themselves
+  a keyboard shows nothing, needs a code     notification: type this code
+  both sides show a code                     fuzzel: do the codes match?
+  an old device wants a PIN                  fuzzel: type the PIN
+  a device you didn't pick wants to pair,    fuzzel: allow?
+  or an unpaired one wants to connect
+Escape, closing the prompt, or no answer counts as no: nothing pairs
+without someone at the keyboard saying yes.
+"""
+import signal
+import subprocess
+import sys
+import threading
+
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+if len(sys.argv) > 1:
+    print(__doc__)
+    sys.exit(2)
+
+AGENT_PATH = "/org/tebian/bt_agent"
+# KeyboardDisplay: we can show a code and type one, so BlueZ picks the
+# strongest pairing method each device supports
+CAPABILITY = "KeyboardDisplay"
+
+
+def log(*parts):
+    print(*parts, file=sys.stderr, flush=True)
+
+
+class Rejected(dbus.DBusException):
+    _dbus_error_name = "org.bluez.Error.Rejected"
+
+
+class Canceled(dbus.DBusException):
+    _dbus_error_name = "org.bluez.Error.Canceled"
+
+
+dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+bus = dbus.SystemBus()
+
+
+def device_name(path):
+    try:
+        props = dbus.Interface(bus.get_object("org.bluez", path),
+                               "org.freedesktop.DBus.Properties")
+        return str(props.Get("org.bluez.Device1", "Alias"))
+    except dbus.DBusException:
+        return path.rsplit("/dev_", 1)[-1].replace("_", ":")
+
+
+def device_prop(path, name):
+    try:
+        props = dbus.Interface(bus.get_object("org.bluez", path),
+                               "org.freedesktop.DBus.Properties")
+        return bool(props.Get("org.bluez.Device1", name))
+    except dbus.DBusException:
+        return False
+
+
+def notify(title, body, seconds=30):
+    subprocess.Popen(["notify-send", "-a", "Bluetooth", "-t", str(seconds * 1000),
+                      title, body],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# --- prompts ------------------------------------------------------------------
+# BlueZ waits for our reply without blocking, but the D-Bus handler must
+# return at once, so each prompt runs in a thread and replies from the main
+# loop when fuzzel closes. One prompt at a time: BlueZ pairs one device at a
+# time, and Cancel closes whatever is open.
+_prompt = None
+_prompt_lock = threading.Lock()
+
+
+def _run_fuzzel(args, stdin_text):
+    global _prompt
+    try:
+        proc = subprocess.Popen(["fuzzel", "--dmenu", *args], text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    with _prompt_lock:
+        _prompt = proc
+    out, _ = proc.communicate(stdin_text)
+    with _prompt_lock:
+        if _prompt is proc:
+            _prompt = None
+    return out.strip() if proc.returncode == 0 else None
+
+
+def close_prompt():
+    with _prompt_lock:
+        if _prompt and _prompt.poll() is None:
+            _prompt.terminate()
+
+
+def ask(args, stdin_text, answer, reply, error):
+    """Show fuzzel in a thread; answer(text) turns the pick into the reply
+    value, or raises Rejected."""
+    def worker():
+        text = _run_fuzzel(args, stdin_text)
+
+        def finish():
+            if text is None:
+                error(Canceled("No answer"))
+                return False
+            try:
+                value = answer(text)
+            except dbus.DBusException as e:
+                error(e)
+                return False
+            reply(*([] if value is None else [value]))
+            return False
+        GLib.idle_add(finish)
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def ask_yes_no(question, yes, no, reply, error):
+    def answer(text):
+        if text != yes:
+            raise Rejected("Declined")
+    ask(["--prompt", question + "  ", "--lines", "2"], f"{yes}\n{no}\n",
+        answer, reply, error)
+
+
+class Agent(dbus.service.Object):
+    @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+    def Release(self):
+        log("released by BlueZ")
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="",
+                         out_signature="")
+    def Cancel(self):
+        log("BlueZ cancelled the request")
+        close_prompt()
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="ou",
+                         out_signature="", async_callbacks=("reply", "error"))
+    def RequestConfirmation(self, device, passkey, reply, error):
+        name = device_name(device)
+        log(f"confirm code {passkey:06d} with {name}")
+        ask_yes_no(f"Does {name} show {passkey:06d}?",
+                   f"Yes, pair with {name}", "No, cancel", reply, error)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o",
+                         out_signature="", async_callbacks=("reply", "error"))
+    def RequestAuthorization(self, device, reply, error):
+        name = device_name(device)
+        log(f"{name} asks to pair")
+        ask_yes_no(f"{name} wants to pair with this computer.",
+                   f"Allow {name}", "Don't allow", reply, error)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="os",
+                         out_signature="", async_callbacks=("reply", "error"))
+    def AuthorizeService(self, device, uuid, reply, error):
+        name = device_name(device)
+        # BlueZ only asks for devices that aren't trusted; Tebian trusts
+        # what it pairs, so this is a stranger or a device whose trust
+        # was taken away
+        if device_prop(device, "Paired") and device_prop(device, "Trusted"):
+            reply()
+            return
+        log(f"{name} asks to use service {uuid}")
+        ask_yes_no(f"{name} wants to connect.", f"Allow {name}",
+                   "Don't allow", reply, error)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o",
+                         out_signature="s", async_callbacks=("reply", "error"))
+    def RequestPinCode(self, device, reply, error):
+        name = device_name(device)
+        log(f"{name} wants a PIN")
+
+        def answer(text):
+            if not text:
+                raise Rejected("No PIN")
+            return dbus.String(text)
+        ask(["--prompt-only", f"PIN for {name} (often 0000):  "], "",
+            answer, reply, error)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o",
+                         out_signature="u", async_callbacks=("reply", "error"))
+    def RequestPasskey(self, device, reply, error):
+        name = device_name(device)
+        log(f"{name} wants a passkey")
+
+        def answer(text):
+            if not text.isdigit() or int(text) > 999999:
+                raise Rejected("Not a 6-digit code")
+            return dbus.UInt32(int(text))
+        ask(["--prompt-only", f"Code shown on {name}:  "], "",
+            answer, reply, error)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="ouq",
+                         out_signature="")
+    def DisplayPasskey(self, device, passkey, entered):
+        # Called again for every digit typed; only the first call needs
+        # to tell the user anything
+        if entered == 0:
+            name = device_name(device)
+            log(f"showing code {passkey:06d} for {name}")
+            notify(f"Pair {name}", f"Type {passkey:06d} on {name}, then press Enter")
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="os",
+                         out_signature="")
+    def DisplayPinCode(self, device, pincode):
+        name = device_name(device)
+        log(f"showing PIN for {name}")
+        notify(f"Pair {name}", f"Type {pincode} on {name}, then press Enter")
+
+
+Agent(bus, AGENT_PATH)
+
+
+def register():
+    manager = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
+                             "org.bluez.AgentManager1")
+    try:
+        manager.RegisterAgent(AGENT_PATH, CAPABILITY)
+    except dbus.DBusException as e:
+        if e.get_dbus_name() != "org.bluez.Error.AlreadyExists":
+            raise
+    manager.RequestDefaultAgent(AGENT_PATH)
+    log(f"registered with BlueZ as the default agent ({CAPABILITY})")
+
+
+def on_bluez(owner):
+    # Called now and whenever bluetoothd starts or stops: an agent belongs
+    # to one bluetoothd run, so a restarted daemon needs registering again
+    if not owner:
+        log("BlueZ is not running; waiting for it")
+        return
+    try:
+        register()
+    except dbus.DBusException as e:
+        log(f"could not register with BlueZ: {e.get_dbus_message()}")
+
+
+def unregister():
+    try:
+        dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
+                       "org.bluez.AgentManager1").UnregisterAgent(AGENT_PATH)
+    except dbus.DBusException:
+        pass
+
+
+loop = GLib.MainLoop()
+for sig in (signal.SIGTERM, signal.SIGINT):
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: (loop.quit(), False)[1])
+
+bus.watch_name_owner("org.bluez", on_bluez)
+loop.run()
+close_prompt()
+unregister()
