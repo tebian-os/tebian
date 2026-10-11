@@ -6,6 +6,7 @@
 # Hansson — see configs/panels/LICENSE-omarchy.
 #
 #   tebian-panel-power battery         key<TAB>value lines (empty: no battery)
+#   tebian-panel-power battery-notify  the same, as a notification (bar right-click)
 #   tebian-panel-power profiles        "name<TAB>1|0" per power profile (1 = active)
 #   tebian-panel-power set-profile <p>
 #   tebian-panel-power uptime
@@ -76,6 +77,18 @@ battery_report() {
 
 case "${1:-}" in
     battery) battery_report ;;
+    battery-notify)
+        declare -A b=()
+        while IFS=$'\t' read -r k v; do b[$k]=$v; done < <(battery_report)
+        [ -n "${b[percentage]:-}" ] || { notify-send -a Battery "Battery" "No battery found"; exit 0; }
+        case "${b[state]:-}" in
+            discharging) line="On battery · using ${b[rate]:-?}${b[time]:+ · ${b[time]} left}" ;;
+            charging)    line="Charging at ${b[rate]:-?}${b[time]:+ · full in ${b[time]}}" ;;
+            *)           line="Plugged in${b[threshold]:+ · charging held at ${b[threshold]}}" ;;
+        esac
+        extra="${b[size]:+${b[size]} battery}${b[cycles]:+ · ${b[cycles]} charge cycles}"
+        notify-send -a Battery "Battery ${b[percentage]}" "$line${extra:+$'\n'$extra}"
+        ;;
     profiles)
         command -v powerprofilesctl >/dev/null || exit 0
         powerprofilesctl list 2>/dev/null | awk '/^[[:space:]]*[* ][[:space:]]*[a-zA-Z0-9-]+:$/ {
@@ -103,5 +116,5 @@ case "${1:-}" in
             notify-send "Power" "The system refused to $1 — see: systemd-inhibit --list"
         fi
         ;;
-    *) sed -n '8,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '8,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

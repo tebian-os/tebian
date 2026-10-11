@@ -30,7 +30,9 @@ tooltip label {
 #workspaces button,
 #mode,
 #clock,
+#custom-weather,
 #custom-dnd,
+#custom-awake,
 #keyboard-state,
 #custom-perf,
 #custom-tray-handle,
@@ -54,7 +56,9 @@ tooltip label {
 #custom-tebian:hover,
 #workspaces button:hover,
 #clock:hover,
+#custom-weather:hover,
 #custom-dnd:hover,
+#custom-awake:hover,
 #custom-perf:hover,
 #custom-tray-handle:hover,
 #custom-update:hover,
@@ -70,7 +74,7 @@ tooltip label {
 
 /* Icons a touch larger than the text, so they read as buttons */
 #bluetooth, #network, #pulseaudio, #backlight, #custom-power,
-#custom-update, #custom-drives, #custom-dnd, #custom-tray-handle {
+#custom-update, #custom-drives, #custom-dnd, #custom-awake, #custom-tray-handle {
     font-size: 15px;
 }
 #clock { font-size: 13px; }
@@ -113,6 +117,7 @@ tooltip label {
 #custom-drives.mounted { color: @accent; }
 #custom-dnd.active,
 #keyboard-state label.locked { color: @red; }
+#custom-awake.active { color: @accent; }
 #keyboard-state label:not(.locked) { padding: 0; }
 
 #battery.charging, #battery.plugged { color: @green; }

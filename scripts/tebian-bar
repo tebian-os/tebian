@@ -33,7 +33,13 @@ if [ -f "$HOME/.config/waybar/config.jsonc" ]; then
     config="$HOME/.config/waybar/config.jsonc"
 else
     config="$RUN/config.jsonc"
-    sed "s/\"position\": \"top\"/\"position\": \"$pos\"/" "$SHIP/config.jsonc" > "$config.tmp" &&
+    # 12-hour clock (Settings > Desktop & UI > Clock): the shipped formats
+    # use %H:%M, swapped here like the position
+    hours=24
+    [ -f "$HOME/.config/tebian/clock-12h" ] && hours=12
+    sed -e "s/\"position\": \"top\"/\"position\": \"$pos\"/" \
+        -e "$([ "$hours" = 12 ] && echo 's/%H:%M/%I:%M %p/g' || echo ':')" \
+        "$SHIP/config.jsonc" > "$config.tmp" &&
         mv -f "$config.tmp" "$config"
 fi
 

@@ -1,0 +1,168 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN WEATHER
+# Optional weather in the Modern bar. Off until a place is chosen.
+#
+#   tebian-weather setup     pick a place (and °C/°F); turns weather on
+#   tebian-weather off       turn it off and forget the place
+#   tebian-weather bar       the bar module's JSON (empty while off)
+#   tebian-weather details   today and the next two days, as a notification
+#   tebian-weather status    "on<TAB>place" or "off"
+#
+# Privacy: weather needs a place, so Tebian asks for one instead of locating
+# you. Nothing is sent anywhere until you pick it. Then, every 15 minutes,
+# api.open-meteo.com gets that place's coordinates, rounded to about 1 km
+# (no key, no account, no IP-based location). Choosing the place sends the
+# name you typed to Open-Meteo's place search once. Off removes the place.
+# ==============================================================================
+set -u
+
+CONF="$HOME/.config/tebian/weather.conf"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/tebian/weather.json"
+FRESH=840        # seconds a forecast is reused (the bar asks every 15 min)
+STALE=10800      # after this, an old forecast is hidden rather than shown
+
+refresh_bar() { pkill -RTMIN+11 -x waybar 2>/dev/null; }
+
+load() {
+    WEATHER_PLACE="" WEATHER_LAT="" WEATHER_LON="" WEATHER_UNITS=celsius
+    # shellcheck disable=SC1090
+    [ -f "$CONF" ] && . "$CONF"
+    [ -n "$WEATHER_LAT" ] && [ -n "$WEATHER_LON" ]
+}
+
+ask() {  # prompt [lines on stdin]; prints the choice
+    local tf=fuzzel
+    command -v tfuzzel >/dev/null && tf=tfuzzel
+    "$tf" -d "$@"
+}
+
+fetch() {
+    local unit_args=""
+    [ "$WEATHER_UNITS" = fahrenheit ] && unit_args="&temperature_unit=fahrenheit&wind_speed_unit=mph"
+    mkdir -p "${CACHE%/*}"
+    curl -fsS --max-time 10 -o "$CACHE.tmp" \
+        "https://api.open-meteo.com/v1/forecast?latitude=$WEATHER_LAT&longitude=$WEATHER_LON&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,is_day,relative_humidity_2m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3$unit_args" &&
+        mv -f "$CACHE.tmp" "$CACHE"
+}
+
+# Age of the cached forecast in seconds (huge if there is none)
+cache_age() {
+    [ -f "$CACHE" ] || { echo 999999; return; }
+    echo $(( $(date +%s) - $(stat -c %Y "$CACHE") ))
+}
+
+# Reads the cached forecast; MODE is bar or details. WMO weather codes
+# (Open-Meteo's) to a Nerd Font icon and a word.
+render() {
+    python3 -I - "$1" "$WEATHER_PLACE" "$CACHE" << 'PY'
+import datetime, json, sys
+mode, place, cache = sys.argv[1:4]
+with open(cache) as f:
+    d = json.load(f)
+c, units, daily = d["current"], d["current_units"], d["daily"]
+
+def look(code, day=True):
+    if code == 0:
+        return ("󰖙" if day else "󰖔"), "Clear"
+    if code in (1, 2):
+        return ("󰖕" if day else "󰼱"), "Partly cloudy"
+    if code == 3:
+        return "󰖐", "Cloudy"
+    if code in (45, 48):
+        return "󰖑", "Fog"
+    if code in (51, 53, 55, 56, 57):
+        return "󰖗", "Drizzle"
+    if code in (61, 63, 65, 66, 67, 80, 81, 82):
+        return "󰖖", "Rain"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "󰖘", "Snow"
+    if code in (95, 96, 99):
+        return "󰖓", "Thunderstorm"
+    return "󰖐", "—"
+
+deg = "°" + units["temperature_2m"][-1]   # "°C" -> "°C", "°F" -> "°F"
+icon, word = look(c["weather_code"], c.get("is_day", 1) == 1)
+temp = round(c["temperature_2m"])
+feels = round(c["apparent_temperature"])
+wind = f'{round(c["wind_speed_10m"])} {units["wind_speed_10m"].replace("mp/h", "mph")}'
+
+days = []
+for i, date in enumerate(daily["time"]):
+    name = ("Today", "Tomorrow")[i] if i < 2 else datetime.date.fromisoformat(date).strftime("%A")
+    d_icon, d_word = look(daily["weather_code"][i])
+    rain = daily.get("precipitation_probability_max", [None] * 3)[i]
+    line = f'{name}: {d_word.lower()}, {round(daily["temperature_2m_min"][i])}–{round(daily["temperature_2m_max"][i])}{deg}'
+    if rain:
+        line += f", {rain}% rain"
+    days.append(line)
+
+if mode == "bar":
+    tooltip = (f"{place}\n{word}, {temp}{deg} (feels {feels}{deg}) · wind {wind}\n"
+               + "\n".join(days[1:]) + "\nClick: forecast · Right-click: change place")
+    print(json.dumps({"text": f"{icon} {temp}°", "tooltip": tooltip, "class": "weather"}))
+else:
+    print(f"{icon}  {place}: {temp}{deg}, {word.lower()}")
+    print(f"Feels like {feels}{deg} · wind {wind} · humidity {c['relative_humidity_2m']}%\n" + "\n".join(days))
+PY
+}
+
+case "${1:-bar}" in
+bar)
+    if ! load; then echo '{"text": ""}'; exit 0; fi
+    age=$(cache_age)
+    if [ "$age" -gt "$FRESH" ]; then
+        fetch || true
+        age=$(cache_age)
+    fi
+    if [ "$age" -gt "$STALE" ]; then echo '{"text": ""}'; exit 0; fi
+    render bar 2>/dev/null || echo '{"text": ""}'
+    ;;
+details)
+    load || exec "$0" setup
+    [ "$(cache_age)" -gt "$FRESH" ] && fetch
+    if out=$(render details 2>/dev/null); then
+        notify-send -a Weather "$(head -1 <<< "$out")" "$(tail -n +2 <<< "$out")"
+    else
+        notify-send -a Weather "Weather" "No forecast — is the network up?"
+    fi
+    ;;
+setup)
+    load || true
+    query=$(ask --prompt-only " 󰖐 Your town or city: " < /dev/null) || exit 0
+    [ -n "$query" ] || exit 0
+    enc=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$query")
+    found=$(curl -fsS --max-time 10 \
+        "https://geocoding-api.open-meteo.com/v1/search?name=$enc&count=8&language=en&format=json" |
+        python3 -I -c '
+import json, sys
+for r in json.load(sys.stdin).get("results", []):
+    label = ", ".join(x for x in (r.get("name"), r.get("admin1"), r.get("country")) if x)
+    # About 1 km: plenty for weather, not a home address
+    lat, lon = round(r["latitude"], 2), round(r["longitude"], 2)
+    print(label, lat, lon, sep="\t")') || {
+        notify-send -a Weather "Weather" "Couldn't reach the place search — is the network up?"; exit 1; }
+    if [ -z "$found" ]; then
+        notify-send -a Weather "Weather" "No place called \"$query\" found"; exit 1
+    fi
+    pick=$(cut -f1 <<< "$found" | ask --prompt " 󰖐 Which one? ") || exit 0
+    line=$(awk -F'\t' -v p="$pick" '$1 == p { print; exit }' <<< "$found")
+    [ -n "$line" ] || exit 0
+    units=$(printf '°C  Celsius\n°F  Fahrenheit\n' | ask --prompt " 󰔄 Units: ") || exit 0
+    case "$units" in *Fahrenheit*) units=fahrenheit ;; *) units=celsius ;; esac
+    mkdir -p "${CONF%/*}"
+    printf 'WEATHER_PLACE=%q\nWEATHER_LAT=%s\nWEATHER_LON=%s\nWEATHER_UNITS=%s\n' \
+        "$pick" "$(cut -f2 <<< "$line")" "$(cut -f3 <<< "$line")" "$units" > "$CONF"
+    rm -f "$CACHE"
+    refresh_bar
+    notify-send -a Weather "Weather on" "Showing the weather for $pick in the bar"
+    ;;
+off)
+    rm -f "$CONF" "$CACHE"
+    refresh_bar
+    ;;
+status)
+    if load; then printf 'on\t%s\n' "$WEATHER_PLACE"; else echo off; fi
+    ;;
+*) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

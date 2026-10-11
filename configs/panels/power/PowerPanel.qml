@@ -9,6 +9,8 @@
 //   - session actions (lock, sleep, log out, restart, shut down) — the same
 //     commands as Settings > Power, via tebian-panel-power. The ones that end
 //     the session take a second click to confirm.
+//   - stay-awake switches (tebian-awake): keep awake, and on laptops keep
+//     running with the lid closed. Both end at logout.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -49,7 +51,22 @@ Panel {
     { id: "poweroff", label: "Shut down", icon: "\u{f0425}", confirm: true }
   ]
   property string armedAction: ""
-  // "profile" | "actions" — which part the keyboard cursor is in. Actions
+
+  // Stay-awake switches; "lid" only where there is a lid
+  property var awakeInfo: ({})
+  property int awakeIndex: 0
+  readonly property var awakeOptions: {
+    var options = [{ id: "idle", label: "Keep awake", icon: "\u{f0176}" }]
+    if (awakeInfo.laptop === "1") options.push({ id: "lid", label: "Lid closed: run", icon: "\u{f0322}" })
+    return options
+  }
+
+  function toggleAwake(option) {
+    if (!option || awakeToggleProc.running) return
+    awakeToggleProc.command = ["tebian-awake", option.id, "toggle"]
+    awakeToggleProc.running = true
+  }
+  // "profile" | "awake" | "actions" — which part the keyboard cursor is in. Actions
   // sit in two rows by weight: [lock, sleep] above [log out, restart, shut
   // down]; actionIndex counts across both
   property string focusRow: "actions"
@@ -177,6 +194,7 @@ Panel {
     if (!batteryProc.running) batteryProc.running = true
     if (!profilesProc.running) profilesProc.running = true
     if (!uptimeProc.running) uptimeProc.running = true
+    if (!awakeProc.running) awakeProc.running = true
   }
 
   function updateKeyValue(raw, targetName) {
@@ -257,6 +275,17 @@ Panel {
     onExited: root.refresh()
   }
 
+  Process {
+    id: awakeProc
+    command: ["tebian-awake", "status"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.awakeInfo = Model.parseKeyValue(text) }
+  }
+
+  Process {
+    id: awakeToggleProc
+    onExited: { if (!awakeProc.running) awakeProc.running = true }
+  }
+
   Timer { interval: 5000; running: root.opened; repeat: true; onTriggered: root.refresh() }
 
   // Rotate the status phrase while the panel is open and we're in a
@@ -318,23 +347,29 @@ Panel {
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) {
+          // Rows top to bottom: profile, awake, then the two action rows
           var safe = root.safeActionCount
           if (root.focusRow === "profile") {
+            if (dy > 0) { root.focusRow = "awake"; root.awakeIndex = 0 }
+          } else if (root.focusRow === "awake") {
             if (dy > 0) { root.focusRow = "actions"; root.actionIndex = 0 }
+            else if (root.hasProfiles) root.focusRow = "profile"
           } else if (dy < 0) {
             if (root.actionIndex >= safe) root.actionIndex = Math.min(root.actionIndex - safe, safe - 1)
-            else if (root.hasProfiles) root.focusRow = "profile"
+            else { root.focusRow = "awake"; root.awakeIndex = 0 }
           } else if (root.actionIndex < safe) {
             root.actionIndex = safe + root.actionIndex
           }
         } else if (dx !== 0) {
           if (root.focusRow === "profile") root.selectProfileByDelta(dx)
+          else if (root.focusRow === "awake") root.awakeIndex = Math.max(0, Math.min(root.awakeOptions.length - 1, root.awakeIndex + dx))
           else root.actionIndex = Math.max(0, Math.min(root.sessionActions.length - 1, root.actionIndex + dx))
         }
       }
       onActivateRequested: {
         if (!root.cursorActive) return
         if (root.focusRow === "profile") root.activateSelectedProfile()
+        else if (root.focusRow === "awake") root.toggleAwake(root.awakeOptions[root.awakeIndex])
         else root.runSessionAction(root.sessionActions[root.actionIndex])
       }
       onCloseRequested: root.close()
@@ -539,9 +574,60 @@ Panel {
           }
         }
 
-        // ---------- Session actions (Tebian) ----------
+        // ---------- Stay awake (Tebian) ----------
         PanelSeparator {
           visible: root.batteryPresent || root.hasProfiles
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(10)
+
+          PanelSectionHeader {
+            text: "STAY AWAKE"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+          }
+
+          Row {
+            id: awakeRow
+            width: parent.width
+            spacing: Style.space(6)
+            readonly property real cellWidth: (width - spacing * (root.awakeOptions.length - 1)) / root.awakeOptions.length
+
+            Repeater {
+              model: root.awakeOptions
+              Button {
+                required property var modelData
+                required property int index
+                width: awakeRow.cellWidth
+                iconText: modelData.icon
+                iconSize: Style.font.title
+                text: modelData.label
+                fontSize: Style.font.bodySmall
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                horizontalPadding: Style.spacing.controlPaddingX
+                verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                bordered: true
+                active: root.awakeInfo[modelData.id] === "1"
+                hasCursor: root.cursorActive && root.focusRow === "awake" && root.awakeIndex === index
+                onClicked: root.toggleAwake(modelData)
+                onHovered: function(h) {
+                  if (h) {
+                    root.cursorActive = true
+                    root.focusRow = "awake"
+                    root.awakeIndex = index
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // ---------- Session actions (Tebian) ----------
+        PanelSeparator {
           foreground: root.bar.foreground
         }
 

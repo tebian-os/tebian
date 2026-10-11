@@ -74,10 +74,26 @@ ui_menu() {
         STYLE_LABEL="󰕮 Bar Style (Current: Classic)"
     fi
 
+    # Weather in the Modern bar (tebian-weather; off until a place is set)
+    local w_state w_place
+    IFS=$'\t' read -r w_state w_place < <(tebian-weather status 2>/dev/null)
+    if [ "$w_state" = on ]; then
+        WEATHER_LABEL="󰖐 Weather in Bar (ON: $w_place)"
+    else
+        WEATHER_LABEL="󰖐 Weather in Bar (OFF)"
+    fi
+    if [ -f "$HOME/.config/tebian/clock-12h" ]; then
+        CLOCK_LABEL="󰥔 Clock (Current: 12-hour)"
+    else
+        CLOCK_LABEL="󰥔 Clock (Current: 24-hour)"
+    fi
+
     UI_OPTS="$ICON_LABEL
 $STYLE_LABEL
 $BAR_LABEL
 $POS_LABEL
+$CLOCK_LABEL
+$WEATHER_LABEL
 $FLOAT_LABEL
 $TITLE_LABEL
 $SNAP_LABEL
@@ -146,6 +162,27 @@ $FX_LABEL
         swaymsg '[app_id=".*"] border normal 2' 2>/dev/null
         swaymsg '[class=".*"] border normal 2' 2>/dev/null
         tnotify "UI" "Title bars enabled"
+    elif [[ "$U_CHOICE" == *"Clock (Current"* ]]; then
+        mkdir -p "$HOME/.config/tebian"
+        if [ -f "$HOME/.config/tebian/clock-12h" ]; then
+            rm -f "$HOME/.config/tebian/clock-12h"
+            tnotify "Clock" "24-hour clock"
+        else
+            touch "$HOME/.config/tebian/clock-12h"
+            tnotify "Clock" "12-hour clock"
+        fi
+        # The bar reads it at start; sway restarts the bar on reload
+        swaymsg reload >/dev/null 2>&1 &
+    elif [[ "$U_CHOICE" == *"Weather in Bar (OFF)"* ]]; then
+        tebian-weather setup
+    elif [[ "$U_CHOICE" == *"Weather in Bar (ON"* ]]; then
+        W_CHOICE=$(echo -e "󰖐 Change Place\n󰖪 Turn Off Weather\n󰌍 Back" | tfuzzel -d -p " 󰖐 Weather | ")
+        if [[ "$W_CHOICE" =~ "Change Place" ]]; then
+            tebian-weather setup
+        elif [[ "$W_CHOICE" =~ "Turn Off" ]]; then
+            tebian-weather off
+            tnotify "Weather" "Off — nothing is fetched any more"
+        fi
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
         window_snapping_install
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then

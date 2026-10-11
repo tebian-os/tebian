@@ -279,14 +279,52 @@ config_menu() {
 }
 
 power_menu() {
+    # Stay-awake switches (tebian-awake): until turned off or logout
+    local awake_idle=0 awake_lid=0 laptop=0 k v
+    while IFS=$'\t' read -r k v; do
+        case "$k" in idle) awake_idle=$v ;; lid) awake_lid=$v ;; laptop) laptop=$v ;; esac
+    done < <(tebian-awake status 2>/dev/null)
+    local IDLE_LABEL LID_LABEL=""
+    if [ "$awake_idle" = 1 ]; then
+        IDLE_LABEL="󰅶 Keep Awake (ON: no auto-lock, screen stays on)"
+    else
+        IDLE_LABEL="󰾪 Keep Awake (OFF)"
+    fi
+    if [ "$laptop" = 1 ]; then
+        if [ "$awake_lid" = 1 ]; then
+            LID_LABEL="󰌢 Lid Closed: Keep Running (ON)"
+        else
+            LID_LABEL="󰌢 Lid Closed: Sleep (keep running: OFF)"
+        fi
+    fi
+
     POWER_OPTS="󰜉 Reboot
 󰐥 Shutdown
 󰤄 Sleep
 󰍃 Logout
-󰌍 Back"
+$IDLE_LABEL
+${LID_LABEL:+$LID_LABEL
+}󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
     
     if is_back "$P_CHOICE"; then return; fi
+
+    if [[ "$P_CHOICE" =~ "Keep Awake" ]]; then
+        tebian-awake idle toggle
+        if [ "$awake_idle" = 1 ]; then
+            tnotify "Keep Awake" "Off — auto-lock is back"
+        else
+            tnotify "Keep Awake" "On until you turn it off or log out"
+        fi
+        return
+    elif [[ "$P_CHOICE" =~ "Lid Closed" ]]; then
+        if tebian-awake lid toggle && [ "$awake_lid" = 0 ]; then
+            tnotify "Lid Closed" "Keeps running with the lid closed, until you turn it off or log out"
+        else
+            tnotify "Lid Closed" "Closing the lid puts the laptop to sleep again"
+        fi
+        return
+    fi
 
     if [[ "$P_CHOICE" =~ "Reboot" || "$P_CHOICE" =~ "Shutdown" ]]; then
         local action=poweroff

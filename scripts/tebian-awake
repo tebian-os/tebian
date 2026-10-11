@@ -1,0 +1,112 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN AWAKE
+# Two separate "stay awake" switches, for the bar, the Power panel and
+# Settings > Power:
+#
+#   tebian-awake idle on|off|toggle   keep the screen on: no auto-lock, no
+#                                     screen-off (pauses swayidle)
+#   tebian-awake lid on|off|toggle    keep running with the lid closed
+#                                     (laptops; the screen still goes off)
+#   tebian-awake off                  both off
+#   tebian-awake status               "idle<TAB>1|0", "lid<TAB>1|0",
+#                                     "laptop<TAB>1|0" lines
+#   tebian-awake lid-closed|lid-opened   sway's lid switch (see sway config)
+#
+# Both last until you turn them off or log out, never longer: a "keep awake"
+# forgotten for days is how batteries get drained and screens left unlocked.
+#
+# idle: a flag in the runtime dir (gone at logout) that tebian_idle_start
+# honours, so Settings > Lock changes don't restart swayidle behind it.
+# lid: a logind inhibitor lock on the lid switch, held by the user service
+# tebian-awake-lid (`systemctl --user status tebian-awake-lid` shows it).
+# Taking it needs no password for the active session.
+# ==============================================================================
+set -u
+
+FLAG_DIR="${XDG_RUNTIME_DIR:-/tmp}/tebian"
+IDLE_FLAG="$FLAG_DIR/awake-idle"
+LID_UNIT="tebian-awake-lid"
+
+common() {
+    local f
+    for f in "$(dirname "$(readlink -f "$0")")/tebian-common" "$HOME/.local/bin/tebian-common"; do
+        # shellcheck disable=SC1090
+        [ -f "$f" ] && { . "$f"; return 0; }
+    done
+    return 1
+}
+
+refresh_bar() { pkill -RTMIN+10 -x waybar 2>/dev/null; }
+
+is_laptop() { compgen -G "/proc/acpi/button/lid/*/state" >/dev/null; }
+
+idle_on() { [ -f "$IDLE_FLAG" ]; }
+lid_on() { systemctl --user -q is-active "$LID_UNIT" 2>/dev/null; }
+
+set_idle() {
+    if [ "$1" = on ]; then
+        mkdir -p "$FLAG_DIR" && touch "$IDLE_FLAG"
+        pkill -x swayidle 2>/dev/null
+    else
+        rm -f "$IDLE_FLAG"
+        # Back to whatever Settings > Lock says (which may be "off")
+        common && tebian_idle_start
+    fi
+    refresh_bar
+}
+
+set_lid() {
+    if [ "$1" = on ]; then
+        is_laptop || { echo "tebian-awake: no lid on this machine" >&2; return 1; }
+        lid_on && return 0
+        systemd-run --user --quiet --collect --unit="$LID_UNIT" \
+            systemd-inhibit --what=handle-lid-switch --who=Tebian \
+                --why="Keep running with the lid closed" --mode=block \
+                sleep infinity || return 1
+    else
+        systemctl --user stop "$LID_UNIT" 2>/dev/null
+        # Opened in the meantime or not: the screens come back on
+        swaymsg 'output * power on' >/dev/null 2>&1
+    fi
+    refresh_bar
+}
+
+# Laptop panels: eDP (most), LVDS (older), DSI (tablets, some ARM boards)
+internal_outputs() {
+    swaymsg -t get_outputs 2>/dev/null | grep -o '"name": *"\(eDP\|LVDS\|DSI\)[^"]*"' |
+        sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+toggle_of() { if "$1"; then echo off; else echo on; fi; }
+
+case "${1:-status}" in
+    idle)
+        case "${2:-toggle}" in
+            on|off) set_idle "$2" ;;
+            toggle) set_idle "$(toggle_of idle_on)" ;;
+            *) exit 2 ;;
+        esac ;;
+    lid)
+        case "${2:-toggle}" in
+            on|off) set_lid "$2" ;;
+            toggle) set_lid "$(toggle_of lid_on)" ;;
+            *) exit 2 ;;
+        esac ;;
+    off)
+        idle_on && set_idle off
+        lid_on && set_lid off
+        refresh_bar ;;
+    status)
+        printf 'idle\t%d\n' "$(idle_on && echo 1 || echo 0)"
+        printf 'lid\t%d\n' "$(lid_on && echo 1 || echo 0)"
+        printf 'laptop\t%d\n' "$(is_laptop && echo 1 || echo 0)" ;;
+    # With the lid shut and the machine kept running, the panel would stay lit
+    # inside it; only the internal one goes off, external screens stay
+    lid-closed)
+        lid_on || exit 0
+        for o in $(internal_outputs); do swaymsg "output $o power off" >/dev/null; done ;;
+    lid-opened)
+        for o in $(internal_outputs); do swaymsg "output $o power on" >/dev/null; done ;;
+    *) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

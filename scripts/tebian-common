@@ -512,6 +512,8 @@ tebian_idle_start() {
 
     pkill -x swayidle 2>/dev/null
     [ "$AUTOLOCK" = on ] || return 0
+    # Keep awake is on (tebian-awake idle): stay paused until it's turned off
+    [ -f "${XDG_RUNTIME_DIR:-/tmp}/tebian/awake-idle" ] && return 0
     command -v swayidle >/dev/null || return 1
 
     local secs=$((LOCK_MINUTES * 60))

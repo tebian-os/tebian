@@ -58,6 +58,12 @@ exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_idle_start
 # refuses to pair anything. Runs as a user service, see tebian-common.
 exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_bt_agent_start restart'
 
+# Laptop lid: with "Lid closed: keep running" on (tebian-awake), the
+# internal screen goes off while the lid is shut; otherwise logind suspends
+# as usual and these do nothing
+bindswitch --locked lid:on exec tebian-awake lid-closed
+bindswitch --locked lid:off exec tebian-awake lid-opened
+
 # Keybindings
 bindsym $mod+Return exec $term
 bindsym $mod+Shift+q kill

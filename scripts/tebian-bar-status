@@ -8,6 +8,7 @@
 #   tebian-bar-status update   apt updates waiting       (hourly + signal 7)
 #   tebian-bar-status drives   USB drives mounted        (signal 8)
 #   tebian-bar-status dnd      do-not-disturb is on      (signal 9)
+#   tebian-bar-status awake    keep awake / lid is on    (signal 10)
 #   tebian-bar-status perf     CPU / RAM, if Bar Stats on (every 5s)
 #
 # Producers refresh a module immediately with: pkill -RTMIN+<n> -x waybar
@@ -57,6 +58,22 @@ dnd)
         emit "" ""
     fi
     ;;
+awake)
+    # tebian-awake's two switches; shown only while one is on
+    text="" tip=""
+    while IFS=$'\t' read -r k v; do
+        [ "$v" = 1 ] || continue
+        case "$k" in
+            idle) text+="󰅶 "; tip+="Keep awake: no auto-lock, screen stays on"$'\n' ;;
+            lid)  text+="󰌢 "; tip+="Lid closed: keeps running"$'\n' ;;
+        esac
+    done < <(tebian-awake status 2>/dev/null)
+    if [ -n "$text" ]; then
+        emit "${text% }" "${tip}Click to turn off (also ends at logout)" "active"
+    else
+        emit "" ""
+    fi
+    ;;
 perf)
     # Same switch as the Classic bar's stats (Settings > Screen > Bar Stats)
     if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
@@ -83,5 +100,5 @@ perf)
 Click for btop · toggle in Settings > Screen > Bar Stats" "perf"
     ;;
 *)
-    echo "usage: tebian-bar-status update|drives|dnd|perf" >&2; exit 2 ;;
+    echo "usage: tebian-bar-status update|drives|dnd|awake|perf" >&2; exit 2 ;;
 esac

@@ -18,7 +18,7 @@
   "id": "bar-0",
 
   "modules-left": ["custom/tebian", "sway/workspaces", "sway/mode"],
-  "modules-center": ["clock", "custom/dnd", "keyboard-state"],
+  "modules-center": ["clock", "custom/weather", "custom/dnd", "custom/awake", "keyboard-state"],
   "modules-right": [
     "custom/perf",
     "group/tray-drawer",
@@ -52,12 +52,27 @@
     "format": "󰩨 {}"
   },
 
-  // Click: the calendar panel. Right-click: do not disturb.
+  // Click: the calendar panel. Right-click: do not disturb. Middle-click:
+  // the long date. tebian-bar swaps %H:%M for a 12-hour clock when Settings
+  // > Screen > Clock says so.
   "clock": {
     "format": "{:%a %d %b  <b>%H:%M</b>}",
-    "tooltip-format": "{:%A %d %B %Y}\n<small>Click: calendar · Right-click: do not disturb</small>",
+    "format-alt": "{:%A %d %B %Y · week %V  <b>%H:%M</b>}",
+    "format-alt-click": "click-middle",
+    "tooltip-format": "{:%A %d %B %Y · week %V · %Z}\n<small>Click: calendar · Middle-click: long date · Right-click: do not disturb</small>",
     "on-click": "tebian-bar-menu calendar",
     "on-click-right": "makoctl mode -t do-not-disturb >/dev/null; pkill -RTMIN+9 -x waybar"
+  },
+
+  // Off until a place is chosen (Settings > Desktop & UI > Weather);
+  // tebian-weather explains what is sent where
+  "custom/weather": {
+    "exec": "tebian-weather bar",
+    "return-type": "json",
+    "interval": 900,
+    "signal": 11,
+    "on-click": "tebian-weather details",
+    "on-click-right": "tebian-weather setup"
   },
 
   "custom/dnd": {
@@ -66,6 +81,15 @@
     "interval": "once",
     "signal": 9,
     "on-click": "makoctl mode -t do-not-disturb >/dev/null; pkill -RTMIN+9 -x waybar"
+  },
+
+  // Keep awake / lid closed: keep running (tebian-awake), while either is on
+  "custom/awake": {
+    "exec": "tebian-bar-status awake",
+    "return-type": "json",
+    "interval": "once",
+    "signal": 10,
+    "on-click": "tebian-awake off"
   },
 
   // Shown only while Caps Lock is on
@@ -165,16 +189,23 @@
     // Percentage always shown, as on Windows/macOS — an unlabelled glyph
     // is too small to judge at a glance
     "format": "{icon} {capacity}%",
-    "format-charging": "󰂄 {capacity}%",
     "format-plugged": "󰚥 {capacity}%",
-    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
-    "tooltip-format": "{capacity}%  ·  {timeTo}",
-    "on-click": "tebian-bar-menu power"
+    "format-icons": {
+      "charging": ["󰢟", "󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"],
+      "default": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
+    },
+    // Power draw straight from the kernel, as on Omarchy
+    "tooltip-format-discharging": "{capacity}%  ·  using {power:.1f} W\n{timeTo}\n<small>Click: power · Right-click: details</small>",
+    "tooltip-format-charging": "{capacity}%  ·  charging at {power:.1f} W\n{timeTo}\n<small>Click: power · Right-click: details</small>",
+    "tooltip-format": "{capacity}%  ·  plugged in\n<small>Click: power · Right-click: details</small>",
+    "on-click": "tebian-bar-menu power",
+    "on-click-right": "tebian-panel-power battery-notify"
   },
 
   "custom/power": {
     "format": "⏻",
-    "tooltip-format": "Power — lock, sleep, restart, shut down",
-    "on-click": "tebian-bar-menu power"
+    "tooltip-format": "Power — lock, sleep, restart, shut down\n<small>Right-click: keep awake on/off</small>",
+    "on-click": "tebian-bar-menu power",
+    "on-click-right": "tebian-awake idle toggle"
   }
 }
