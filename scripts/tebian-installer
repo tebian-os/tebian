@@ -1519,11 +1519,21 @@ KBEOF
             chroot_apt_install_desktop \
                 sway swaybg xwayland fuzzel kitty libnotify-bin
 
+            # Tebian's sway: Debian's, rebuilt with window snapping (see
+            # tebian-build-sway). The build tools go again afterwards. If it
+            # fails the install carries on with Debian's sway, which runs the
+            # same config; Settings offers the build again.
+            echo 86; echo "# Adding window snapping to Sway..."
+            chroot_run env HOME=/root TEBIAN_DIR="/home/$USERNAME/Tebian" \
+                bash "/home/$USERNAME/Tebian/scripts/tebian-build-sway" \
+                    --install --clean --output /var/cache/tebian ||
+                echo "$(date -Iseconds) | WARN: sway with window snapping not built; Debian's sway stays" >> "$INSTALL_LOG"
+
             echo 87; echo "# Installing desktop extras..."
             chroot_apt_install_desktop \
                 blueman mako-notifier grim slurp wl-clipboard \
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
-                file-roller papirus-icon-theme btop python3-i3ipc \
+                file-roller papirus-icon-theme btop \
                 pavucontrol adwaita-qt \
                 udisks2 ntfs-3g dosfstools exfatprogs fdisk \
                 xdg-desktop-portal-wlr xdg-desktop-portal-gtk

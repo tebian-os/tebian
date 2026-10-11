@@ -141,6 +141,17 @@ if [ -d /opt/tebian-swayfx ]; then
     step "SwayFX removed (Debian's sway is used again)"
 fi
 
+# Tebian's sway build (tebian-build-sway): back to Debian's own package,
+# the newest version Debian's archive has that isn't a Tebian build
+if dpkg-query -W -f='${Version}' sway 2>/dev/null | grep -q '+tebian'; then
+    debian_sway=$(apt-cache madison sway 2>/dev/null | awk -F'|' '$2 !~ /tebian/ { gsub(/ /, "", $2); print $2; exit }')
+    if [ -n "$debian_sway" ] && sudo apt-get install -y --allow-downgrades "sway=$debian_sway" >/dev/null; then
+        step "Sway: Debian's package restored ($debian_sway)"
+    else
+        echo "  Could not restore Debian's sway; run: sudo apt install --reinstall sway/$(. /etc/os-release && echo "$VERSION_CODENAME")"
+    fi
+fi
+
 # Firejail links: only /usr/local/bin entries that point at firejail
 for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable; do
     if [ -L "/usr/local/bin/$bin" ] && readlink "/usr/local/bin/$bin" | grep -q firejail; then

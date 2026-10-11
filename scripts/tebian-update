@@ -48,7 +48,7 @@ done
 SKIP_SCRIPTS="desktop.sh build-iso.sh uninstall.sh tebian-installer test-vm.sh"
 # Removed from Tebian in earlier releases; an old ~/.local/bin may still
 # carry them, and there is no manifest yet to reveal them as stale
-RETIRED_SCRIPTS="tebian-tidy-home tebian-xdg.conf"
+RETIRED_SCRIPTS="tebian-tidy-home tebian-xdg.conf tebian-edge-snap"
 
 echo ""
 echo "  ┌─────────────────────┐"
@@ -379,6 +379,27 @@ if dpkg-query -W -f='${Status}' bluez 2>/dev/null | grep -q "ok installed"; then
     if [ -n "${WAYLAND_DISPLAY:-}" ]; then
         # shellcheck disable=SC1091
         ( . "$LOCAL_BIN/tebian-common" && tebian_bt_agent_start restart ) >/dev/null 2>&1 || true
+    fi
+fi
+
+# --- 3a''. Window snapping -------------------------------------------------------
+# Snapping is built into Tebian's sway: Debian's, rebuilt with
+# patches/sway (about a minute, build tools removed after), or SwayFX with
+# patches/swayfx. Debian's sway is rebuilt here when it's missing the
+# current patch, including after a Debian update replaced it. SwayFX takes
+# several minutes and ~500 MB of tools, so that one is only pointed out.
+if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
+    if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
+        "$LOCAL_BIN/tebian-install-swayfx" --check ||
+            warn "SwayFX needs rebuilding for window snapping: Settings → UI → Window Snapping"
+    elif ! "$LOCAL_BIN/tebian-build-sway" --check; then
+        info "Sway: adding window snapping (rebuilding Debian's sway, about a minute)"
+        if sudo -v; then
+            "$LOCAL_BIN/tebian-build-sway" --install --clean --output "$HOME/.cache/tebian" ||
+                warn "Window snapping was not built; Debian's sway keeps working without it"
+        else
+            warn "No sudo — skipped window snapping. Run tebian-update in a terminal."
+        fi
     fi
 fi
 

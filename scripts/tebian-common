@@ -328,17 +328,35 @@ tebian_user_migrate() {
             "$file" | _tebian_rewrite "$file"
     fi
 
-    # Floating mode's keyboard snaps used to position from the output's
-    # corner ("move absolute position 0 0"), so a snapped window covered the
-    # bar. Route the exact shipped lines through tebian-edge-snap, which uses
-    # the workspace's usable area (either line format; custom binds untouched).
-    if grep -q 'bindsym \$mod+Ctrl+\(Left\|Right\|Up\|Down\) resize set' "$file"; then
+    # Floating mode's keyboard snaps: the first ones positioned from the
+    # output's corner ("move absolute position 0 0") and covered the bar,
+    # the next ones ran tebian-edge-snap. Both become sway's own snap
+    # command (Tebian's sway build), which fits the workspace's usable area.
+    # The resize-set lines only as shipped (custom ones are left alone); any
+    # tebian-edge-snap binding, since that script is gone and sway's snap
+    # takes the same zone names.
+    if grep -qE '^bindsym .+ (resize set|exec tebian-edge-snap snap )' "$file"; then
         sed -E \
-            -e 's/^bindsym \$mod\+Ctrl\+Left resize set 50 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Left exec tebian-edge-snap snap left\1/' \
-            -e 's/^bindsym \$mod\+Ctrl\+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Right exec tebian-edge-snap snap right\1/' \
-            -e 's/^bindsym \$mod\+Ctrl\+Up resize set 100 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Up exec tebian-edge-snap snap max\1/' \
-            -e 's/^bindsym \$mod\+Ctrl\+Down resize set 60 ppt 60 ppt; move position center( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Down exec tebian-edge-snap snap restore\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Left resize set 50 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Left snap left\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Right snap right\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Up resize set 100 ppt 100 ppt; move absolute position 0 0( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Up snap max\1/' \
+            -e 's/^bindsym \$mod\+Ctrl\+Down resize set 60 ppt 60 ppt; move position center( # tebian-floating-mode)?$/bindsym $mod+Ctrl+Down snap restore\1/' \
+            -e 's/^(bindsym .+) exec tebian-edge-snap snap (left|right|max|top-left|top-right|bottom-left|bottom-right|restore)( # tebian-[a-z-]+)?$/\1 snap \2\3/' \
             "$file" | _tebian_rewrite "$file"
+    fi
+
+    # tebian-edge-snap, the old drag-snapping watcher, is gone: sway snaps
+    # by itself now. Drop its block, and its one-line form below.
+    if tebian_block_has edge-snap "$file"; then
+        tebian_block_remove edge-snap "$file"
+        pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
+    fi
+
+    # "Snapping off" is a line only Tebian's sway understands; under any
+    # other sway (SwayFX not yet rebuilt, Debian's own after an update) it
+    # would be a config error at every login, so it waits until it's valid
+    if tebian_block_has snap-off "$file" && ! tebian_snap_supported; then
+        tebian_block_remove snap-off "$file"
     fi
 
     grep -qE '[^[:space:]#].*[[:space:]]# tebian-[a-z0-9-]+[[:space:]]*$' "$file" || return 0
@@ -368,10 +386,9 @@ tebian_user_migrate() {
             tebian_block_set_in "$file" swayfx "${_kept[@]}" "$line"
             continue
         fi
-        # The old edge-snap line killed itself (pkill -f matched its own
-        # bash -c); swap in the fixed one rather than carrying the bug over
+        # The old drag-snapping watcher (see above)
         if [[ "$line" == exec_always*tebian-edge-snap* ]]; then
-            tebian_block_set_in "$file" edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
+            pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
             continue
         fi
         tebian_block_add_line "$(_tebian_block_key "$key")" "$line" "$file"
@@ -379,23 +396,29 @@ tebian_user_migrate() {
 }
 
 # ==============================================================================
-# FLOATING MODE SETUP
-# Writes floating window rules + edge snap bindings to config.user
+# FLOATING MODE AND WINDOW SNAPPING
+# Floating mode writes window rules and keyboard snaps to config.user.
+# Snapping itself is in Tebian's sway build (tebian-build-sway, or the
+# patched SwayFX): drag a floating window to an edge or corner and it shows
+# where it will land. It's on by default there, so the config never needs a
+# line that an unpatched sway would reject.
 # ==============================================================================
 
-# pkill pattern is anchored on the interpreter: an unanchored
-# `pkill -f tebian-edge-snap` also matches the bash -c running this very
-# line and kills it before edge-snap starts
-TEBIAN_EDGE_SNAP_EXEC="exec_always bash -c 'pkill -f \"^[^ ]*python3 [^ ]*tebian-edge-snap\"; sleep 0.2; exec tebian-edge-snap'"
+# True if the sway that `sway` starts has Tebian's snapping. Asks sway to
+# check a one-line config rather than guessing from version numbers, so it
+# holds for Debian's sway, Tebian's build and SwayFX alike.
+tebian_snap_supported() {
+    command -v sway >/dev/null || return 1
+    local probe rc
+    probe=$(mktemp) || return 1
+    echo 'floating_snap enable' > "$probe"
+    sway -C -c "$probe" >/dev/null 2>&1
+    rc=$?
+    rm -f "$probe"
+    return $rc
+}
 
 setup_floating_mode() {
-    # Edge-snap needs python3-i3ipc. Settings has no terminal for a sudo
-    # prompt, so install in one — floating mode works without it, edge-snap
-    # just isn't started until the library is there.
-    if ! python3 -c "import i3ipc" 2>/dev/null; then
-        tebian_term_apt_install python3-i3ipc || true
-    fi
-
     # Click to focus while windows overlap: with focus-follows-mouse, just
     # moving the pointer across a window focuses it, and sway raises a
     # focused floating window — so windows kept jumping in front of each
@@ -405,21 +428,15 @@ setup_floating_mode() {
         'focus_follows_mouse no' \
         'for_window [app_id=".*"] floating enable' \
         'for_window [class=".*"] floating enable' \
-        'bindsym $mod+Ctrl+Left exec tebian-edge-snap snap left' \
-        'bindsym $mod+Ctrl+Right exec tebian-edge-snap snap right' \
-        'bindsym $mod+Ctrl+Up exec tebian-edge-snap snap max' \
-        'bindsym $mod+Ctrl+Down exec tebian-edge-snap snap restore'
-    # Separate block so Settings can toggle snapping on its own
-    if python3 -c "import i3ipc" 2>/dev/null; then
-        tebian_block_set edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
-    fi
+        'bindsym $mod+Ctrl+Left snap left' \
+        'bindsym $mod+Ctrl+Right snap right' \
+        'bindsym $mod+Ctrl+Up snap max' \
+        'bindsym $mod+Ctrl+Down snap restore'
 }
 
 # Remove floating mode from config.user
 remove_floating_mode() {
     tebian_block_remove floating-mode
-    tebian_block_remove edge-snap
-    pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
 }
 
 # ==============================================================================

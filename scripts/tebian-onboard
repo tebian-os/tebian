@@ -178,7 +178,6 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             papirus-icon-theme
             btop
             zram-tools
-            python3-i3ipc
             waybar upower
             qt5-gtk-platformtheme qt6-gtk-platformtheme
         )
@@ -209,6 +208,14 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         echo "  ✓ Desktop extras installed"
         # Login started no pairing agent: BlueZ was not installed yet
         tebian_bt_agent_start 2>/dev/null || true
+
+        # Window snapping lives in the compositor: Debian sway, rebuilt with
+        # the Tebian patch (about a minute; the build tools go again after)
+        if ! tebian-build-sway --check 2>/dev/null; then
+            echo "Adding window snapping to Sway..."
+            tebian-build-sway --install --clean --output "$HOME/.cache/tebian" ||
+                echo "  ⚠ Window snapping was not built. Settings > UI > Window Snapping tries again."
+        fi
 
         # === HARDWARE-SPECIFIC PACKAGES ===
         echo ""

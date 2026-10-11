@@ -20,6 +20,12 @@ KEYBINDS="󰘔 Super+Enter → Terminal
 󰎤 Super+1-9 → Workspace
 󰎤 Super+Shift+1-9 → Move to Workspace"
 
+# Floating mode's keyboard snaps (sway's own snap command)
+if grep -q '^bindsym \$mod+Ctrl+Left snap left' ~/.config/sway/config.user 2>/dev/null; then
+    KEYBINDS+="
+󰕴 Super+Ctrl+Arrows → Snap Window"
+fi
+
 if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
     KEYBINDS+="
 󰌾 Super+L → Lock Screen"

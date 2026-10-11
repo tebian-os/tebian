@@ -55,14 +55,11 @@ bindsym $mod+l exec gtklock -d
 # tebian:floating-mode {
 for_window [app_id=".*"] floating enable
 for_window [class=".*"] floating enable
-bindsym $mod+Ctrl+Left resize set 50 ppt 100 ppt; move absolute position 0 0
-bindsym $mod+Ctrl+Right resize set 50 ppt 100 ppt; move absolute position 50 ppt 0
-bindsym $mod+Ctrl+Up resize set 100 ppt 100 ppt; move absolute position 0 0
-bindsym $mod+Ctrl+Down resize set 60 ppt 60 ppt; move position center
+bindsym $mod+Ctrl+Left snap left
+bindsym $mod+Ctrl+Right snap right
+bindsym $mod+Ctrl+Up snap max
+bindsym $mod+Ctrl+Down snap restore
 # tebian:floating-mode }
-# tebian:edge-snap {
-exec_always bash -c 'pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap"; sleep 0.2; exec tebian-edge-snap'
-# tebian:edge-snap }
 # tebian:titlebars {
 default_border normal 2
 default_floating_border normal 2

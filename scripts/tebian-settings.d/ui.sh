@@ -43,16 +43,17 @@ ui_menu() {
         TITLE_LABEL="󰘕 Title Bars (OFF)"
     fi
 
-    # Detect edge snapping (only show when floating mode is active). The
-    # config block is the setting; the process may just be restarting.
-    if tebian_block_has floating-mode; then
-        if tebian_block_has edge-snap; then
-            SNAP_LABEL="󰖲 Edge Snapping (ON)"
+    # Window snapping: drag a floating window to an edge or corner. Built
+    # into Tebian's sway (and patched SwayFX); on by default there, so only
+    # "off" is written down. Shown in tiling mode too: dialogs float.
+    if tebian_snap_supported; then
+        if tebian_block_has snap-off; then
+            SNAP_LABEL="󰖳 Window Snapping (OFF)"
         else
-            SNAP_LABEL="󰖳 Edge Snapping (OFF)"
+            SNAP_LABEL="󰖲 Window Snapping (ON)"
         fi
     else
-        SNAP_LABEL=""
+        SNAP_LABEL="󰖲 Window Snapping (Not Installed)"
     fi
 
     # Detect window effects (swayfx)
@@ -79,8 +80,8 @@ $BAR_LABEL
 $POS_LABEL
 $FLOAT_LABEL
 $TITLE_LABEL
-${SNAP_LABEL:+$SNAP_LABEL
-}$FX_LABEL
+$SNAP_LABEL
+$FX_LABEL
 󰛖 Font Rendering
 󰌌 Keybinds (Mod+S: settings, Mod+D: apps)
 󰍽 Input Devices
@@ -145,20 +146,16 @@ ${SNAP_LABEL:+$SNAP_LABEL
         swaymsg '[app_id=".*"] border normal 2' 2>/dev/null
         swaymsg '[class=".*"] border normal 2' 2>/dev/null
         tnotify "UI" "Title bars enabled"
-    elif [[ "$U_CHOICE" =~ "Edge Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
-        tebian_block_remove edge-snap
-        pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
-        tnotify "UI" "Edge snapping disabled"
-    elif [[ "$U_CHOICE" =~ "Edge Snapping" ]] && [[ "$U_CHOICE" =~ "OFF" ]]; then
-        if ! tebian_term_apt_install python3-i3ipc; then
-            tnotify "Edge Snap" "python3-i3ipc could not be installed — edge snapping stays off"
-            continue
-        fi
-        tebian_block_set edge-snap "$TEBIAN_EDGE_SNAP_EXEC"
-        pkill -f "^[^ ]*python3 [^ ]*tebian-edge-snap" 2>/dev/null
-        sleep 0.2
-        setsid tebian-edge-snap >/dev/null 2>&1 &
-        tnotify "UI" "Edge snapping enabled"
+    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
+        window_snapping_install
+    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
+        tebian_block_set snap-off "floating_snap disable"
+        swaymsg floating_snap disable >/dev/null 2>&1
+        tnotify "UI" "Window snapping disabled"
+    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "OFF" ]]; then
+        tebian_block_remove snap-off
+        swaymsg floating_snap enable >/dev/null 2>&1
+        tnotify "UI" "Window snapping enabled"
     elif [[ "$U_CHOICE" =~ "Window Effects" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
         window_effects_install
     elif [[ "$U_CHOICE" =~ "Window Effects" ]]; then
@@ -173,6 +170,7 @@ Mod+Return ··· Terminal
 Mod+Shift+Q ··· Close Window
 Mod+F ··· Fullscreen
 Mod+Space ··· Toggle Float/Tile
+Mod+Ctrl+Arrows ··· Snap Window (Floating Mode)
 Mod+R ··· Resize Mode
 Mod+L ··· Lock Screen
 Mod+Tab ··· Switch Workspace
@@ -351,6 +349,24 @@ bar_set_position() {
     sed -i "s/^anchor = .*/anchor = $anchor/" "$HOME/.config/wob/wob.ini" 2>/dev/null
     pkill -x wob 2>/dev/null   # sway's exec_always line restarts it on reload
     swaymsg reload >/dev/null 2>&1 &
+}
+
+# Snapping lives in the compositor, so "installing" it means Tebian's build
+# of whichever sway this machine runs: SwayFX if it's installed (rebuilt
+# with the patch), otherwise Debian's sway (rebuilt the same way)
+window_snapping_install() {
+    local what cmd
+    if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
+        what="󰖲 Rebuild SwayFX with snapping (~5 min)"
+        cmd="tebian-install-swayfx"
+    else
+        what="󰖲 Build sway with snapping (~1 min)"
+        cmd="tebian-build-sway --install --clean"
+    fi
+    INSTALL_CHOICE=$(echo -e "$what\n󰌍 Back" | tfuzzel -d -p " 󰖲 Snapping | ")
+    if [[ "$INSTALL_CHOICE" =~ "Build" ]] || [[ "$INSTALL_CHOICE" =~ "Rebuild" ]]; then
+        $TERM_CMD bash -c "$cmd; echo ''; echo 'Log out and back in to start using it.'; read -p 'Press Enter to close...'"
+    fi
 }
 
 window_effects_install() {

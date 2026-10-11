@@ -1,0 +1,825 @@
+Description: Floating windows: snap to edges and corners, easier resize grab
+ Windows-style window management for sway's floating windows, built into
+ the compositor because sway's IPC reports no pointer position and no drag
+ start or end, so no outside program can do it properly.
+ .
+ Snapping: drag a floating window (by its title bar, or with the floating
+ modifier) to a screen edge or corner. A translucent preview in the theme's
+ indicator colour shows where it will land; release to snap it to that
+ half, quarter, or (top edge) the whole workspace. Bars and gaps are left
+ clear. Dragging a snapped window away gives it back its old size.
+ .
+ Resize grab: floating windows get an invisible band around them that
+ starts a resize, and the stretch of border near a corner counts as the
+ corner. Without it the only grab area is the border itself.
+ .
+ New commands:
+   floating_snap enable|disable     drag-to-edge snapping (default: enable)
+   floating_grab_margin <px>        the resize band, 0-64 (default: 8)
+   snap left|right|max|top-left|top-right|bottom-left|bottom-right|restore
+                                    snap the focused floating window
+ Both settings default to on, so Tebian's config needs no lines that an
+ unpatched sway would reject. Most code is in new files (tree/snap.c,
+ commands/snap.c); the hooks in existing files are small, to keep the
+ patch easy to carry to new releases.
+ .
+ Applies to Debian's sway 1.10.1 (trixie).
+Author: Tebian <https://github.com/tebian-os/tebian>
+Forwarded: no
+Last-Update: 2026-10-10
+---
+ include/sway/commands.h              |   3 +
+ include/sway/config.h                |   2 +
+ include/sway/tree/container.h        |   6 +
+ include/sway/tree/snap.h             |  52 ++++++++
+ sway/commands.c                      |   3 +
+ sway/commands/floating_grab_margin.c |  20 +++
+ sway/commands/floating_snap.c        |  14 +++
+ sway/commands/snap.c                 |  40 ++++++
+ sway/config.c                        |   2 +
+ sway/input/seatop_default.c          | 141 ++++++++++++++++++++-
+ sway/input/seatop_move_floating.c    |  99 ++++++++++++++-
+ sway/meson.build                     |   4 +
+ sway/tree/snap.c                     | 177 +++++++++++++++++++++++++++
+ 13 files changed, 559 insertions(+), 4 deletions(-)
+ create mode 100644 include/sway/tree/snap.h
+ create mode 100644 sway/commands/floating_grab_margin.c
+ create mode 100644 sway/commands/floating_snap.c
+ create mode 100644 sway/commands/snap.c
+ create mode 100644 sway/tree/snap.c
+
+diff --git a/include/sway/commands.h b/include/sway/commands.h
+index 5210d3b..147afc5 100644
+--- a/include/sway/commands.h
++++ b/include/sway/commands.h
+@@ -131,7 +131,9 @@ sway_cmd cmd_exit;
+ sway_cmd cmd_floating;
+ sway_cmd cmd_floating_maximum_size;
+ sway_cmd cmd_floating_minimum_size;
++sway_cmd cmd_floating_grab_margin;
+ sway_cmd cmd_floating_modifier;
++sway_cmd cmd_floating_snap;
+ sway_cmd cmd_floating_scroll;
+ sway_cmd cmd_focus;
+ sway_cmd cmd_focus_follows_mouse;
+@@ -176,6 +178,7 @@ sway_cmd cmd_set;
+ sway_cmd cmd_shortcuts_inhibitor;
+ sway_cmd cmd_show_marks;
+ sway_cmd cmd_smart_borders;
++sway_cmd cmd_snap;
+ sway_cmd cmd_smart_gaps;
+ sway_cmd cmd_split;
+ sway_cmd cmd_splith;
+diff --git a/include/sway/config.h b/include/sway/config.h
+index bb770c6..da15e21 100644
+--- a/include/sway/config.h
++++ b/include/sway/config.h
+@@ -542,6 +542,8 @@ struct sway_config {
+ 	bool primary_selection;
+ 
+ 	bool tiling_drag;
++	bool floating_snap;
++	int floating_grab_margin;
+ 	int tiling_drag_threshold;
+ 
+ 	enum smart_gaps_mode smart_gaps;
+diff --git a/include/sway/tree/container.h b/include/sway/tree/container.h
+index 4608b8a..baaf5bc 100644
+--- a/include/sway/tree/container.h
++++ b/include/sway/tree/container.h
+@@ -118,6 +118,12 @@ struct sway_container {
+ 	double saved_x, saved_y;
+ 	double saved_width, saved_height;
+ 
++	// Floating snap (see tree/snap.h): the box a floating window was
++	// snapped to, and its box from before, given back when it unsnaps
++	bool snapped;
++	struct wlr_box snap_box;
++	struct wlr_box snap_restore;
++
+ 	// Used when the view changes to CSD unexpectedly. This will be a non-B_CSD
+ 	// border which we use to restore when the view returns to SSD.
+ 	enum sway_container_border saved_border;
+diff --git a/include/sway/tree/snap.h b/include/sway/tree/snap.h
+new file mode 100644
+index 0000000..63dc4a6
+--- /dev/null
++++ b/include/sway/tree/snap.h
+@@ -0,0 +1,52 @@
++#ifndef _SWAY_SNAP_H
++#define _SWAY_SNAP_H
++#include <stdbool.h>
++#include <wlr/util/box.h>
++#include "sway/tree/container.h"
++#include "sway/tree/workspace.h"
++
++/**
++ * Windows-style snapping for floating windows: a half, a quarter or the
++ * whole workspace, chosen by dragging to a screen edge or corner
++ * (seatop_move_floating.c) or with the `snap` command. A snapped window
++ * remembers its box from before, and gets it back when dragged away or
++ * snapped to "restore".
++ */
++enum snap_zone {
++	SNAP_NONE,
++	SNAP_MAXIMIZE,
++	SNAP_LEFT,
++	SNAP_RIGHT,
++	SNAP_TOP_LEFT,
++	SNAP_TOP_RIGHT,
++	SNAP_BOTTOM_LEFT,
++	SNAP_BOTTOM_RIGHT,
++};
++
++// The zone named NAME (left, right, max, top-left, top-right, bottom-left,
++// bottom-right), or SNAP_NONE
++enum snap_zone snap_zone_from_name(const char *name);
++
++// The zone the cursor at LX,LY is in, judged against the usable area (screen
++// minus layer-shell bars) of the output under it; WS gets that output's
++// workspace
++enum snap_zone snap_zone_at(double lx, double ly, struct sway_workspace **ws);
++
++// The outer box (layout coordinates, borders included) of ZONE on WS
++struct wlr_box snap_zone_box(struct sway_workspace *ws, enum snap_zone zone);
++
++// Give floating CON the outer box BOX
++void snap_set_box(struct sway_container *con, struct wlr_box *box);
++
++// Snap floating CON to ZONE on WS
++void snap_container(struct sway_container *con, struct sway_workspace *ws,
++		enum snap_zone zone);
++
++// Whether CON is snapped and still exactly where it was snapped to; a window
++// resized or moved by other means since counts as no longer snapped
++bool snap_is_current(struct sway_container *con);
++
++// Forget that CON was snapped (it keeps its current box)
++void snap_forget(struct sway_container *con);
++
++#endif
+diff --git a/sway/commands.c b/sway/commands.c
+index c2c12ee..5e16afa 100644
+--- a/sway/commands.c
++++ b/sway/commands.c
+@@ -59,9 +59,11 @@ static const struct cmd_handler handlers[] = {
+ 	{ "default_floating_border", cmd_default_floating_border },
+ 	{ "exec", cmd_exec },
+ 	{ "exec_always", cmd_exec_always },
++	{ "floating_grab_margin", cmd_floating_grab_margin },
+ 	{ "floating_maximum_size", cmd_floating_maximum_size },
+ 	{ "floating_minimum_size", cmd_floating_minimum_size },
+ 	{ "floating_modifier", cmd_floating_modifier },
++	{ "floating_snap", cmd_floating_snap },
+ 	{ "focus", cmd_focus },
+ 	{ "focus_follows_mouse", cmd_focus_follows_mouse },
+ 	{ "focus_on_window_activation", cmd_focus_on_window_activation },
+@@ -131,6 +133,7 @@ static const struct cmd_handler command_handlers[] = {
+ 	{ "resize", cmd_resize },
+ 	{ "scratchpad", cmd_scratchpad },
+ 	{ "shortcuts_inhibitor", cmd_shortcuts_inhibitor },
++	{ "snap", cmd_snap },
+ 	{ "split", cmd_split },
+ 	{ "splith", cmd_splith },
+ 	{ "splitt", cmd_splitt },
+diff --git a/sway/commands/floating_grab_margin.c b/sway/commands/floating_grab_margin.c
+new file mode 100644
+index 0000000..e91bcd1
+--- /dev/null
++++ b/sway/commands/floating_grab_margin.c
+@@ -0,0 +1,20 @@
++#include <stdlib.h>
++#include "sway/commands.h"
++#include "sway/config.h"
++
++struct cmd_results *cmd_floating_grab_margin(int argc, char **argv) {
++	struct cmd_results *error = NULL;
++	if ((error = checkarg(argc, "floating_grab_margin", EXPECTED_EQUAL_TO, 1))) {
++		return error;
++	}
++
++	char *end;
++	long margin = strtol(argv[0], &end, 10);
++	if (*end || margin < 0 || margin > 64) {
++		return cmd_results_new(CMD_INVALID,
++			"Expected 'floating_grab_margin <px>' with px from 0 to 64");
++	}
++	config->floating_grab_margin = margin;
++
++	return cmd_results_new(CMD_SUCCESS, NULL);
++}
+diff --git a/sway/commands/floating_snap.c b/sway/commands/floating_snap.c
+new file mode 100644
+index 0000000..787fd54
+--- /dev/null
++++ b/sway/commands/floating_snap.c
+@@ -0,0 +1,14 @@
++#include "sway/commands.h"
++#include "sway/config.h"
++#include "util.h"
++
++struct cmd_results *cmd_floating_snap(int argc, char **argv) {
++	struct cmd_results *error = NULL;
++	if ((error = checkarg(argc, "floating_snap", EXPECTED_EQUAL_TO, 1))) {
++		return error;
++	}
++
++	config->floating_snap = parse_boolean(argv[0], config->floating_snap);
++
++	return cmd_results_new(CMD_SUCCESS, NULL);
++}
+diff --git a/sway/commands/snap.c b/sway/commands/snap.c
+new file mode 100644
+index 0000000..566c11b
+--- /dev/null
++++ b/sway/commands/snap.c
+@@ -0,0 +1,40 @@
++#include <string.h>
++#include "sway/commands.h"
++#include "sway/tree/container.h"
++#include "sway/tree/snap.h"
++
++/**
++ * snap left|right|max|top-left|top-right|bottom-left|bottom-right|restore
++ *
++ * Snaps the focused floating window like dragging it to that edge or
++ * corner does; restore gives a snapped window back its box from before.
++ */
++struct cmd_results *cmd_snap(int argc, char **argv) {
++	struct cmd_results *error = NULL;
++	if ((error = checkarg(argc, "snap", EXPECTED_EQUAL_TO, 1))) {
++		return error;
++	}
++	struct sway_container *con = config->handler_context.container;
++	if (!con || !con->view || !container_is_floating(con) ||
++			con->pending.fullscreen_mode) {
++		return cmd_results_new(CMD_FAILURE,
++			"Only a floating window can be snapped");
++	}
++
++	if (strcmp(argv[0], "restore") == 0) {
++		if (snap_is_current(con)) {
++			struct wlr_box box = con->snap_restore;
++			snap_forget(con);
++			snap_set_box(con, &box);
++		}
++		return cmd_results_new(CMD_SUCCESS, NULL);
++	}
++
++	enum snap_zone zone = snap_zone_from_name(argv[0]);
++	if (zone == SNAP_NONE) {
++		return cmd_results_new(CMD_INVALID, "Expected 'snap left|right|max|"
++			"top-left|top-right|bottom-left|bottom-right|restore'");
++	}
++	snap_container(con, con->pending.workspace, zone);
++	return cmd_results_new(CMD_SUCCESS, NULL);
++}
+diff --git a/sway/config.c b/sway/config.c
+index 1090edc..3db8d55 100644
+--- a/sway/config.c
++++ b/sway/config.c
+@@ -281,6 +281,8 @@ static void config_defaults(struct sway_config *config) {
+ 	config->show_marks = true;
+ 	config->title_align = ALIGN_LEFT;
+ 	config->tiling_drag = true;
++	config->floating_snap = true;
++	config->floating_grab_margin = 8;
+ 	config->tiling_drag_threshold = 9;
+ 	config->primary_selection = true;
+ 
+diff --git a/sway/input/seatop_default.c b/sway/input/seatop_default.c
+index 5298481..0e89402 100644
+--- a/sway/input/seatop_default.c
++++ b/sway/input/seatop_default.c
+@@ -1,6 +1,7 @@
+ #include <float.h>
+ #include <libevdev/libevdev.h>
+ #include <wlr/types/wlr_cursor.h>
++#include <wlr/types/wlr_output_layout.h>
+ #include <wlr/types/wlr_subcompositor.h>
+ #include <wlr/types/wlr_tablet_v2.h>
+ #include <wlr/types/wlr_xcursor_manager.h>
+@@ -73,6 +74,34 @@ static bool edge_is_external(struct sway_container *cont, enum wlr_edges edge) {
+ 	return true;
+ }
+ 
++// How far (px) along an edge from a corner still counts as the corner
++#define GRAB_CORNER_RANGE 16
++
++// The perpendicular edge to add when the cursor, on edge EDGE of CON, is
++// within GRAB_CORNER_RANGE of a corner
++static enum wlr_edges corner_edges(struct sway_container *con,
++		double x, double y, enum wlr_edges edge) {
++	enum wlr_edges extra = WLR_EDGE_NONE;
++	double range = GRAB_CORNER_RANGE;
++	if ((edge & (WLR_EDGE_LEFT | WLR_EDGE_RIGHT)) &&
++			!(edge & (WLR_EDGE_TOP | WLR_EDGE_BOTTOM))) {
++		if (y < con->pending.y + range) {
++			extra |= WLR_EDGE_TOP;
++		} else if (y >= con->pending.y + con->pending.height - range) {
++			extra |= WLR_EDGE_BOTTOM;
++		}
++	}
++	if ((edge & (WLR_EDGE_TOP | WLR_EDGE_BOTTOM)) &&
++			!(edge & (WLR_EDGE_LEFT | WLR_EDGE_RIGHT))) {
++		if (x < con->pending.x + range) {
++			extra |= WLR_EDGE_LEFT;
++		} else if (x >= con->pending.x + con->pending.width - range) {
++			extra |= WLR_EDGE_RIGHT;
++		}
++	}
++	return extra;
++}
++
+ static enum wlr_edges find_edge(struct sway_container *cont,
+ 		struct wlr_surface *surface, struct sway_cursor *cursor) {
+ 	if (!cont->view || (surface && cont->view->surface != surface)) {
+@@ -100,9 +129,100 @@ static enum wlr_edges find_edge(struct sway_container *cont,
+ 		edge |= WLR_EDGE_BOTTOM;
+ 	}
+ 
++	// With a grab margin, the stretch of border near a corner counts as the
++	// corner, so diagonal resizing isn't a hunt for a 2x2 px target
++	if (edge && config->floating_grab_margin > 0 && container_is_floating(cont)) {
++		edge |= corner_edges(cont, cursor->cursor->x, cursor->cursor->y, edge);
++	}
++
+ 	return edge;
+ }
+ 
++/**
++ * Floating windows get an invisible band of floating_grab_margin px around
++ * them that starts a resize, like other desktops: their visible border is
++ * only border_thickness px, and corners only that squared.
++ *
++ * Returns the floating window whose band the cursor is in, and the edges to
++ * resize in EDGE, or NULL. NODE and SURFACE are what's under the cursor; the
++ * band only takes the click from the desktop, a tiled window or a floating
++ * window lower in the stack, never from anything on top of it (bars, popups,
++ * menus) or from a fullscreen view.
++ */
++static struct sway_container *floating_grab_margin_at(struct sway_seat *seat,
++		struct sway_node *node, struct wlr_surface *surface,
++		enum wlr_edges *edge) {
++	int margin = config->floating_grab_margin;
++	if (margin <= 0) {
++		return NULL;
++	}
++	double x = seat->cursor->cursor->x;
++	double y = seat->cursor->cursor->y;
++
++	// What's under the cursor: only a workspace, or a window's own main
++	// surface or decorations (not its popups or subsurfaces)
++	struct sway_container *under = NULL;
++	if (!node) {
++		return NULL;
++	} else if (node->type == N_CONTAINER) {
++		under = node->sway_container;
++		if (surface && (!under->view || surface != under->view->surface)) {
++			return NULL;
++		}
++	} else if (node->type != N_WORKSPACE) {
++		return NULL;
++	}
++
++	struct wlr_output *wlr_output =
++		wlr_output_layout_output_at(root->output_layout, x, y);
++	struct sway_output *output =
++		wlr_output ? output_from_wlr_output(wlr_output) : NULL;
++	struct sway_workspace *ws =
++		output ? output_get_active_workspace(output) : NULL;
++	if (!ws || ws->fullscreen || root->fullscreen_global) {
++		return NULL;
++	}
++
++	struct sway_container *under_floater = under && container_is_floating_or_child(under) ?
++		container_toplevel_ancestor(under) : NULL;
++	int under_index = under_floater ?
++		list_find(ws->floating, under_floater) : -1;
++
++	// Top of the stack first
++	for (int i = ws->floating->length - 1; i > under_index; i--) {
++		struct sway_container *con = ws->floating->items[i];
++		if (!con->view || con->pending.fullscreen_mode ||
++				con->pending.border == B_CSD) {
++			continue;
++		}
++		double cx = con->pending.x, cy = con->pending.y;
++		double cw = con->pending.width, ch = con->pending.height;
++		if (x < cx - margin || x >= cx + cw + margin ||
++				y < cy - margin || y >= cy + ch + margin) {
++			continue;
++		}
++		if (x >= cx && x < cx + cw && y >= cy && y < cy + ch) {
++			// On the window itself, which covers anything lower in the
++			// stack: its own border handling applies, not the band
++			return NULL;
++		}
++		enum wlr_edges e = WLR_EDGE_NONE;
++		if (x < cx) {
++			e |= WLR_EDGE_LEFT;
++		} else if (x >= cx + cw) {
++			e |= WLR_EDGE_RIGHT;
++		}
++		if (y < cy) {
++			e |= WLR_EDGE_TOP;
++		} else if (y >= cy + ch) {
++			e |= WLR_EDGE_BOTTOM;
++		}
++		*edge = e | corner_edges(con, x, y, e);
++		return con;
++	}
++	return NULL;
++}
++
+ /**
+  * If the cursor is over a _resizable_ edge, return the edge.
+  * Edges that can't be resized are edges of the workspace.
+@@ -355,6 +475,19 @@ static void handle_button(struct sway_seat *seat, uint32_t time_msec,
+ 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat->wlr_seat);
+ 	uint32_t modifiers = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+ 
++	// Handle floating resize via the grab margin around a floating window
++	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED &&
++			!(modifiers & config->floating_mod)) {
++		enum wlr_edges grab_edge = WLR_EDGE_NONE;
++		struct sway_container *grabbed =
++			floating_grab_margin_at(seat, node, surface, &grab_edge);
++		if (grabbed) {
++			seat_set_focus_container(seat, grabbed);
++			seatop_begin_resize_floating(seat, grabbed, grab_edge);
++			return;
++		}
++	}
++
+ 	// Handle mouse bindings
+ 	if (trigger_pointer_button_binding(seat, device, button, state, modifiers,
+ 			on_titlebar, on_border, on_contents, on_workspace)) {
+@@ -616,7 +749,13 @@ static void handle_pointer_motion(struct sway_seat *seat, uint32_t time_msec) {
+ 		check_focus_follows_mouse(seat, e, node);
+ 	}
+ 
+-	if (surface) {
++	enum wlr_edges grab_edge = WLR_EDGE_NONE;
++	if (floating_grab_margin_at(seat, node, surface, &grab_edge)) {
++		// Show it can be grabbed; the window underneath gets the pointer
++		// back when the cursor leaves the band
++		cursor_set_image(cursor, wlr_xcursor_get_resize_name(grab_edge), NULL);
++		wlr_seat_pointer_notify_clear_focus(seat->wlr_seat);
++	} else if (surface) {
+ 		if (seat_is_input_allowed(seat, surface)) {
+ 			wlr_seat_pointer_notify_enter(seat->wlr_seat, surface, sx, sy);
+ 			wlr_seat_pointer_notify_motion(seat->wlr_seat, time_msec, sx, sy);
+diff --git a/sway/input/seatop_move_floating.c b/sway/input/seatop_move_floating.c
+index 83668d8..54917c1 100644
+--- a/sway/input/seatop_move_floating.c
++++ b/sway/input/seatop_move_floating.c
+@@ -1,19 +1,73 @@
++#include <math.h>
+ #include <wlr/types/wlr_cursor.h>
++#include "sway/config.h"
+ #include "sway/desktop/transaction.h"
+ #include "sway/input/cursor.h"
+ #include "sway/input/seat.h"
++#include "sway/tree/snap.h"
++#include "sway/tree/view.h"
++
++// How far (px) a snapped window must be dragged before it lets go and
++// returns to its old size, so a click on its title bar doesn't unsnap it
++#define UNSNAP_THRESHOLD 20
+ 
+ struct seatop_move_floating_event {
+ 	struct sway_container *con;
+ 	double dx, dy; // cursor offset in container
++	double ref_lx, ref_ly; // cursor position when the drag began
++	bool unsnap_pending; // snapped window, not yet dragged far enough
++	struct wlr_scene_rect *indicator_rect; // snap preview, NULL if disabled
++	enum snap_zone zone;
++	struct sway_workspace *zone_ws;
+ };
+ 
++static void update_indicator(struct seatop_move_floating_event *e,
++		struct wlr_cursor *cursor) {
++	struct sway_workspace *ws = NULL;
++	enum snap_zone zone = snap_zone_at(cursor->x, cursor->y, &ws);
++	if (zone == e->zone && ws == e->zone_ws) {
++		return;
++	}
++	e->zone = zone;
++	e->zone_ws = ws;
++	if (zone == SNAP_NONE) {
++		wlr_scene_node_set_enabled(&e->indicator_rect->node, false);
++		return;
++	}
++	struct wlr_box box = snap_zone_box(ws, zone);
++	wlr_scene_node_set_position(&e->indicator_rect->node, box.x, box.y);
++	wlr_scene_rect_set_size(e->indicator_rect, box.width, box.height);
++	wlr_scene_node_set_enabled(&e->indicator_rect->node, true);
++}
++
++// Back to the size it had before it was snapped, keeping the cursor at the
++// same relative spot across the title bar so the window stays under it
++static void unsnap(struct seatop_move_floating_event *e,
++		struct wlr_cursor *cursor) {
++	struct sway_container *con = e->con;
++	double old_width = con->pending.width;
++	struct wlr_box box = {
++		.width = con->snap_restore.width,
++		.height = con->snap_restore.height,
++	};
++	e->dx = old_width > 0 ? e->dx * box.width / old_width : 0;
++	e->dy = fmin(e->dy, box.height / 2.0);
++	box.x = round(cursor->x - e->dx);
++	box.y = round(cursor->y - e->dy);
++	snap_forget(con);
++	snap_set_box(con, &box);
++}
++
+ static void finalize_move(struct sway_seat *seat) {
+ 	struct seatop_move_floating_event *e = seat->seatop_data;
+ 
+-	// We "move" the container to its own location
+-	// so it discovers its output again.
+-	container_floating_move_to(e->con, e->con->pending.x, e->con->pending.y);
++	if (e->indicator_rect && !e->unsnap_pending && e->zone != SNAP_NONE) {
++		snap_container(e->con, e->zone_ws, e->zone);
++	} else {
++		// We "move" the container to its own location
++		// so it discovers its output again.
++		container_floating_move_to(e->con, e->con->pending.x, e->con->pending.y);
++	}
+ 	transaction_commit_dirty();
+ 
+ 	seatop_begin_default(seat);
+@@ -37,7 +91,18 @@ static void handle_tablet_tool_tip(struct sway_seat *seat,
+ static void handle_pointer_motion(struct sway_seat *seat, uint32_t time_msec) {
+ 	struct seatop_move_floating_event *e = seat->seatop_data;
+ 	struct wlr_cursor *cursor = seat->cursor->cursor;
++	if (e->unsnap_pending) {
++		if (hypot(cursor->x - e->ref_lx, cursor->y - e->ref_ly) <
++				UNSNAP_THRESHOLD) {
++			return;
++		}
++		e->unsnap_pending = false;
++		unsnap(e, cursor);
++	}
+ 	container_floating_move_to(e->con, cursor->x - e->dx, cursor->y - e->dy);
++	if (e->indicator_rect) {
++		update_indicator(e, cursor);
++	}
+ 	transaction_commit_dirty();
+ }
+ 
+@@ -48,11 +113,20 @@ static void handle_unref(struct sway_seat *seat, struct sway_container *con) {
+ 	}
+ }
+ 
++static void handle_end(struct sway_seat *seat) {
++	struct seatop_move_floating_event *e = seat->seatop_data;
++	if (e->indicator_rect) {
++		wlr_scene_node_destroy(&e->indicator_rect->node);
++		e->indicator_rect = NULL;
++	}
++}
++
+ static const struct sway_seatop_impl seatop_impl = {
+ 	.button = handle_button,
+ 	.pointer_motion = handle_pointer_motion,
+ 	.tablet_tool_tip = handle_tablet_tool_tip,
+ 	.unref = handle_unref,
++	.end = handle_end,
+ };
+ 
+ void seatop_begin_move_floating(struct sway_seat *seat,
+@@ -68,6 +142,25 @@ void seatop_begin_move_floating(struct sway_seat *seat,
+ 	e->con = con;
+ 	e->dx = cursor->cursor->x - con->pending.x;
+ 	e->dy = cursor->cursor->y - con->pending.y;
++	e->ref_lx = cursor->cursor->x;
++	e->ref_ly = cursor->cursor->y;
++
++	// Snapping works on single windows, not floating split containers
++	if (config->floating_snap && con->view) {
++		// Same colour as the tiling drag's drop indicator
++		const float *indicator = config->border_colors.focused.indicator;
++		float color[4] = {
++			indicator[0] * .5,
++			indicator[1] * .5,
++			indicator[2] * .5,
++			indicator[3] * .5,
++		};
++		e->indicator_rect = wlr_scene_rect_create(seat->scene_tree, 0, 0, color);
++		if (e->indicator_rect) {
++			wlr_scene_node_set_enabled(&e->indicator_rect->node, false);
++		}
++		e->unsnap_pending = snap_is_current(con);
++	}
+ 
+ 	seat->seatop_impl = &seatop_impl;
+ 	seat->seatop_data = e;
+diff --git a/sway/meson.build b/sway/meson.build
+index 8042c89..460c380 100644
+--- a/sway/meson.build
++++ b/sway/meson.build
+@@ -57,7 +57,10 @@ sway_sources = files(
+ 	'commands/exec_always.c',
+ 	'commands/floating.c',
+ 	'commands/floating_minmax_size.c',
++	'commands/floating_grab_margin.c',
+ 	'commands/floating_modifier.c',
++	'commands/floating_snap.c',
++	'commands/snap.c',
+ 	'commands/focus.c',
+ 	'commands/focus_follows_mouse.c',
+ 	'commands/focus_on_window_activation.c',
+@@ -212,6 +215,7 @@ sway_sources = files(
+ 	'tree/container.c',
+ 	'tree/node.c',
+ 	'tree/root.c',
++	'tree/snap.c',
+ 	'tree/view.c',
+ 	'tree/workspace.c',
+ 	'tree/output.c',
+diff --git a/sway/tree/snap.c b/sway/tree/snap.c
+new file mode 100644
+index 0000000..b1f10dc
+--- /dev/null
++++ b/sway/tree/snap.c
+@@ -0,0 +1,177 @@
++#include <string.h>
++#include <wlr/types/wlr_output_layout.h>
++#include "sway/output.h"
++#include "sway/tree/arrange.h"
++#include "sway/tree/root.h"
++#include "sway/tree/snap.h"
++#include "sway/tree/view.h"
++
++// How close (px) the cursor must be to a screen edge to snap there
++#define SNAP_EDGE_RANGE 8
++// Corners: this fraction of the edge, measured from the corner, snaps to a
++// quarter instead of a half
++#define SNAP_CORNER_FRACTION 0.25
++
++enum snap_zone snap_zone_from_name(const char *name) {
++	static const struct {
++		const char *name;
++		enum snap_zone zone;
++	} names[] = {
++		{ "left", SNAP_LEFT },
++		{ "right", SNAP_RIGHT },
++		{ "max", SNAP_MAXIMIZE },
++		{ "top-left", SNAP_TOP_LEFT },
++		{ "top-right", SNAP_TOP_RIGHT },
++		{ "bottom-left", SNAP_BOTTOM_LEFT },
++		{ "bottom-right", SNAP_BOTTOM_RIGHT },
++	};
++	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
++		if (strcmp(name, names[i].name) == 0) {
++			return names[i].zone;
++		}
++	}
++	return SNAP_NONE;
++}
++
++enum snap_zone snap_zone_at(double lx, double ly, struct sway_workspace **ws_out) {
++	struct wlr_output *wlr_output =
++		wlr_output_layout_output_at(root->output_layout, lx, ly);
++	struct sway_output *output =
++		wlr_output ? output_from_wlr_output(wlr_output) : NULL;
++	struct sway_workspace *ws =
++		output ? output_get_active_workspace(output) : NULL;
++	if (!ws) {
++		return SNAP_NONE;
++	}
++	*ws_out = ws;
++
++	// Against the usable area, so the cursor touching a bar at the top
++	// still counts as the top edge
++	double x = lx - output->lx - output->usable_area.x;
++	double y = ly - output->ly - output->usable_area.y;
++	double w = output->usable_area.width;
++	double h = output->usable_area.height;
++
++	bool left = x <= SNAP_EDGE_RANGE;
++	bool right = x >= w - SNAP_EDGE_RANGE;
++	bool top = y <= SNAP_EDGE_RANGE;
++	bool bottom = y >= h - SNAP_EDGE_RANGE;
++	bool near_top = y <= h * SNAP_CORNER_FRACTION;
++	bool near_bottom = y >= h * (1 - SNAP_CORNER_FRACTION);
++	bool near_left = x <= w * SNAP_CORNER_FRACTION;
++	bool near_right = x >= w * (1 - SNAP_CORNER_FRACTION);
++
++	if ((left && near_top) || (top && near_left)) {
++		return SNAP_TOP_LEFT;
++	} else if ((right && near_top) || (top && near_right)) {
++		return SNAP_TOP_RIGHT;
++	} else if ((left && near_bottom) || (bottom && near_left)) {
++		return SNAP_BOTTOM_LEFT;
++	} else if ((right && near_bottom) || (bottom && near_right)) {
++		return SNAP_BOTTOM_RIGHT;
++	} else if (left) {
++		return SNAP_LEFT;
++	} else if (right) {
++		return SNAP_RIGHT;
++	} else if (top) {
++		return SNAP_MAXIMIZE;
++	}
++	return SNAP_NONE;
++}
++
++// The workspace box already excludes bars and outer gaps; inner gaps
++// separate the halves and quarters
++struct wlr_box snap_zone_box(struct sway_workspace *ws, enum snap_zone zone) {
++	int gap = ws->gaps_inner;
++	int half_w = (ws->width - gap) / 2;
++	int half_h = (ws->height - gap) / 2;
++	int right_x = ws->x + ws->width - half_w;
++	int bottom_y = ws->y + ws->height - half_h;
++	switch (zone) {
++	case SNAP_LEFT:
++		return (struct wlr_box){ ws->x, ws->y, half_w, ws->height };
++	case SNAP_RIGHT:
++		return (struct wlr_box){ right_x, ws->y, half_w, ws->height };
++	case SNAP_TOP_LEFT:
++		return (struct wlr_box){ ws->x, ws->y, half_w, half_h };
++	case SNAP_TOP_RIGHT:
++		return (struct wlr_box){ right_x, ws->y, half_w, half_h };
++	case SNAP_BOTTOM_LEFT:
++		return (struct wlr_box){ ws->x, bottom_y, half_w, half_h };
++	case SNAP_BOTTOM_RIGHT:
++		return (struct wlr_box){ right_x, bottom_y, half_w, half_h };
++	case SNAP_MAXIMIZE:
++	case SNAP_NONE:
++		break;
++	}
++	return (struct wlr_box){ ws->x, ws->y, ws->width, ws->height };
++}
++
++void snap_set_box(struct sway_container *con, struct wlr_box *box) {
++	size_t border_width = 0;
++	size_t top = 0;
++	if (con->pending.border != B_CSD && !con->pending.fullscreen_mode) {
++		border_width = con->pending.border_thickness *
++			(con->pending.border != B_NONE);
++		top = con->pending.border == B_NORMAL ?
++			container_titlebar_height() : border_width;
++	}
++	con->pending.content_x = box->x + border_width;
++	con->pending.content_y = box->y + top;
++	con->pending.content_width = box->width - border_width * 2;
++	con->pending.content_height = box->height - top - border_width;
++	container_set_geometry_from_content(con);
++	// Moves it to the workspace of the output it now sits on
++	container_floating_move_to(con, con->pending.x, con->pending.y);
++	arrange_container(con);
++}
++
++void snap_container(struct sway_container *con, struct sway_workspace *ws,
++		enum snap_zone zone) {
++	if (!snap_is_current(con)) {
++		con->snap_restore = (struct wlr_box){
++			.x = con->pending.x,
++			.y = con->pending.y,
++			.width = con->pending.width,
++			.height = con->pending.height,
++		};
++	}
++	struct wlr_box box = snap_zone_box(ws, zone);
++	snap_set_box(con, &box);
++	con->snapped = true;
++	con->snap_box = (struct wlr_box){
++		.x = con->pending.x,
++		.y = con->pending.y,
++		.width = con->pending.width,
++		.height = con->pending.height,
++	};
++	// Tells the app it's snapped, so it drops its shadows and rounded
++	// corners and fits the edges, as it does when tiled
++	if (con->view) {
++		view_set_tiled(con->view, true);
++	}
++}
++
++bool snap_is_current(struct sway_container *con) {
++	if (!con->snapped) {
++		return false;
++	}
++	struct wlr_box *box = &con->snap_box;
++	if (con->pending.x != box->x || con->pending.y != box->y ||
++			con->pending.width != box->width ||
++			con->pending.height != box->height) {
++		snap_forget(con);
++		return false;
++	}
++	return true;
++}
++
++void snap_forget(struct sway_container *con) {
++	if (!con->snapped) {
++		return;
++	}
++	con->snapped = false;
++	if (con->view && container_is_floating(con)) {
++		view_set_tiled(con->view, false);
++	}
++}

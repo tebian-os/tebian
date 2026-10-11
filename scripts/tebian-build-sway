@@ -1,0 +1,159 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN SWAY BUILDER
+# Builds Debian's own sway package with Tebian's patch added: floating windows
+# snap to screen edges and corners with a live preview, and are easier to
+# resize (patches/sway/floating-snap.patch explains what and why).
+#
+#   tebian-build-sway                  build the .deb into the current folder
+#   tebian-build-sway --install        build it and install it
+#   tebian-build-sway --output DIR     build it into DIR
+#   tebian-build-sway --clean          afterwards, remove the build
+#                                      dependencies this run installed
+#   tebian-build-sway --check          exit 0 if the installed sway is
+#                                      already this patched build
+#
+# Debian's source package is used as-is, with the patch added the Debian way
+# (a quilt patch in debian/patches) and "+tebian1" on the version, so apt
+# sees an ordinary sway package one step newer than Debian's. A Debian update
+# to sway (e.g. a security fix) has a higher version and simply replaces it:
+# windows stop snapping until this is run again, and nothing breaks, because
+# Tebian's config uses no option that plain sway would reject.
+#
+# The source comes from Debian's archive through a private source list, so
+# the system's apt setup isn't touched; apt checks it against Debian's
+# signed release files as usual. Takes a few minutes and installs sway's
+# build dependencies (about 150 MB of -dev packages).
+# ==============================================================================
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+PATCH=""
+for candidate in "$SCRIPT_DIR/../patches/sway/floating-snap.patch" \
+                 "$TEBIAN_DIR/patches/sway/floating-snap.patch"; do
+    [ -f "$candidate" ] && { PATCH=$(readlink -f "$candidate"); break; }
+done
+
+# Bump when the patch changes, so installed builds are told apart
+TEBIAN_REV=1
+
+installed_version() { dpkg-query -W -f '${Version}' sway 2>/dev/null || true; }
+
+install=false clean=false
+out="$PWD"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --install) install=true ;;
+        --clean) clean=true ;;
+        --output) out="${2:?--output needs a folder}"; shift ;;
+        --check) [[ "$(installed_version)" == *"+tebian$TEBIAN_REV" ]]; exit ;;
+        *) sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    esac
+    shift
+done
+
+fail() { echo -e "${RED}[build-sway]${NC} $*" >&2; exit 1; }
+say() { echo -e "${GREEN}[build-sway]${NC} $*"; }
+
+[ -n "$PATCH" ] || fail "patches/sway/floating-snap.patch not found (looked next to this script and in $TEBIAN_DIR)"
+mkdir -p "$out"
+out=$(readlink -f "$out")
+
+SUDO=""
+[ "$(id -u)" -eq 0 ] || SUDO="sudo"
+
+# shellcheck disable=SC1091
+codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+[ -n "$codename" ] || fail "Can't tell which Debian release this is (no VERSION_CODENAME in /etc/os-release)"
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# --- 1. Debian's source package ------------------------------------------------
+# apt doesn't record what this run installs, so note what was there before
+# (--clean removes the difference). dpkg-dev is needed to unpack the source.
+dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' | awk '$1 == "ii" { print $2 }' | sort > "$WORK/before"
+say "Installing build tools..."
+# Old package lists point at versions the mirror no longer has
+$SUDO apt-get update -q >/dev/null || fail "apt-get update failed"
+$SUDO apt-get install -y -q dpkg-dev build-essential >/dev/null || fail "Could not install dpkg-dev and build-essential"
+
+say "Fetching Debian's sway source ($codename)..."
+mkdir -p "$WORK/lists/partial" "$WORK/cache"
+cat > "$WORK/sources.list" << EOF
+deb-src http://deb.debian.org/debian $codename main
+deb-src http://deb.debian.org/debian $codename-updates main
+deb-src http://security.debian.org/debian-security $codename-security main
+EOF
+APT_SRC=(-o "Dir::Etc::SourceList=$WORK/sources.list" -o "Dir::Etc::SourceParts=/dev/null"
+         -o "Dir::State::Lists=$WORK/lists" -o "Dir::Cache=$WORK/cache"
+         -o "APT::Sandbox::User=$(id -un)")
+apt-get -q "${APT_SRC[@]}" update >/dev/null || fail "Could not download Debian's source index"
+(cd "$WORK" && apt-get -q "${APT_SRC[@]}" source sway >/dev/null) || fail "Could not download sway's source"
+src=$(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'sway-*' | head -1)
+[ -n "$src" ] || fail "sway's source didn't unpack"
+
+base=$(cd "$src" && dpkg-parsechangelog -S Version)
+version="${base}+tebian${TEBIAN_REV}"
+arch=$(dpkg --print-architecture)
+say "Debian sway $base -> $version"
+
+# --- 2. Tebian's patch -----------------------------------------------------------
+# Applied once here to fail early if Debian's sway has moved on; the build
+# itself applies it again from debian/patches like any Debian patch
+if ! (cd "$src" && patch -p1 --dry-run -s < "$PATCH" >/dev/null); then
+    fail "Tebian's patch doesn't apply to Debian sway $base. It needs updating for this version."
+fi
+cp "$PATCH" "$src/debian/patches/tebian-floating-snap.patch"
+echo "tebian-floating-snap.patch" >> "$src/debian/patches/series"
+
+{
+    echo "sway ($version) $codename; urgency=medium"
+    echo
+    echo "  * Tebian: floating windows snap to screen edges and corners with a"
+    echo "    preview, and get an easier resize grab (tebian-floating-snap.patch)."
+    echo
+    echo " -- Tebian <tebian@localhost>  $(date -R)"
+    echo
+    cat "$src/debian/changelog"
+} > "$WORK/changelog" && mv "$WORK/changelog" "$src/debian/changelog"
+
+# --- 3. Build ------------------------------------------------------------------
+say "Installing build dependencies..."
+$SUDO apt-get build-dep -y -q "$src" >/dev/null || fail "Could not install sway's build dependencies"
+
+say "Building (a few minutes)..."
+(cd "$src" && DEB_BUILD_OPTIONS="nocheck parallel=$(nproc)" \
+    dpkg-buildpackage -b -uc -us > "$WORK/build.log" 2>&1) || {
+    tail -20 "$WORK/build.log" >&2
+    fail "Build failed (last lines above)"
+}
+
+deb="sway_${version}_${arch}.deb"
+[ -f "$WORK/$deb" ] || fail "Build finished but $deb is missing"
+cp "$WORK/$deb" "$out/"
+say "Built $out/$deb"
+
+if $install; then
+    $SUDO apt-get install -y -q "$out/$deb" >/dev/null || fail "Could not install $deb"
+    say "Installed. Log out and back in to use it."
+fi
+
+# Remove only what this run added, and of that only what nothing installed
+# still needs: mark it automatic, then take the part apt would autoremove
+if $clean; then
+    dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' | awk '$1 == "ii" { print $2 }' | sort |
+        comm -13 "$WORK/before" - > "$WORK/added"
+    if [ -s "$WORK/added" ]; then
+        xargs $SUDO apt-mark auto < "$WORK/added" >/dev/null
+        apt-get -s autoremove 2>/dev/null | awk '/^Remv / { print $2 }' | sort |
+            comm -12 "$WORK/added" - > "$WORK/remove"
+        if [ -s "$WORK/remove" ]; then
+            xargs $SUDO apt-get purge -y -q < "$WORK/remove" >/dev/null &&
+                say "Removed $(wc -l < "$WORK/remove") build-only packages"
+        fi
+    fi
+fi

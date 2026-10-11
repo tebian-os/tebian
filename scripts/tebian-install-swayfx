@@ -24,6 +24,28 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 SWAYFX_VERSION="0.6"
+# Tebian's patch (patches/swayfx/floating-snap.patch): floating windows snap
+# to screen edges and corners, and are easier to resize. Bump with the patch,
+# so installed builds without the current one get rebuilt.
+TEBIAN_REV=1
+BUILD_ID="$SWAYFX_VERSION+tebian$TEBIAN_REV"
+PREFIX="/opt/tebian-swayfx"
+MARKER="$HOME/.config/tebian/swayfx-installed"
+
+# --check: exit 0 if this exact build is installed (tebian-update asks)
+if [ "${1:-}" = "--check" ]; then
+    [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$BUILD_ID" ] && [ -x "$PREFIX/bin/sway" ]
+    exit
+fi
+PATCH=""
+for candidate in "$SCRIPT_DIR/../patches/swayfx/floating-snap.patch" \
+                 "${TEBIAN_DIR:-$HOME/Tebian}/patches/swayfx/floating-snap.patch"; do
+    [ -f "$candidate" ] && { PATCH=$(readlink -f "$candidate"); break; }
+done
+if [ -z "$PATCH" ]; then
+    echo "patches/swayfx/floating-snap.patch not found — run tebian-update first."
+    exit 1
+fi
 # Pinned release tags — each the version SwayFX 0.6 / wlroots 0.20 /
 # scenefx 0.5 require, where trixie's own package is too old:
 WLROOTS_VERSION="0.20.2"              # trixie: 0.18
@@ -34,13 +56,11 @@ PIXMAN_VERSION="pixman-0.46.4"        # trixie: 0.44 (wlroots needs >=0.46)
 LIBDRM_VERSION="libdrm-2.4.131"       # trixie: 2.4.124 (scenefx needs >=2.4.129)
 XKBCOMMON_VERSION="xkbcommon-1.13.1"  # trixie: 1.7 (scenefx needs >=1.8)
 
-PREFIX="/opt/tebian-swayfx"
 BUILD_DIR="$HOME/.cache/tebian-swayfx-build"
-# Holds the installed version; an empty marker means the old 0.5.3 build
-MARKER="$HOME/.config/tebian/swayfx-installed"
+# MARKER holds the installed build; an empty one means the old 0.5.3 build
 
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SWAYFX_VERSION" ] && [ -x "$PREFIX/bin/sway" ]; then
-    echo "SwayFX $SWAYFX_VERSION is already installed."
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$BUILD_ID" ] && [ -x "$PREFIX/bin/sway" ]; then
+    echo "SwayFX $SWAYFX_VERSION (with Tebian's window snapping) is already installed."
     echo "To reinstall, remove $MARKER and run again."
     exit 0
 fi
@@ -87,6 +107,7 @@ clone() {  # <tag> <url> [dir]
 
 clone "$SWAYFX_VERSION" https://github.com/wlrfx/swayfx.git
 cd swayfx
+git apply "$PATCH" || { echo "Tebian's patch doesn't apply to SwayFX $SWAYFX_VERSION."; exit 1; }
 mkdir -p subprojects
 cd subprojects
 
@@ -178,7 +199,7 @@ sudo ln -sfn "$PREFIX/bin/swaymsg" /usr/local/bin/swaymsg
 
 # Mark as installed (with version, so a newer installer knows to upgrade)
 mkdir -p "$HOME/.config/tebian"
-echo "$SWAYFX_VERSION" > "$MARKER"
+echo "$BUILD_ID" > "$MARKER"
 
 # Enable effects in config
 if [ -f "$HOME/.config/sway/config.user" ]; then
