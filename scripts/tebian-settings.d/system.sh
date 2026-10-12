@@ -298,16 +298,25 @@ power_menu() {
         fi
     fi
 
+    local MODE_LINES
+    MODE_LINES=$(power_mode_lines)
+
     POWER_OPTS="󰜉 Reboot
 󰐥 Shutdown
 󰤄 Sleep
 󰍃 Logout
 $IDLE_LABEL
 ${LID_LABEL:+$LID_LABEL
+}${MODE_LINES:+$MODE_LINES
 }󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
     
     if is_back "$P_CHOICE"; then return; fi
+
+    # Power modes, then the drop-down again so the switch shows its new state
+    if power_mode_pick "$P_CHOICE"; then
+        power_menu; return
+    fi
 
     if [[ "$P_CHOICE" =~ "Keep Awake" ]]; then
         tebian-awake idle toggle

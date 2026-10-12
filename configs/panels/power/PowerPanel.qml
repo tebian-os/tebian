@@ -4,8 +4,9 @@
 // cycles, charge limit, profile picker), extended for Tebian:
 //   - works without a battery: desktops get the panel too, with uptime in the
 //     header instead of charge
-//   - the power-profile picker only appears with power-profiles-daemon;
-//     Tebian laptops use TLP and the panel doesn't fight it
+//   - a Power Mode section: on TLP laptops a switch (tebian-power-modes) that
+//     brings in tlp-pd, whose modes then appear under it; with
+//     power-profiles-daemon just the modes
 //   - session actions (lock, sleep, log out, restart, shut down) — the same
 //     commands as Settings > Power, via tebian-panel-power. The ones that end
 //     the session take a second click to confirm.
@@ -66,13 +67,27 @@ Panel {
     awakeToggleProc.command = ["tebian-awake", option.id, "toggle"]
     awakeToggleProc.running = true
   }
-  // "profile" | "awake" | "actions" — which part the keyboard cursor is in. Actions
+  // "modes" | "profile" | "awake" | "actions" — which part the keyboard cursor is in. Actions
   // sit in two rows by weight: [lock, sleep] above [log out, restart, shut
   // down]; actionIndex counts across both
   property string focusRow: "actions"
   property int actionIndex: 0
   readonly property int safeActionCount: 2
-  readonly property bool hasProfiles: profiles.length > 0
+  // tebian-power-modes status: "on"/"off" on a TLP laptop (the section's
+  // switch), "none" otherwise. Off, a stale profile list is kept hidden.
+  property string modesStatus: ""
+  readonly property bool hasModeSwitch: modesStatus === "on" || modesStatus === "off"
+  readonly property bool hasProfiles: profiles.length > 0 && modesStatus !== "off"
+  readonly property bool hasModeSection: hasProfiles || hasModeSwitch
+
+  // Installing or removing TLP packages needs sudo, so the switch opens a
+  // terminal (tebian-power-modes --window) rather than switching in place
+  function toggleModes() {
+    if (!hasModeSwitch || modesSwitchProc.running) return
+    modesSwitchProc.command = ["tebian-power-modes", modesStatus === "on" ? "off" : "on", "--window"]
+    modesSwitchProc.running = true
+    root.close()
+  }
 
   function runSessionAction(action) {
     if (!action) return
@@ -195,6 +210,7 @@ Panel {
     if (!profilesProc.running) profilesProc.running = true
     if (!uptimeProc.running) uptimeProc.running = true
     if (!awakeProc.running) awakeProc.running = true
+    if (!modesProc.running) modesProc.running = true
   }
 
   function updateKeyValue(raw, targetName) {
@@ -210,7 +226,7 @@ Panel {
     var parsed = Model.parseProfiles(raw, profileIndex)
     // Same guard as battery: preserve the last known profile list across
     // transient empty payloads so the buttons don't blink out. (No
-    // power-profiles-daemon at all → always empty → picker never shows.)
+    // profile provider at all → always empty → picker never shows.)
     if (parsed.profiles.length === 0) return
     profiles = parsed.profiles
     activeProfile = parsed.activeProfile
@@ -282,6 +298,17 @@ Panel {
   }
 
   Process {
+    id: modesProc
+    command: ["tebian-power-modes", "status"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.modesStatus = String(text).trim() }
+  }
+
+  Process {
+    id: modesSwitchProc
+    onExited: root.refresh()
+  }
+
+  Process {
     id: awakeToggleProc
     onExited: { if (!awakeProc.running) awakeProc.running = true }
   }
@@ -347,13 +374,21 @@ Panel {
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) {
-          // Rows top to bottom: profile, awake, then the two action rows
+          // Rows top to bottom: mode switch, profile, awake, then the two
+          // action rows
           var safe = root.safeActionCount
-          if (root.focusRow === "profile") {
+          if (root.focusRow === "modes") {
+            if (dy > 0) {
+              if (root.hasProfiles) root.focusRow = "profile"
+              else { root.focusRow = "awake"; root.awakeIndex = 0 }
+            }
+          } else if (root.focusRow === "profile") {
             if (dy > 0) { root.focusRow = "awake"; root.awakeIndex = 0 }
+            else if (root.hasModeSwitch) root.focusRow = "modes"
           } else if (root.focusRow === "awake") {
             if (dy > 0) { root.focusRow = "actions"; root.actionIndex = 0 }
             else if (root.hasProfiles) root.focusRow = "profile"
+            else if (root.hasModeSwitch) root.focusRow = "modes"
           } else if (dy < 0) {
             if (root.actionIndex >= safe) root.actionIndex = Math.min(root.actionIndex - safe, safe - 1)
             else { root.focusRow = "awake"; root.awakeIndex = 0 }
@@ -368,7 +403,8 @@ Panel {
       }
       onActivateRequested: {
         if (!root.cursorActive) return
-        if (root.focusRow === "profile") root.activateSelectedProfile()
+        if (root.focusRow === "modes") root.toggleModes()
+        else if (root.focusRow === "profile") root.activateSelectedProfile()
         else if (root.focusRow === "awake") root.toggleAwake(root.awakeOptions[root.awakeIndex])
         else root.runSessionAction(root.sessionActions[root.actionIndex])
       }
@@ -518,25 +554,53 @@ Panel {
           }
         }
 
-        // ---------- Power profile picker (power-profiles-daemon only) ----------
+        // ---------- Power mode: switch (TLP laptops) and profile picker ----------
         PanelSeparator {
-          visible: root.hasProfiles
+          visible: root.hasModeSection
           foreground: root.bar.foreground
         }
 
         Column {
-          visible: root.hasProfiles
+          visible: root.hasModeSection
           width: parent.width
           spacing: Style.space(10)
 
-          PanelSectionHeader {
-            text: "POWER PROFILE"
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(modesHeader.implicitHeight, modesSwitch.implicitHeight)
+
+            PanelSectionHeader {
+              id: modesHeader
+              text: "POWER MODE"
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            ToggleSwitch {
+              id: modesSwitch
+              visible: root.hasModeSwitch
+              checked: root.modesStatus === "on"
+              busy: modesSwitchProc.running
+              trackHeight: Style.space(18)
+              hasCursor: root.cursorActive && root.focusRow === "modes"
+              foreground: root.bar.foreground
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              onHovered: function(h) { if (h) { root.cursorActive = true; root.focusRow = "modes" } }
+              onToggled: root.toggleModes()
+            }
+          }
+
+          InfoLabel {
+            visible: root.modesStatus === "off"
+            text: "Saver, Balanced and Performance modes"
           }
 
           Row {
             id: profileRow
+            visible: root.hasProfiles
             width: parent.width
             spacing: Style.space(6)
 
@@ -576,7 +640,7 @@ Panel {
 
         // ---------- Stay awake (Tebian) ----------
         PanelSeparator {
-          visible: root.batteryPresent || root.hasProfiles
+          visible: root.batteryPresent || root.hasModeSection
           foreground: root.bar.foreground
         }
 

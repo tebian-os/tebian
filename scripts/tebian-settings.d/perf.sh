@@ -70,7 +70,7 @@ perf_menu() {
     [[ "$HAS_PRELOAD" == "YES" ]] && PERF_OPTS+="\n󰆴 Uninstall App Preload"
 
     if [[ "$HAS_TLP" == "YES" ]]; then
-        PERF_OPTS+="\n🔋 Power Profile (TLP)"
+        PERF_OPTS+="\n🔋 Power Mode"
         PERF_OPTS+="\n󰆴 Uninstall Laptop Power Management"
     else
         PERF_OPTS+="\n🔋 Install Laptop Power Management"
@@ -168,25 +168,9 @@ perf_menu() {
         read -p 'Press Enter to close...'"
         tnotify "App Preload" "Uninstalled"
 
-    # --- Power Profile / TLP ---
-    elif [[ "$P_CHOICE" =~ "Power Profile" ]]; then
-        PP_OPTS="🔋 Battery Saver (max battery life)
-⚖️  Balanced (default)
-🚀 Performance (max speed)
-󰌍 Back"
-        PP_CHOICE=$(echo -e "$PP_OPTS" | tfuzzel -d -p " 🔋 Power | " --match-mode=exact)
-        if is_back "$PP_CHOICE"; then
-            continue
-        elif [[ "$PP_CHOICE" =~ "Battery" ]]; then
-            $TERM_CMD bash -c 'sudo tlp bat; echo "Battery Saver enabled."; read -p "Press Enter..."'
-            tnotify "Power Profile" "Battery Saver"
-        elif [[ "$PP_CHOICE" =~ "Balanced" ]]; then
-            $TERM_CMD bash -c 'sudo tlp start; echo "Balanced mode enabled."; read -p "Press Enter..."'
-            tnotify "Power Profile" "Balanced"
-        elif [[ "$PP_CHOICE" =~ "Performance" ]]; then
-            $TERM_CMD bash -c 'sudo tlp ac; echo "Performance mode enabled."; read -p "Press Enter..."'
-            tnotify "Power Profile" "Performance"
-        fi
+    # --- Power Mode / TLP ---
+    elif [[ "$P_CHOICE" == *"Power Mode"* ]]; then
+        power_mode_menu
     elif [[ "$P_CHOICE" =~ "Install Laptop Power" ]]; then
         $TERM_CMD bash -c '
             echo "========================================="
@@ -641,4 +625,65 @@ hardware_detect_menu() {
         echo "Reboot recommended."
         read -p "Press Enter to close..."
     '
+}
+
+# ── Power mode ──
+# With power modes on (tebian-power-modes: tlp-pd from backports) these are
+# real modes like Windows': switched over D-Bus with no password, shown in
+# the Power panel too, and kept when the charger is plugged or pulled.
+# Debian stable's TLP has no modes, only its battery and plugged-in
+# settings; picking one holds it until restart, so the menu says that
+# instead of pretending they are modes.
+# The power-mode switch, and the modes under it once it's on — one line
+# each. Shared by Settings > Performance > Power Mode and the bar's Power
+# drop-down (power_menu), so both look and behave the same.
+power_mode_lines() {
+    local status p a line
+    status=$(tebian-power-modes status 2>/dev/null)
+    case "$status" in
+        on)  echo "󰓅 Power Modes (ON)" ;;
+        off) echo "󰓅 Power Modes (OFF: Saver / Balanced / Performance)" ;;
+    esac
+    # Without TLP (status "none") power-profiles-daemon may still offer modes
+    [ "$status" = off ] && return
+    while IFS=$'\t' read -r p a; do
+        case "$p" in
+            power-saver) line="   󰌪 Power Saver — longest battery" ;;
+            balanced)    line="   󰾅 Balanced" ;;
+            performance) line="   󰓅 Performance — fastest, more power and heat" ;;
+            *) continue ;;
+        esac
+        [ "$a" = 1 ] && line+="  ✓"
+        echo "$line"
+    done < <(tebian-panel-power profiles)
+}
+
+# Acts on a line from power_mode_lines; false if it wasn't one of them
+power_mode_pick() {
+    local p
+    case "$1" in
+        *"Power Modes (ON)"*)
+            # Blocks until the window closes, so the menu reopens up to date
+            tebian-power-modes off --window; return ;;
+        *"Power Modes (OFF"*)
+            tebian-power-modes on --window; return ;;
+        *"Power Saver"*) p=power-saver ;;
+        *Balanced*)      p=balanced ;;
+        *Performance*)   p=performance ;;
+        *) return 1 ;;
+    esac
+    if tebian-panel-power set-profile "$p"; then
+        tnotify "Power Mode" "${p^}"
+    else
+        tnotify "Power Mode" "Couldn't switch to $p"
+    fi
+}
+
+power_mode_menu() {
+    local choice
+    while true; do
+        choice=$( { power_mode_lines; echo "󰌍 Back"; } | tfuzzel -d -p " 🔋 Power Mode | ")
+        is_back "$choice" && return
+        power_mode_pick "$choice" || return
+    done
 }

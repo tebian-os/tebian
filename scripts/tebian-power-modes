@@ -1,0 +1,95 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN POWER MODES
+# Power saver / Balanced / Performance on a TLP laptop, like Windows' power
+# mode. Off unless you switch it on (the Power drop-down on the bar, or
+# Settings > Performance > Power Mode).
+#
+#   tebian-power-modes status   "on", "off" (TLP without modes) or "none" (no TLP)
+#   tebian-power-modes on       TLP 1.10 + tlp-pd from trixie-backports
+#   tebian-power-modes off      back to Debian stable's TLP
+#   ... on|off --window         the same in a new terminal window, for the
+#                               bar and menu switches (sudo needs somewhere
+#                               to ask for the password)
+#
+# Why it's opt-in: Debian stable's TLP (1.8) has no modes; they arrived in
+# TLP 1.9/1.10, which Debian ships only in backports. Tebian takes packages
+# from backports only when you ask, one feature at a time (like the Graphics
+# Drivers channel and Quickshell). Once on, TLP follows backports updates.
+#
+# tlp-pd speaks power-profiles-daemon's D-Bus interface, so the picker in the
+# Power panel and in Settings works with it unchanged, and switching needs no
+# password for the logged-in user (its polkit default). A mode you pick
+# stays picked when the charger is plugged or pulled (TLP_AUTO_SWITCH=2);
+# otherwise TLP picks Performance on AC and Balanced on battery.
+# ==============================================================================
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+LIST=/etc/apt/sources.list.d/tebian-backports.list
+# Packages that must move together: tlp-pd and tlp-rdw pin tlp's exact version
+PKGS=(tlp tlp-pd)
+
+installed() { dpkg-query -W -f '${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii'; }
+
+say() { echo -e "${GREEN}[power-modes]${NC} $*"; }
+fail() { echo -e "${RED}[power-modes]${NC} $*" >&2; exit 1; }
+
+# Keep the user's edits to /etc/tlp.conf; take the new default if untouched
+DPKG_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+if [ "${2:-}" = --window ]; then
+    for t in kitty foot alacritty xterm; do command -v "$t" >/dev/null && break; done
+    exec "$t" -e bash -c '"$0" "$1"; echo; read -rp "Press Enter to close..."' "$0" "$1"
+fi
+
+case "${1:-status}" in
+status)
+    if installed tlp-pd; then echo on
+    elif installed tlp; then echo off
+    else echo none; fi
+    ;;
+on)
+    installed tlp || fail "TLP isn't installed — Settings > Performance > Install Laptop Power Management first."
+    installed tlp-pd && { say "Power modes are already on."; exit 0; }
+    say "Power modes need TLP 1.10; Debian stable has 1.8. The newer one comes from"
+    say "Debian's official backports archive, and TLP updates from there until you"
+    say "turn power modes off again."
+    if ! grep -rqs "trixie-backports" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        say "Enabling trixie-backports (nothing upgrades from it unless asked)..."
+        echo "deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware" |
+            sudo tee "$LIST" >/dev/null
+    fi
+    sudo apt-get update -q || fail "apt update failed"
+    pkgs=("${PKGS[@]}")
+    installed tlp-rdw && pkgs+=(tlp-rdw)
+    # power-profiles-daemon, if present, is replaced: both can't own the interface.
+    # gdbus (libglib2.0-bin, from stable) is how TLP tells tlp-pd a mode was
+    # applied; nothing depends on it, and without it the mode never shows.
+    say "Installing from backports: ${pkgs[*]}"
+    sudo apt-get install -y "${DPKG_OPTS[@]}" -t trixie-backports "${pkgs[@]}" libglib2.0-bin ||
+        fail "Install failed (see above)."
+    sudo systemctl enable --now tlp-pd >/dev/null 2>&1 || true
+    pkill -RTMIN+10 -x waybar 2>/dev/null || true
+    say "Power modes on. Pick one in the Power panel or Settings > Performance > Power Mode."
+    ;;
+off)
+    installed tlp-pd || { say "Power modes are already off."; exit 0; }
+    pkgs=(tlp/trixie)
+    installed tlp-rdw && pkgs+=(tlp-rdw/trixie)
+    say "Removing tlp-pd and going back to Debian stable's TLP..."
+    sudo apt-get purge -y tlp-pd || fail "Could not remove tlp-pd"
+    sudo apt-get install -y --allow-downgrades "${DPKG_OPTS[@]}" "${pkgs[@]}" ||
+        fail "Could not reinstall Debian's TLP — run: sudo apt install --allow-downgrades ${pkgs[*]}"
+    # Keep the repo while anything else still comes from it (e.g. Quickshell):
+    # dropping it would silently stop those getting updates
+    if [ -f "$LIST" ] && ! dpkg-query -W -f '${Version}\n' 2>/dev/null | grep -q '~bpo'; then
+        sudo rm -f "$LIST"
+        sudo apt-get update -q >/dev/null || true
+    fi
+    sudo systemctl restart tlp >/dev/null 2>&1 || true
+    say "Power modes off. TLP follows the charger again (battery vs plugged-in settings)."
+    ;;
+*) sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

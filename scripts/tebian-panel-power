@@ -12,10 +12,10 @@
 #   tebian-panel-power uptime
 #   tebian-panel-power lock|sleep|logout|reboot|poweroff
 #
-# Power profiles exist only with power-profiles-daemon. Tebian laptops use
-# TLP instead, so there the list is empty and the panel hides the picker
-# rather than fighting TLP. Session actions are the same commands as
-# Settings > Power.
+# Power profiles come from power-profiles-daemon, or on TLP laptops from
+# tlp-pd once power modes are on (tebian-power-modes): both speak the same
+# interface. Without either the list is empty and the panel hides the
+# picker. Session actions are the same commands as Settings > Power.
 # ==============================================================================
 set -u
 PS_DIR="${TEBIAN_POWER_SUPPLY_PATH:-/sys/class/power_supply}"
@@ -75,6 +75,9 @@ battery_report() {
     fi
 }
 
+# tlpctl is tlp-pd's copy of powerprofilesctl: same list format
+profile_ctl() { command -v powerprofilesctl || command -v tlpctl; }
+
 case "${1:-}" in
     battery) battery_report ;;
     battery-notify)
@@ -90,13 +93,13 @@ case "${1:-}" in
         notify-send -a Battery "Battery ${b[percentage]}" "$line${extra:+$'\n'$extra}"
         ;;
     profiles)
-        command -v powerprofilesctl >/dev/null || exit 0
-        powerprofilesctl list 2>/dev/null | awk '/^[[:space:]]*[* ][[:space:]]*[a-zA-Z0-9-]+:$/ {
+        ctl=$(profile_ctl) || exit 0
+        "$ctl" list 2>/dev/null | awk '/^[[:space:]]*[* ][[:space:]]*[a-zA-Z0-9-]+:$/ {
             active = ($1 == "*") ? 1 : 0; gsub(/^[*[:space:]]+|:$/, ""); print $0 "\t" active }' | tac
         ;;
     set-profile)
         [[ ${2:-} =~ ^[a-z-]+$ ]] || exit 2
-        command -v powerprofilesctl >/dev/null && powerprofilesctl set "$2"
+        ctl=$(profile_ctl) && "$ctl" set "$2"
         ;;
     uptime)
         read -r up _ < /proc/uptime; up=${up%.*}
