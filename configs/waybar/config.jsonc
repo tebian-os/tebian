@@ -195,15 +195,19 @@
       "default": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
     },
     // Power draw straight from the kernel, as on Omarchy
-    "tooltip-format-discharging": "{capacity}%  ·  using {power:.1f} W\n{timeTo}\n<small>Click: power · Right-click: details</small>",
-    "tooltip-format-charging": "{capacity}%  ·  charging at {power:.1f} W\n{timeTo}\n<small>Click: power · Right-click: details</small>",
-    "tooltip-format": "{capacity}%  ·  plugged in\n<small>Click: power · Right-click: details</small>",
+    "tooltip-format-discharging": "{capacity}%  ·  using {power:.1f} W\n{timeTo}\n<small>Click: power, sleep, restart · Right-click: details</small>",
+    "tooltip-format-charging": "{capacity}%  ·  charging at {power:.1f} W\n{timeTo}\n<small>Click: power, sleep, restart · Right-click: details</small>",
+    "tooltip-format": "{capacity}%  ·  plugged in\n<small>Click: power, sleep, restart · Right-click: details</small>",
     "on-click": "tebian-bar-menu power",
     "on-click-right": "tebian-panel-power battery-notify"
   },
 
+  // On laptops the battery is the power button (both open the Power panel),
+  // so ⏻ only shows where there's no battery to click. A peripheral's battery
+  // (a mouse, say: scope Device) doesn't count.
   "custom/power": {
-    "format": "⏻",
+    "exec": "for t in /sys/class/power_supply/*/type; do [ \"$(cat \"$t\")\" = Battery ] && [ \"$(cat \"${t%type}scope\" 2>/dev/null)\" != Device ] && exit 0; done; echo ⏻",
+    "interval": "once",
     "tooltip-format": "Power — lock, sleep, restart, shut down\n<small>Right-click: keep awake on/off</small>",
     "on-click": "tebian-bar-menu power",
     "on-click-right": "tebian-awake idle toggle"
