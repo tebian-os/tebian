@@ -126,15 +126,19 @@ tfuzzel() {
     # A drop-down is also sized to its items: themes fix fuzzel at 15
     # lines, which left short menus as a tall box hanging off the bar.
     local -a anchor=()
-    local input=""
     if [ -n "${TEBIAN_MENU_ANCHOR:-}" ]; then
-        input=$(cat)
-        local n
-        n=$(printf '%s\n' "$input" | grep -c .)
+        # Buffered in a file, not a variable: entries with their own icon
+        # carry a NUL ("name\0icon\x1fkitty"), which bash variables drop —
+        # fuzzel then printed the icon spec as text
+        local buf n
+        buf=$(mktemp)
+        cat > "$buf"
+        n=$(grep -ac . "$buf")
         [ "$n" -gt 15 ] && n=15
         [ "$n" -lt 1 ] && n=1
         anchor=(--anchor "$TEBIAN_MENU_ANCHOR" --x-margin 8 --y-margin 6 --lines "$n")
-        exec 3< <(printf '%s\n' "$input")
+        exec 3< "$buf"
+        rm -f "$buf"
     else
         exec 3<&0
     fi
