@@ -19,7 +19,7 @@
 #   TEBIAN_BUILD_DIR   scratch build tree (default: /tmp/tebian-build-amd64)
 #
 # For ARM boards (Pi, Armbian, etc.), use the remote installer instead:
-#   curl -sL tebian.org/install | bash
+#   curl -sL https://tebian.org/install | bash
 # ==============================================================================
 
 set -euo pipefail
@@ -109,32 +109,45 @@ RELEASE_ID="dev-$(date +%Y%m%d)"
 
 # ── Release mode: export committed tree and build only from that ──
 # git archive HEAD excludes .git, untracked files, and uncommitted edits,
-# so a release ISO is reproducible from a commit hash.
-if [ -n "$RELEASE_BUILD" ]; then
+# so a release ISO is traceable to a commit hash. Not bit-for-bit
+# reproducible: packages come from the live Debian mirror and the build
+# container's base image isn't pinned.
+if [ -n "${TEBIAN_RELEASE_COMMIT:-}" ]; then
+    # Second half of a --release run: this copy of the script IS the
+    # committed one, running from the export (see below)
+    RELEASE_ID="$TEBIAN_RELEASE_COMMIT"
+elif [ -n "$RELEASE_BUILD" ]; then
     # Container/CI builds run as root on a host-owned mount — git refuses
-    # to read the repo without this
-    git config --global --add safe.directory "$TEBIAN_SRC" 2>/dev/null || true
+    # to read the repo without safe.directory. Per command, not --global:
+    # that appended a duplicate line to ~/.gitconfig on every host build.
+    rgit() { git -c safe.directory="$TEBIAN_SRC" -C "$TEBIAN_SRC" "$@"; }
 
-    if ! git -C "$TEBIAN_SRC" rev-parse HEAD >/dev/null 2>&1; then
+    if ! rgit rev-parse HEAD >/dev/null 2>&1; then
         echo -e "${RED}Error: --release requires $TEBIAN_SRC to be a git repository with at least one commit${NC}"
         exit 1
     fi
 
-    COMMIT=$(git -C "$TEBIAN_SRC" rev-parse --short HEAD)
-    RELEASE_ID="$COMMIT"
+    COMMIT=$(rgit rev-parse --short HEAD)
     # Reproducible-builds convention, honoured by live-build: every
     # timestamp in the image comes from the commit, not the build clock
-    export SOURCE_DATE_EPOCH="$(git -C "$TEBIAN_SRC" log -1 --format=%ct HEAD)"
-    if [ -n "$(git -C "$TEBIAN_SRC" status --porcelain 2>/dev/null)" ]; then
+    SOURCE_DATE_EPOCH="$(rgit log -1 --format=%ct HEAD)"
+    export SOURCE_DATE_EPOCH
+    if [ -n "$(rgit status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}Warning: uncommitted changes in $TEBIAN_SRC will NOT be included in the ISO${NC}"
-        git -C "$TEBIAN_SRC" status --short | head -20
+        rgit status --short | head -20
     fi
 
     EXPORT_DIR=$(mktemp -d /tmp/tebian-release-XXXXXX)
-    git -C "$TEBIAN_SRC" archive HEAD | tar -x -C "$EXPORT_DIR"
-    TEBIAN_SRC="$EXPORT_DIR"
-    TEBIAN_VERSION="$(cat "$TEBIAN_SRC/VERSION" 2>/dev/null || echo 0.0.0)"
+    rgit archive HEAD | tar -x -C "$EXPORT_DIR"
     echo -e "${GREEN}[release]${NC} Building from commit $COMMIT (clean git export)"
+
+    # Hand over to the committed build-iso.sh in the export. This script
+    # holds the live package list, the live user's sudo rules and the boot
+    # entries, so running the working-tree copy would ship uncommitted
+    # edits in an ISO labelled with a clean commit.
+    TEBIAN_RELEASE_COMMIT="$COMMIT" TEBIAN_OUTPUT_DIR="$OUTPUT_DIR" TEBIAN_ISO_NAME="$ISO_NAME" \
+        bash "$EXPORT_DIR/scripts/build-iso.sh" "$DEBIAN_VERSION"
+    exit 0   # the EXIT trap removes the export
 fi
 
 # Clean old build (needs root — lb build creates root-owned files)
@@ -249,6 +262,7 @@ rsync -a --filter=':- .gitignore' \
     --exclude='dist' --exclude='.astro' --exclude='__pycache__' --exclude='*.pyc' \
     --exclude='.DS_Store' --exclude='._*' --exclude='*.iso' --exclude='*.qcow2' \
     --exclude='CLAUDE.md' --exclude='.claude' --exclude='MEMORY.md' \
+    --exclude='/tests' --exclude='/.github' \
     "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
 
 # Install tebian-installer system-wide
@@ -365,14 +379,19 @@ lb_run bootstrap
 fix_chroot_dev
 lb_run chroot
 
-# Resolve kernel version and patch grub.cfg before binary stage
-KVER=$(ls chroot/boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|.*/vmlinuz-||')
-if [ -n "$KVER" ]; then
-    echo -e "${GREEN}[iso]${NC} Kernel version: $KVER"
-    find config/bootloaders -name 'grub.cfg' -o -name 'loopback.cfg' | xargs sed -i "s/@@KERNEL_VERSION@@/$KVER/g"
-else
-    echo -e "${YELLOW}[iso]${NC} Warning: could not detect kernel version for grub.cfg"
+# Resolve kernel version and patch grub.cfg before binary stage. No kernel
+# means every boot entry would point at a missing file — stop here rather
+# than ship an ISO that can't boot.
+shopt -s nullglob
+kernels=(chroot/boot/vmlinuz-*)
+shopt -u nullglob
+if [ "${#kernels[@]}" -eq 0 ]; then
+    echo -e "${RED}[iso] No kernel in chroot/boot — the chroot stage did not install linux-image-amd64${NC}"
+    exit 1
 fi
+KVER="${kernels[0]##*/vmlinuz-}"
+echo -e "${GREEN}[iso]${NC} Kernel version: $KVER"
+find config/bootloaders \( -name 'grub.cfg' -o -name 'loopback.cfg' \) -exec sed -i "s/@@KERNEL_VERSION@@/$KVER/g" {} +
 
 # Create includes.binary to override loopback.cfg with Ventoy-compatible version
 mkdir -p config/includes.binary/boot/grub

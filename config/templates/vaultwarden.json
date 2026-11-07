@@ -1,8 +1,0 @@
-{
-  "name": "Vaultwarden",
-  "description": "Bitwarden server (passwords)",
-  "image": "vaultwarden/server:latest",
-  "ports": ["8080:80"],
-  "volumes": ["/opt/data/vaultwarden:/data"],
-  "env": {}
-}

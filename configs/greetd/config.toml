@@ -5,5 +5,19 @@ vt = 7
 # Sway refuses the proprietary NVIDIA driver without --unsupported-gpu, which
 # would leave the login screen black after installing it. Wrapped in sh -c so
 # the check runs whether or not greetd sources a profile first.
-command = "sh -c 'exec sway $([ -d /sys/module/nvidia ] && echo --unsupported-gpu) --config /etc/nwg-hello/sway-config'"
+#
+# Sway doesn't read /etc/default/keyboard, so without this the login screen
+# is always US: an AZERTY or German user couldn't type their own password.
+# The system layout (set by the installer, Settings > Keyboard or
+# dpkg-reconfigure keyboard-configuration) goes in through XKB_DEFAULT_*,
+# which sway uses when its config sets no layout. Only non-empty values are
+# exported — an empty XKB_DEFAULT_LAYOUT is not the same as unset.
+command = '''sh -c '
+if [ -r /etc/default/keyboard ]; then . /etc/default/keyboard; fi
+[ -n "${XKBMODEL:-}" ] && export XKB_DEFAULT_MODEL="$XKBMODEL"
+[ -n "${XKBLAYOUT:-}" ] && export XKB_DEFAULT_LAYOUT="$XKBLAYOUT"
+[ -n "${XKBVARIANT:-}" ] && export XKB_DEFAULT_VARIANT="$XKBVARIANT"
+[ -n "${XKBOPTIONS:-}" ] && export XKB_DEFAULT_OPTIONS="$XKBOPTIONS"
+exec sway $([ -d /sys/module/nvidia ] && echo --unsupported-gpu) --config /etc/nwg-hello/sway-config'
+'''
 user = "greeter"

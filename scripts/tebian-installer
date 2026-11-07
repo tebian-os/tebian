@@ -220,6 +220,9 @@ Select your region:" \
         "Africa"     "Africa" \
         "Australia"  "Australia" \
         "Pacific"    "Pacific" \
+        "Atlantic"   "Atlantic (Iceland, Azores, Canaries...)" \
+        "Indian"     "Indian Ocean (Maldives, Mauritius...)" \
+        "Antarctica" "Antarctica" \
         "UTC"        "UTC (no timezone)" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -228,13 +231,16 @@ Select your region:" \
         return 0
     fi
 
-    # Build city list for selected region
+    # Build city list for selected region. All depths: zones like
+    # America/Argentina/Buenos_Aires or America/Indiana/Indianapolis live in
+    # subfolders, and on trixie their old top-level aliases moved to
+    # tzdata-legacy, so a top-level-only list had no Argentina at all.
     local cities=()
     while IFS= read -r tz; do
         local city
         city=$(echo "$tz" | cut -d/ -f2- | tr '_' ' ')
         cities+=("$tz" "$city")
-    done < <(find /usr/share/zoneinfo/"$region" -maxdepth 1 -type f 2>/dev/null | sed "s|/usr/share/zoneinfo/||" | sort)
+    done < <(find /usr/share/zoneinfo/"$region" -type f 2>/dev/null | sed "s|/usr/share/zoneinfo/||" | sort)
 
     if [ ${#cities[@]} -eq 0 ]; then
         TIMEZONE="UTC"
@@ -368,9 +374,11 @@ No Wi-Fi networks found." \
                 esac
             fi
 
+            # Cancel here leaves Wi-Fi setup (back a step) — rescanning
+            # instead trapped users whose network never connects
             local ssid
             ssid=$(wt --title "  Wi-Fi" --menu "Select a network:" \
-                $WT_HEIGHT $WT_WIDTH $WT_MENU "${networks[@]}" 3>&1 1>&2 2>&3) || continue
+                $WT_HEIGHT $WT_WIDTH $WT_MENU "${networks[@]}" 3>&1 1>&2 2>&3) || return 1
 
             # Check if network needs a password
             local wifi_pass=""
@@ -405,7 +413,18 @@ No Wi-Fi networks found." \
             ) | progress "Connecting to Wi-Fi..."
             unset wifi_pass
 
-            if ping -c1 -W3 deb.debian.org &>/dev/null; then
+            # The same HTTP check as everywhere else: ICMP is blocked on many
+            # campus/hotel/corporate networks, and a ping-based check called a
+            # working connection "failed" and deleted it. A few tries give
+            # DHCP time to finish after NM reports the link up.
+            local online=false
+            for _ in 1 2 3; do
+                if curl -sfm5 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
+                    online=true; break
+                fi
+                sleep 2
+            done
+            if $online; then
                 msg "Connected to ${ssid}."
                 return 0
             else
@@ -463,6 +482,19 @@ reread_table() {
     udevadm settle --timeout=10 2>/dev/null || true
 }
 
+# Partition of disk $1 starting at logical sector $2 (sysfs counts in
+# 512-byte units whatever the disk's sector size)
+part_at() {
+    local disk="$1" want="$2" ss p start
+    ss=$(blockdev --getss "$disk")
+    while read -r p; do
+        [ "$p" = "$disk" ] && continue
+        start=$(cat "/sys/class/block/${p##*/}/start" 2>/dev/null) || continue
+        if [ $(( start * 512 / ss )) -eq "$want" ]; then echo "$p"; return 0; fi
+    done < <(lsblk -lnpo NAME "$disk" 2>/dev/null)
+    return 0
+}
+
 ESP_GUID="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 
 # EFI System Partition on $1, found by partition type — not "first vfat
@@ -480,27 +512,70 @@ find_esp() {
 
 disk_label() { blkid -p -o value -s PTTYPE "$1" 2>/dev/null || true; }
 
+BIOS_GRUB_GUID="21686148-6449-6e6f-744e-656564454649"
+
+# GRUB on a GPT disk in BIOS mode needs a "BIOS boot" partition for its
+# core image; without one grub-install fails at the very end, after the
+# disk has already been resized and formatted
+has_bios_grub() {
+    local types
+    types=$(lsblk -lnpo PARTTYPE "$1" 2>/dev/null || true)
+    grep -qix "$BIOS_GRUB_GUID" <<< "$types"
+}
+
+# Whole disk(s) holding the Tebian USB this session booted from, one per
+# line. The default boot entry uses toram: live-boot copies the system to RAM
+# and unmounts the stick, so /run/live/medium is then a tmpfs and says
+# nothing about where it came from — the stick was offered as an install
+# target (first in the list, on NVMe laptops). So also find it by what's on
+# it: the ISO's filesystem label (TEBIAN_x_y_z, from build-iso.sh) or a
+# Ventoy stick's partitions. lsblk -s walks up to the disk through
+# partitions and device-mapper alike.
+live_media_disks() {
+    local mnt src line name fstype label
+    for mnt in /run/live/medium /run/live/findiso; do
+        src=$(findmnt -no SOURCE "$mnt" 2>/dev/null || true)
+        [ -b "$src" ] && lsblk -lnspo NAME,TYPE "$src" 2>/dev/null | awk '$2 == "disk" { print $1 }'
+    done
+    while IFS= read -r line; do
+        [[ "$line" =~ ^NAME=\"([^\"]*)\"\ FSTYPE=\"([^\"]*)\"\ LABEL=\"([^\"]*)\" ]] || continue
+        name=${BASH_REMATCH[1]} fstype=${BASH_REMATCH[2]} label=${BASH_REMATCH[3]}
+        if { [ "$fstype" = iso9660 ] && [[ "$label" == TEBIAN_* ]]; } ||
+           [ "$label" = Ventoy ] || [ "$label" = VTOYEFI ]; then
+            lsblk -lnspo NAME,TYPE "$name" 2>/dev/null | awk '$2 == "disk" { print $1 }'
+        fi
+    done < <(lsblk -nPpo NAME,FSTYPE,LABEL 2>/dev/null)
+    return 0
+}
+
 # ── Step 6: Disk selection ──
 select_disk() {
     DISK=""
-    # Find the live boot media device so we can exclude it
-    local live_disk=""
-    if mountpoint -q /run/live/medium 2>/dev/null; then
-        local live_source
-        live_source=$(findmnt -no SOURCE /run/live/medium 2>/dev/null)
-        if [ -n "$live_source" ]; then
-            live_disk=$(lsblk -npo PKNAME "$live_source" 2>/dev/null | head -1)
-        fi
-    fi
+    local live_disks
+    live_disks=$(live_media_disks | sort -u)
 
-    local disks=()
-    local dev size model
-    while read -r dev size model; do
-        [ -z "$model" ] && model="Disk"
-        # Skip the live boot media (USB/DVD the installer booted from)
-        [ "$dev" = "$live_disk" ] && continue
-        disks+=("$dev" "$size  $model")
-    done < <(lsblk -dpno NAME,SIZE,MODEL 2>/dev/null | grep -E '^/dev/(sd|nvme|vd|mmcblk)')
+    # Internal disks first: whiptail preselects the first entry, and an
+    # Enter-Enter-Enter run must land on the laptop's disk, not a USB drive
+    local internal=() removable=()
+    local line dev size rm tran model
+    while IFS= read -r line; do
+        [[ "$line" =~ ^NAME=\"([^\"]*)\"\ SIZE=\"([^\"]*)\"\ RM=\"([^\"]*)\"\ TRAN=\"([^\"]*)\"\ MODEL=\"([^\"]*)\" ]] || continue
+        dev=${BASH_REMATCH[1]} size=${BASH_REMATCH[2]} rm=${BASH_REMATCH[3]}
+        tran=${BASH_REMATCH[4]} model=${BASH_REMATCH[5]:-Disk}
+        # Whole disks only — not eMMC boot areas or RPMB (mmcblk0boot0,
+        # mmcblk0rpmb), which lsblk also lists as disks
+        [[ "$dev" =~ ^/dev/(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|mmcblk[0-9]+)$ ]] || continue
+        # Empty card readers report 0B
+        [ "$size" = 0B ] && continue
+        # The live boot media (USB/DVD the installer booted from)
+        grep -qxF "$dev" <<< "$live_disks" && continue
+        if [ "$rm" = 1 ] || [ "$tran" = usb ]; then
+            removable+=("$dev" "$size  $model  [USB/removable]")
+        else
+            internal+=("$dev" "$size  $model")
+        fi
+    done < <(lsblk -dnpPo NAME,SIZE,RM,TRAN,MODEL 2>/dev/null)
+    local disks=("${internal[@]}" "${removable[@]}")
 
     if [ ${#disks[@]} -eq 0 ]; then
         step_back "No disks found.\n\nGo back and check storage/controller settings, then retry."
@@ -510,6 +585,7 @@ select_disk() {
     if $AUTO; then
         DISK="${ANS[disk]:-}"
         [ -b "$DISK" ] || die "Answers file: disk '${DISK}' is not a block device"
+        ! grep -qxF "$DISK" <<< "$live_disks" || die "Answers file: disk '${DISK}' is the live boot media"
         return 0
     fi
 
@@ -628,18 +704,33 @@ plan_alongside() {
         fi
         return 1
     fi
+    if ! $IS_EFI && [ "$label" = gpt ] && ! has_bios_grub "$DISK"; then
+        step_back "${DISK} uses a GPT partition table but has no \"BIOS boot\"\npartition, which GRUB needs in legacy BIOS mode.\n\nIf this PC supports UEFI, reboot and pick the USB's UEFI\nentry. Otherwise use Manual partitioning and create a 1MB\npartition of type \"BIOS boot\"."
+        return 1
+    fi
 
-    # Pick the largest NTFS/ext4 partition
-    local part fstype size_bytes largest_size=0
+    # Pick the largest NTFS/ext4 partition. A partition labelled "tebian"
+    # is this installer's own root from an earlier attempt that failed
+    # after the shrink: offering "alongside" again would shrink Windows a
+    # second time (or shrink that half-installed root) for a second copy.
+    local part fstype size_bytes largest_size=0 leftover=""
     while read -r part; do
         [ "$part" = "$DISK" ] && continue
         fstype=$(blkid -p -o value -s TYPE "$part" 2>/dev/null || true)
         [ "$fstype" = ntfs ] || [ "$fstype" = ext4 ] || continue
+        if [ "$fstype" = ext4 ] && [ "$(blkid -p -o value -s LABEL "$part" 2>/dev/null || true)" = tebian ]; then
+            leftover=$part; continue
+        fi
         size_bytes=$(blockdev --getsize64 "$part" 2>/dev/null || echo 0)
         if [ "$size_bytes" -gt "$largest_size" ]; then
             largest_size=$size_bytes SHRINK_PART=$part SHRINK_FSTYPE=$fstype
         fi
     done < <(lsblk -lnpo NAME "$DISK" 2>/dev/null)
+
+    if [ -n "$leftover" ]; then
+        step_back "${leftover} already holds a Tebian system, probably from an\nearlier install attempt that didn't finish.\n\nTo reuse that space instead of shrinking again: choose\nManual partitioning, quit cfdisk without changes, and pick\n${leftover} as the root partition."
+        return 1
+    fi
 
     if [ -z "$SHRINK_PART" ]; then
         step_back "Could not find a shrinkable NTFS/ext4 partition on ${DISK}.\n\nUse Manual partitioning instead."
@@ -721,6 +812,11 @@ plan_manual() {
 
     cfdisk "$DISK"
     reread_table "$DISK"
+
+    if ! $IS_EFI && [ "$(disk_label "$DISK")" = gpt ] && ! has_bios_grub "$DISK"; then
+        step_back "${DISK} uses GPT, which in legacy BIOS mode needs a 1MB\npartition of type \"BIOS boot\" for GRUB. Create one in cfdisk\n(or switch the disk to a DOS/MBR label), then continue."
+        return 1
+    fi
 
     local parts=() dev size fstype
     while read -r dev size fstype; do
@@ -838,9 +934,14 @@ apply_disk_plan() {
         alongside)
             local sect
             sect=$(basename "$SHRINK_PART")
-            local start_s size_s pnum
-            start_s=$(cat "/sys/class/block/$sect/start")
-            size_s=$(cat "/sys/class/block/$sect/size")
+            # sfdisk counts in the disk's logical sectors, but sysfs always
+            # reports 512-byte units. On a 4K-native disk mixing the two
+            # asked for partitions 8x too big — after the filesystem had
+            # already been shrunk. Everything below is in logical sectors.
+            local ss start_s size_s pnum
+            ss=$(blockdev --getss "$DISK")
+            start_s=$(( $(cat "/sys/class/block/$sect/start") * 512 / ss ))
+            size_s=$(( $(cat "/sys/class/block/$sect/size") * 512 / ss ))
             pnum=$(cat "/sys/class/block/$sect/partition")
             umount "$SHRINK_PART" 2>/dev/null || true
 
@@ -851,9 +952,9 @@ apply_disk_plan() {
             # it; and parted's "resizepart N 40GiB" (the old way) sets the
             # END position on the disk, not the size, which cut the tail off
             # any filesystem that didn't start at sector 0.
-            local align=2048 new_size_s new_bytes
-            new_size_s=$(( SHRINK_TO_BYTES / 512 / align * align ))
-            new_bytes=$(( new_size_s * 512 ))
+            local align=$(( 1048576 / ss )) new_size_s new_bytes
+            new_size_s=$(( SHRINK_TO_BYTES / ss / align * align ))
+            new_bytes=$(( new_size_s * ss ))
             [ "$new_size_s" -lt "$size_s" ]
 
             echo 10; echo "# Shrinking ${SHRINK_PART} (this can take a while)..."
@@ -876,25 +977,26 @@ apply_disk_plan() {
             local free_end=$(( start_s + size_s ))       # exclusive
             local ptype_linux=0FC63DAF-8483-4772-8E79-3D69D8477DE4
             [ "$(disk_label "$DISK")" = dos ] && ptype_linux=83
-            local before after
-            before=$(lsblk -lnpo NAME "$DISK" | sort)
+            local boot_s=$(( 1024 * align ))            # 1 GiB /boot
             echo 50; echo "# Creating Tebian partitions..."
             if $ENCRYPT_PLANNED; then
                 printf 'start=%s, size=%s, type=%s\nstart=%s, size=%s, type=%s\n' \
-                    "$free_start" $((1024 * 2048)) "$ptype_linux" \
-                    $((free_start + 1024 * 2048)) $((free_end - free_start - 1024 * 2048)) "$ptype_linux" |
+                    "$free_start" "$boot_s" "$ptype_linux" \
+                    $((free_start + boot_s)) $((free_end - free_start - boot_s)) "$ptype_linux" |
                     sfdisk --append --no-reread --no-tell-kernel -q "$DISK" >>"$INSTALL_LOG"
             else
                 printf 'start=%s, size=%s, type=%s\n' "$free_start" $((free_end - free_start)) "$ptype_linux" |
                     sfdisk --append --no-reread --no-tell-kernel -q "$DISK" >>"$INSTALL_LOG"
             fi
             reread_table "$DISK"
-            after=$(lsblk -lnpo NAME "$DISK" | sort)
-            local new; new=$(comm -13 <(echo "$before") <(echo "$after"))
+            # Found by where they start, not by name: sorting names put p10
+            # before p9, which swapped the 1 GiB /boot and the root
             if $ENCRYPT_PLANNED; then
-                boot_part=$(echo "$new" | sed -n 1p); root_part=$(echo "$new" | sed -n 2p)
+                boot_part=$(part_at "$DISK" "$free_start")
+                root_part=$(part_at "$DISK" $((free_start + boot_s)))
+                [ -n "$boot_part" ]
             else
-                root_part=$(echo "$new" | sed -n 1p)
+                root_part=$(part_at "$DISK" "$free_start")
             fi
             [ -n "$root_part" ]
             wait_for_devs $boot_part $root_part
@@ -1081,9 +1183,14 @@ confirm() {
         manual)    disk_str="Format ${PARTITION_ROOT} as root${PARTITION_BOOT:+, ${PARTITION_BOOT} as /boot}" ;;
     esac
 
+    # cfdisk writes its table the moment the user picks Write, so in manual
+    # mode "nothing written" would be untrue
+    local written="Nothing has been written yet."
+    [ "$PART_MODE" = manual ] && written="cfdisk changes are saved; nothing is formatted yet."
+
     $AUTO && return 0
     wt --title "  Confirm Installation" --yesno "\
-Ready to install Tebian. Nothing has been written yet.
+Ready to install Tebian. ${written}
 
   Disk:        ${DISK}
   Changes:     ${disk_str}
@@ -1191,17 +1298,6 @@ sanitize_sway_configs_for_user() {
 
 # ── Step 12: Install base system ──
 install_base() {
-    mkdir -p "$TARGET"
-    mount "$PARTITION_ROOT" "$TARGET"
-    if [ -n "$PARTITION_BOOT" ]; then
-        mkdir -p "$TARGET/boot"
-        mount "$PARTITION_BOOT" "$TARGET/boot"
-    fi
-    if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
-        mkdir -p "$TARGET/boot/efi"
-        mount "$PARTITION_EFI" "$TARGET/boot/efi"
-    fi
-
     # errexit inside the gauge subshell: bash ignores `set -e` for anything
     # on the left of `||` or inside `if`, which is how this used to run —
     # a failed kernel install or chpasswd still ended in "installed
@@ -1211,6 +1307,20 @@ install_base() {
     (
         set -eE
         trap 'echo "INSTALL_FAILED: \"$BASH_COMMAND\" (line $LINENO)" >> "$INSTALL_LOG"' ERR
+        # Mounted in here, under the ERR trap: at top level a failed mount
+        # hit set -e and dropped the user to a bare shell with no message
+        echo 1; echo "# Mounting target..."
+        mkdir -p "$TARGET"
+        mount "$PARTITION_ROOT" "$TARGET"
+        if [ -n "$PARTITION_BOOT" ]; then
+            mkdir -p "$TARGET/boot"
+            mount "$PARTITION_BOOT" "$TARGET/boot"
+        fi
+        if $IS_EFI && [ -n "$PARTITION_EFI" ]; then
+            mkdir -p "$TARGET/boot/efi"
+            mount "$PARTITION_EFI" "$TARGET/boot/efi"
+        fi
+
         echo 2; echo "# Verifying network connectivity..."
         if ! curl -sfm10 http://deb.debian.org/debian/dists/ -o /dev/null 2>/dev/null; then
             echo "INSTALL_FAILED: No network — cannot reach deb.debian.org" >> "$INSTALL_LOG"
@@ -1218,16 +1328,22 @@ install_base() {
         fi
 
         # Sync the clock before debootstrap. debootstrap GPG-verifies the Release
-        # file, and a wrong live-session clock makes a valid signature look
-        # "invalid" (no NTP has run yet on a fresh boot). Set the time from the
-        # mirror's HTTP Date header — same HTTP we already use, no NTP needed.
+        # file, and a live-session clock that is behind makes a valid signature
+        # look "made in the future" (no NTP has run yet on a fresh boot). Set
+        # the time from the mirror's HTTP Date header — plain HTTP, because a
+        # clock that far off fails HTTPS certificate checks too.
+        # Forward only: plain HTTP can be forged, and winding the clock back
+        # would let old, validly signed (expired) security indexes through;
+        # moving it forward can't. The hardware clock is left alone — on
+        # dual-boot PCs it is Windows' local time, and the installed system's
+        # NTP sets it properly.
         echo 3; echo "# Syncing clock for package verification..."
         # GET (not HEAD) — the mirror CDN strips Date from HEAD responses.
         _http_date=$(curl -sf -m10 -o /dev/null -D - http://deb.debian.org/debian/ 2>/dev/null | grep -i '^date:' | head -1 | cut -d' ' -f2- | tr -d '\r' || true)
-        if [ -n "$_http_date" ]; then
-            date -s "$_http_date" >> "$INSTALL_LOG" 2>&1 || true
-            hwclock --systohc 2>/dev/null || true
-            echo "Clock set from mirror: $_http_date" >> "$INSTALL_LOG"
+        _http_epoch=$(date -d "$_http_date" +%s 2>/dev/null || echo 0)
+        if [ -n "$_http_date" ] && [ "$_http_epoch" -gt $(( $(date +%s) + 60 )) ]; then
+            date -s "@$_http_epoch" >> "$INSTALL_LOG" 2>&1 || true
+            echo "Clock moved forward from mirror: $_http_date" >> "$INSTALL_LOG"
         fi
 
         echo 5; echo "# Bootstrapping Debian base (this is the longest step)..."
@@ -1390,20 +1506,41 @@ KBEOF
             # firmware falls back to when it ignores or loses NVRAM entries
             # (common on some HP/MSI boards); the debconf answer keeps grub
             # package upgrades maintaining that copy.
-            echo "grub-efi-amd64 grub2/force_efi_extra_removable boolean true" |
+            # Only when that fallback slot is free (or the disk was just
+            # erased): on a shared ESP it is usually Windows' copy, and
+            # taking it over leaves a firmware fallback that breaks the day
+            # Tebian is removed.
+            local extra_removable=true removable_opt=(--force-extra-removable)
+            if [ "$PART_MODE" != erase ] && [ -e "$TARGET/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+                extra_removable=false removable_opt=()
+                echo "ESP already has \\EFI\\BOOT\\BOOTX64.EFI — leaving that fallback loader alone" >> "$INSTALL_LOG"
+            fi
+            echo "grub-efi-amd64 grub2/force_efi_extra_removable boolean $extra_removable" |
                 chroot "$TARGET" debconf-set-selections
             chroot_apt_install \
                 shim-signed grub-efi-amd64-signed grub-efi-amd64 efibootmgr os-prober
             if ! chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-                    --bootloader-id=debian --uefi-secure-boot --force-extra-removable >> "$INSTALL_LOG" 2>&1; then
+                    --bootloader-id=debian --uefi-secure-boot "${removable_opt[@]}" >> "$INSTALL_LOG" 2>&1; then
                 echo "INSTALL_FAILED: GRUB could not be installed to the EFI partition" >> "$INSTALL_LOG"
                 exit 1
             fi
         else
             chroot_apt_install \
                 grub-pc os-prober
-            # Keep future grub-pc upgrades installing to the right disk
-            echo "grub-pc grub-pc/install_devices multiselect $DISK" |
+            # Keep future grub-pc upgrades installing to the right disk —
+            # by its stable /dev/disk/by-id name, as Debian's installer does:
+            # /dev/sdX can name a different disk on a later boot (USB drive
+            # plugged in, second disk), and an upgrade would then update the
+            # wrong boot code and leave this disk's out of step with GRUB's
+            # modules. VMs' virtio disks without a serial have no by-id name.
+            local grub_dev="$DISK" link
+            for link in $(udevadm info -q symlink "$DISK" 2>/dev/null || true); do
+                case "$link" in
+                    disk/by-id/wwn-*) [ "$grub_dev" = "$DISK" ] && grub_dev="/dev/$link" ;;
+                    disk/by-id/*)     grub_dev="/dev/$link"; break ;;
+                esac
+            done
+            echo "grub-pc grub-pc/install_devices multiselect $grub_dev" |
                 chroot "$TARGET" debconf-set-selections
             if ! chroot "$TARGET" grub-install --target=i386-pc "$DISK" >> "$INSTALL_LOG" 2>&1; then
                 echo "INSTALL_FAILED: GRUB could not be installed to $DISK" >> "$INSTALL_LOG"
@@ -1516,8 +1653,10 @@ KBEOF
 
         if [ "$MODE" = "desktop" ]; then
             echo 86; echo "# Installing Sway compositor..."
+            # swayidle + gtklock: the lock key (Super+L) and lock-on-idle;
+            # wob: the volume/brightness overlay. Same base set as desktop.sh.
             chroot_apt_install_desktop \
-                sway swaybg xwayland fuzzel kitty libnotify-bin
+                sway swaybg swayidle gtklock wob xwayland fuzzel kitty libnotify-bin
 
             # Tebian's sway: Debian's, rebuilt with window snapping (see
             # tebian-build-sway). The build tools go again afterwards. If it
@@ -1643,9 +1782,13 @@ NWGFIX
             mkdir -p "$TARGET/usr/share/backgrounds/tebian"
             cp "$TEBIAN_SRC/assets/wallpapers/glass.jpg" "$TARGET/usr/share/backgrounds/tebian/default.jpg" 2>/dev/null || true
 
-            # GRUB wallpaper
-            if [ -f "$TARGET/etc/default/grub" ]; then
-                echo 'GRUB_BACKGROUND="/usr/share/backgrounds/tebian/default.jpg"' >> "$TARGET/etc/default/grub"
+            # GRUB wallpaper, kept in /boot/grub: on encrypted installs
+            # /usr is inside LUKS, which GRUB can't open, so a path there
+            # gave no background and an error flash at every boot
+            if [ -f "$TARGET/etc/default/grub" ] && [ -f "$TARGET/usr/share/backgrounds/tebian/default.jpg" ]; then
+                mkdir -p "$TARGET/boot/grub"
+                cp "$TARGET/usr/share/backgrounds/tebian/default.jpg" "$TARGET/boot/grub/tebian-background.jpg"
+                echo 'GRUB_BACKGROUND="/boot/grub/tebian-background.jpg"' >> "$TARGET/etc/default/grub"
             fi
 
             chroot "$TARGET" systemctl enable greetd >> "$INSTALL_LOG" 2>&1
@@ -1708,16 +1851,25 @@ DIAGSVC
             mkdir -p "$user_home/.config/sway"
             cp "$TEBIAN_SRC/configs/sway/config" "$user_home/.config/sway/config"
             cp "$TEBIAN_SRC/configs/themes/glass/sway-theme" "$user_home/.config/sway/theme"
-            touch "$user_home/.config/sway/config.user"
+            # The shipped config.user carries the lock key (Super+L), Super+W,
+            # workspace keys and the power-button menu — install.sh's path
+            # (desktop.sh) copies it, this one used to start empty. Minus the
+            # Settings-managed "# tebian:NAME {...}" blocks (floating mode,
+            # title bars): those are the Desktop choice made at first login,
+            # and Base mode must not get them.
+            if [ -f "$TEBIAN_SRC/configs/sway/config.user" ]; then
+                awk '/^# tebian:[a-z-]+ \{$/ { skip = 1; next } /^# tebian:[a-z-]+ \}$/ { skip = 0; next } !skip' \
+                    "$TEBIAN_SRC/configs/sway/config.user" > "$user_home/.config/sway/config.user"
+            else
+                touch "$user_home/.config/sway/config.user"
+            fi
 
-            # Pre-seed keyboard layout
+            # Pre-seed keyboard layout. One line, the form Settings > Keyboard
+            # finds and replaces (it can't see inside a { } block). The login
+            # screen reads /etc/default/keyboard, written above.
             if [ "$KB_LAYOUT" != "us" ]; then
-                cat >> "$user_home/.config/sway/config.user" << KBSWAY
-# Keyboard layout (set by installer)
-input type:keyboard {
-    xkb_layout $KB_LAYOUT
-}
-KBSWAY
+                printf '\n# Keyboard layout (set by installer)\ninput type:keyboard xkb_layout %s\n' "$KB_LAYOUT" \
+                    >> "$user_home/.config/sway/config.user"
             fi
             sanitize_sway_configs_for_user "$user_home"
             # Checksum of the config as installed: tebian-update replaces it
@@ -1910,6 +2062,20 @@ STEAMEOF
         chroot "$TARGET" update-initramfs -u -k all >> "$INSTALL_LOG" 2>&1
         chroot "$TARGET" update-grub >> "$INSTALL_LOG" 2>&1
 
+        # A hidden, zero-second menu is only right when Tebian is the only
+        # system. DUAL_BOOT covers "alongside"; a manual install next to
+        # Windows, or Windows on another disk, is only known once os-prober
+        # has looked — and with the menu hidden, Windows looked deleted.
+        local grub_cfg probed
+        grub_cfg=$(cat "$TARGET/boot/grub/grub.cfg")
+        probed=$(sed -n '/^### BEGIN \/etc\/grub.d\/30_os-prober ###$/,/^### END \/etc\/grub.d\/30_os-prober ###$/p' <<< "$grub_cfg")
+        if grep -Eq '^(menuentry|submenu) ' <<< "$probed" &&
+           grep -q '^GRUB_TIMEOUT=0$' "$TARGET/etc/default/grub"; then
+            echo "os-prober found another system — showing the boot menu" >> "$INSTALL_LOG"
+            sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$TARGET/etc/default/grub"
+            chroot "$TARGET" update-grub >> "$INSTALL_LOG" 2>&1
+        fi
+
         echo 98; echo "# Final cleanup..."
         chroot_apt_clean
 
@@ -1944,26 +2110,71 @@ STEAMEOF
 }
 
 # ── Cleanup ──
+# Failures go to the log instead of /dev/null: a target left busy keeps the
+# LUKS mapping open, and main() then explains why it can't start over.
 cleanup() {
     # Unmount efivars first (bind mount inside /sys won't unmount with -R reliably)
     umount "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
-    umount -R "$TARGET" 2>/dev/null || true
+    if mountpoint -q "$TARGET" 2>/dev/null; then
+        umount -R "$TARGET" 2>>"$INSTALL_LOG" || echo "cleanup: could not unmount $TARGET" >> "$INSTALL_LOG"
+    fi
     # By mapping, not $ENCRYPT: a failure mid-partitioning can leave the
     # volume open before ENCRYPT is set
-    [ -e "/dev/mapper/$CRYPT_NAME" ] && cryptsetup close "$CRYPT_NAME" 2>/dev/null || true
+    if [ -e "/dev/mapper/$CRYPT_NAME" ]; then
+        cryptsetup close "$CRYPT_NAME" 2>>"$INSTALL_LOG" || echo "cleanup: could not close $CRYPT_NAME" >> "$INSTALL_LOG"
+    fi
+    return 0
+}
+
+# One installer at a time. Every console login on the live session starts
+# one, so a second copy opened on tty2 (say, to read the log) and then
+# cancelled used to run its exit cleanup against the install in progress —
+# unmounting its target mid-apt. A PID file rather than flock (the
+# tebian-settings pattern): a lock fd is inherited by everything started in
+# the chroot and could outlive the installer.
+LOCK_FILE=/run/tebian-installer.pid
+acquire_lock() {
+    local pid
+    if ! ( set -o noclobber; echo $$ > "$LOCK_FILE" ) 2>/dev/null; then
+        pid=$(cat "$LOCK_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+           grep -qa tebian-installer "/proc/$pid/cmdline" 2>/dev/null; then
+            echo ""
+            echo "  The installer is already running on another console."
+            echo "  Follow it with: sudo tail -f $INSTALL_LOG"
+            echo ""
+            exit 0
+        fi
+        # Left behind by an installer that was killed — take it over
+        echo $$ > "$LOCK_FILE"
+    fi
 }
 
 # ── Main (step-based with back navigation) ──
 main() {
-    trap cleanup EXIT
-
     # Must be root
     if [ "$(id -u)" -ne 0 ]; then
-        die "The installer must be run as root.\n\nRun: sudo tebian-installer"
+        echo "The installer must be run as root. Run: sudo tebian-installer" >&2
+        exit 1
     fi
+
+    # Lock before anything else: the log and the mounts belong to whichever
+    # installer holds it, so only that one may truncate or clean them up
+    acquire_lock
+    trap 'cleanup; rm -f "$LOCK_FILE"' EXIT
 
     echo "=== Tebian Install $(date) ===" > "$INSTALL_LOG"
     chmod 600 "$INSTALL_LOG"
+
+    # A failed attempt can leave the target mounted or the LUKS mapping
+    # open (cleanup can't unmount a busy filesystem), and every retry then
+    # died at cryptsetup with a vague "already exists". This is the only
+    # installer running, so tidying up is safe — and if it doesn't work,
+    # say so plainly now rather than fail after the disk is touched.
+    cleanup
+    if [ -n "$(findmnt -rno TARGET | grep -F "$TARGET" || true)" ] || [ -e "/dev/mapper/$CRYPT_NAME" ]; then
+        die "An earlier install attempt left ${TARGET} mounted or the\nencrypted volume open, and it can't be released.\n\nReboot the live USB, then run the installer again."
+    fi
 
     local fwcfg=/sys/firmware/qemu_fw_cfg/by_name/opt/org.tebian/answers/raw
     if [ "${1:-}" = "--answers" ]; then
