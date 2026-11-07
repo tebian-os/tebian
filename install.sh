@@ -271,8 +271,10 @@ elif [ -d "$TEBIAN_DIR" ]; then
         *) echo "  Cancelled."; exit 0 ;;
     esac
     if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ] &&
-       git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
-        # Fleet or dev clone: tebian-update pulls it
+       { git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 ||
+         [ -n "$(git -C "$TEBIAN_DIR" remote 2>/dev/null)" ]; }; then
+        # Fleet or dev clone: tebian-update pulls it (or, with a remote but
+        # no upstream, stops and says so rather than replace a pinned fleet)
         bash "$TEBIAN_DIR/scripts/tebian-update" || exit 1
     else
         # The downloaded release's own tebian-update does the work: the

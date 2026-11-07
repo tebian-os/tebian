@@ -218,11 +218,17 @@ if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ] ||
    [ -f /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf ]; then
     sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf \
                /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf
-    sudo systemctl disable --now systemd-resolved 2>/dev/null
-    if [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf | grep -q '/systemd/resolve/'; then
-        sudo rm -f /etc/resolv.conf
+    # Without NetworkManager nothing would write a new resolv.conf: keep
+    # resolved (now using the network's own DNS) instead of leaving none
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        sudo systemctl disable --now systemd-resolved 2>/dev/null
+        if [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf | grep -q '/systemd/resolve/'; then
+            sudo rm -f /etc/resolv.conf
+        fi
+        sudo systemctl restart NetworkManager 2>/dev/null
+    else
+        sudo systemctl restart systemd-resolved 2>/dev/null
     fi
-    sudo systemctl restart NetworkManager 2>/dev/null
     step "DNS-over-TLS removed"
 fi
 

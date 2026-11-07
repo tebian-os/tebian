@@ -169,10 +169,23 @@ ssh_keyonly_on() {
     printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nX11Forwarding no\n' |
         sudo tee "$SSH_KEYONLY" >/dev/null
     sudo rm -f "$SSH_KEYONLY_OLD"
-    ssh_reload
     if ! command -v sshd >/dev/null && [ ! -x /usr/sbin/sshd ]; then
         log_info "SSH set to key-only authentication (applies once openssh-server is installed)"
-    elif [ "$(sshd_password_auth)" = no ]; then
+        return 0
+    fi
+    # The 00- file is read first and wins, so it can make someone's own
+    # setup invalid (e.g. AuthenticationMethods needing keyboard-interactive
+    # for 2FA). A reload then fails quietly and the running sshd carries on,
+    # but sshd would refuse to start at the next boot: a headless machine
+    # would be locked out. Check first and back out if sshd rejects it.
+    if ! sudo sshd -t 2>/dev/null; then
+        sudo rm -f "$SSH_KEYONLY"
+        log_warn "SSH left as it was: key-only conflicts with your sshd settings."
+        log_warn "To see why, test it by hand: sudo sshd -t"
+        return 1
+    fi
+    ssh_reload
+    if [ "$(sshd_password_auth)" = no ]; then
         log_info "SSH set to key-only authentication"
     else
         log_warn "SSH still accepts passwords — another file in /etc/ssh overrides it."
@@ -365,8 +378,10 @@ toggle_dns_on() {
     # NetworkManager hands each connection's DNS to resolved instead of
     # writing resolv.conf itself
     printf '[main]\ndns=systemd-resolved\n' | sudo tee "$NM_DNS_CONF" >/dev/null
-    sudo systemctl enable systemd-resolved
-    sudo systemctl restart systemd-resolved
+    # Failures here are caught by the check below, which rolls back; under
+    # set -e they would exit with the NetworkManager conf already written
+    sudo systemctl enable systemd-resolved || true
+    sudo systemctl restart systemd-resolved || true
 
     # Only repoint resolv.conf once resolved is demonstrably up
     if ! systemctl is-active --quiet systemd-resolved || [ ! -f /run/systemd/resolve/stub-resolv.conf ]; then
@@ -391,6 +406,16 @@ toggle_dns_on() {
 toggle_dns_off() {
     log_info "Disabling DNS-over-TLS..."
     sudo rm -f "$DNS_CONF" "$NM_DNS_CONF"
+    # Without NetworkManager (a server or minimal image on systemd-networkd)
+    # nothing would write a new resolv.conf: keep resolved, now with the
+    # network's own DNS, rather than leave the machine with none at all
+    if ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+            sudo systemctl restart systemd-resolved || true
+        fi
+        log_info "DNS-over-TLS disabled (using your network's DNS)"
+        return 0
+    fi
     sudo systemctl disable --now systemd-resolved 2>/dev/null || true
     # Only a symlink into systemd-resolved: a regular file here is already
     # someone else's (NetworkManager's or the admin's)
@@ -405,6 +430,14 @@ toggle_dns_off() {
 
 enable_transparent_tor() {
     log_info "Enabling TRANSPARENT Tor (all traffic forced through Tor)..."
+    # Everything not going through Tor is cut the moment the rules load,
+    # open connections included: say so while it's still possible to stop
+    local vpn
+    vpn=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(tailscale|wg|tun)/ {print $2}' | tr '\n' ' ')
+    if [ -n "$vpn" ]; then
+        log_warn "VPN interface(s) up: ${vpn% } — they stop working under transparent Tor."
+        [ -n "${SSH_CONNECTION:-}" ] && log_warn "You are connected over SSH: if that's through the VPN, this session will drop."
+    fi
     sudo apt install -y tor iptables
 
     # Configure Tor for transparent proxy
@@ -422,17 +455,19 @@ EOF
     sudo systemctl enable --now tor
 
     # iptables rules to redirect all traffic through Tor
-    local tor_uid ntp_uid=""
+    local tor_uid
     tor_uid=$(id -u debian-tor 2>/dev/null || id -u tor 2>/dev/null) || {
         log_error "Could not find Tor user UID"
         return 1
     }
-    # Tor refuses to connect with a clock that's far off. Boards without a
-    # real-time clock (Raspberry Pi) boot with the last shutdown's time, so
-    # there the clock service may still reach NTP directly — its own user
-    # only, and only NTP. Machines with an RTC keep NTP blocked.
-    if [ ! -e /dev/rtc0 ] && id -u systemd-timesync >/dev/null 2>&1; then
-        ntp_uid=$(id -u systemd-timesync)
+    # Tor refuses to connect with a clock that's far off, and NTP can't get
+    # out (an exception wouldn't help: the NTP server's name is looked up
+    # through Tor too). Boards without a clock battery (Raspberry Pi) boot
+    # with the last shutdown's time, so after days off they stay offline
+    # until the clock is set by hand. Fail-closed is the point of this mode.
+    if [ ! -e /dev/rtc0 ]; then
+        log_warn "No hardware clock: after a long power-off, Tor may not connect until"
+        log_warn "the time is set by hand (sudo date -s 'YYYY-MM-DD HH:MM')."
     fi
 
     # Rules from before this rewrite lived directly in OUTPUT; clear them so
@@ -453,7 +488,6 @@ EOF
 # Tebian transparent Tor rules — generated by modules/core/security.sh.
 # Usage: $TOR_RULES [start|stop]
 TOR_UID=$tor_uid
-NTP_UID=$ntp_uid
 LAN="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16"
 
 remove() {
@@ -496,7 +530,6 @@ iptables -w -A TEBIAN_TOR -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REP
 iptables -w -A TEBIAN_TOR -o lo -j ACCEPT
 iptables -w -A TEBIAN_TOR -m owner --uid-owner \$TOR_UID -j ACCEPT
 iptables -w -A TEBIAN_TOR -p udp --sport 68 --dport 67 -j ACCEPT
-[ -n "\$NTP_UID" ] && iptables -w -A TEBIAN_TOR -p udp --dport 123 -m owner --uid-owner \$NTP_UID -j ACCEPT
 # DNS over TCP to a LAN resolver would be forwarded upstream in the clear
 iptables -w -A TEBIAN_TOR -p tcp --dport 53 -j REJECT
 for net in \$LAN; do iptables -w -A TEBIAN_TOR -d \$net -j ACCEPT; done

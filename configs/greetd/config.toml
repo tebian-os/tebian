@@ -12,12 +12,8 @@ vt = 7
 # dpkg-reconfigure keyboard-configuration) goes in through XKB_DEFAULT_*,
 # which sway uses when its config sets no layout. Only non-empty values are
 # exported — an empty XKB_DEFAULT_LAYOUT is not the same as unset.
-command = '''sh -c '
-if [ -r /etc/default/keyboard ]; then . /etc/default/keyboard; fi
-[ -n "${XKBMODEL:-}" ] && export XKB_DEFAULT_MODEL="$XKBMODEL"
-[ -n "${XKBLAYOUT:-}" ] && export XKB_DEFAULT_LAYOUT="$XKBLAYOUT"
-[ -n "${XKBVARIANT:-}" ] && export XKB_DEFAULT_VARIANT="$XKBVARIANT"
-[ -n "${XKBOPTIONS:-}" ] && export XKB_DEFAULT_OPTIONS="$XKBOPTIONS"
-exec sway $([ -d /sys/module/nvidia ] && echo --unsupported-gpu) --config /etc/nwg-hello/sway-config'
-'''
+# greetd's own config parser (0.10) takes no multi-line strings and no
+# escaped quotes, so this stays one line with no " inside: ${VAR:+...}
+# expands to nothing when the value is empty.
+command = "sh -c 'if [ -r /etc/default/keyboard ]; then . /etc/default/keyboard; fi; export ${XKBMODEL:+XKB_DEFAULT_MODEL=$XKBMODEL} ${XKBLAYOUT:+XKB_DEFAULT_LAYOUT=$XKBLAYOUT} ${XKBVARIANT:+XKB_DEFAULT_VARIANT=$XKBVARIANT} ${XKBOPTIONS:+XKB_DEFAULT_OPTIONS=$XKBOPTIONS} >/dev/null; exec sway $([ -d /sys/module/nvidia ] && echo --unsupported-gpu) --config /etc/nwg-hello/sway-config'"
 user = "greeter"

@@ -73,6 +73,20 @@ if command -v dpkg >/dev/null; then
     fi
 fi
 
+# 4b. greetd's own config parser is stricter than TOML (no multi-line
+#     strings): a file it can't read means no login screen at all. greetd
+#     stops later on (no greeter user here) — only parse errors count.
+if command -v greetd >/dev/null; then
+    out=$(timeout 5 greetd -c configs/greetd/config.toml 2>&1 || true)
+    if grep -qiE 'configuration error|unable to read|expected' <<< "$out"; then
+        fail "greetd can't parse configs/greetd/config.toml:"; echo "$out" | head -3
+    else
+        pass "greetd parses configs/greetd/config.toml"
+    fi
+else
+    echo -e "${YELLOW}!${NC} greetd not installed — login-screen config not checked"
+fi
+
 # 5. Nothing that doesn't belong to users may ship: scratch notes and TODO
 #    files in the tree are rsync'd straight into the ISO.
 stray=$(git ls-files | grep -iE '(^|/)(TODO|NOTES|scratch)[^/]*$|(^|/)CLAUDE\.md$' || true)

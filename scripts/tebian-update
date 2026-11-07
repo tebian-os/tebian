@@ -194,6 +194,11 @@ if [ -d "$TEBIAN_DIR/.git" ]; then
     command -v git >/dev/null || fail "$TEBIAN_DIR is a git checkout but git isn't installed."
     if git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
         GIT_MODE=1
+    elif [ -n "$(git -C "$TEBIAN_DIR" remote 2>/dev/null)" ]; then
+        # Has a remote but no upstream (a fleet clone parked on a tag, a
+        # detached HEAD): pouring the public release over it would silently
+        # replace what the fleet pinned
+        fail "$TEBIAN_DIR has a git remote but this branch tracks none — check out a branch (git -C $TEBIAN_DIR switch main) or set its upstream, then run tebian-update again."
     elif [ -z "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
         warn "$TEBIAN_DIR/.git tracks no remote, so updating from releases instead."
         warn "Its history is left as it is (files Tebian updates will show as changed there)."
@@ -419,8 +424,9 @@ fi
 # Older Tebian forced Mojang's minecraft-launcher .deb past an unmet
 # dependency and held it, which leaves apt refusing every install and
 # upgrade (the steps below included). Purged only while apt is actually
-# broken; worlds and settings in ~/.minecraft are not touched.
-if dpkg-query -W minecraft-launcher >/dev/null 2>&1 && ! apt-get check >/dev/null 2>&1; then
+# broken (-s: a plain check wants the dpkg lock, so as a user it always
+# fails); worlds and settings in ~/.minecraft are not touched.
+if dpkg-query -W minecraft-launcher >/dev/null 2>&1 && ! apt-get -s check >/dev/null 2>&1; then
     info "Removing the old Minecraft package that blocks apt..."
     if sudo -v; then
         sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1 || true
@@ -489,6 +495,32 @@ if dpkg-query -W -f='${Status}' bluez 2>/dev/null | grep -q "ok installed"; then
     if [ -n "${WAYLAND_DISPLAY:-}" ]; then
         # shellcheck disable=SC1091
         ( . "$LOCAL_BIN/tebian-common" && tebian_bt_agent_start restart ) >/dev/null 2>&1 || true
+    fi
+fi
+
+# --- 3a''. Screen lock ----------------------------------------------------------
+# Locking on suspend lives in swayidle (before-sleep → gtklock). Installs from
+# older ISOs got neither, and Debian's sway doesn't pull them in, so those
+# machines resumed straight into an unlocked desktop
+if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
+    LOCK_MISSING=()
+    for pkg in swayidle gtklock; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed" || LOCK_MISSING+=("$pkg")
+    done
+    if [ ${#LOCK_MISSING[@]} -gt 0 ]; then
+        info "Screen lock: installing ${LOCK_MISSING[*]}"
+        if sudo -v; then
+            if sudo apt-get install -y "${LOCK_MISSING[@]}"; then
+                if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+                    # shellcheck disable=SC1091
+                    ( . "$LOCAL_BIN/tebian-common" && tebian_idle_start ) >/dev/null 2>&1 || true
+                fi
+            else
+                warn "Could not install ${LOCK_MISSING[*]} — the screen won't lock on suspend"
+            fi
+        else
+            warn "No sudo — skipped installing ${LOCK_MISSING[*]}. Run tebian-update in a terminal."
+        fi
     fi
 fi
 
