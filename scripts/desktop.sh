@@ -74,6 +74,7 @@ PACKAGES=(
     sway swaybg swayidle gtklock
     fuzzel
     kitty
+    jq
     pipewire-audio libspa-0.2-libcamera
     fonts-noto-core fonts-noto-color-emoji fonts-jetbrains-mono
     network-manager
@@ -155,6 +156,24 @@ mkdir -p "$HOME/Archive"
 log_info "Setting up configs..."
 
 mkdir -p "$CONFIG_DIR"
+STATE_DIR="$HOME/.local/share/tebian"
+SWAY_REC="$STATE_DIR/sway-config.sha256"
+# This runs again on a Repair (install.sh on an installed machine). Tebian
+# has set up this home before exactly when it recorded the sway config's
+# checksum; then the theme and terminal/launcher configs are the user's
+# (tebian-rebuild re-applies their theme afterwards) and stay as they are.
+REINSTALL=false
+[ -f "$SWAY_REC" ] && REINSTALL=true
+
+# Put Tebian's copy of a config in place. On a first install, a config the
+# user already had is kept as <file>.pre-tebian (uninstall points to it).
+install_config() {  # <src> <dst>
+    if [ -f "$2" ] && ! cmp -s "$1" "$2"; then
+        $REINSTALL && return 0
+        [ -e "$2.pre-tebian" ] || cp -p "$2" "$2.pre-tebian"
+    fi
+    cp "$1" "$2"
+}
 
 # Default bar stats to OFF (user can enable in Settings > Screen > Bar Stats)
 mkdir -p "$CONFIG_DIR/tebian"
@@ -166,16 +185,29 @@ if [ ! -f "$TEBIAN_DIR/configs/sway/config" ]; then
     log_error "Sway config not found at $TEBIAN_DIR/configs/sway/config"
     exit 1
 fi
-cp "$TEBIAN_DIR/configs/sway/config" "$CONFIG_DIR/sway/config"
-# Lets tebian-update replace it later while it's still unedited
-mkdir -p "$HOME/.local/share/tebian"
-sha256sum "$CONFIG_DIR/sway/config" | awk '{ print $1 }' > "$HOME/.local/share/tebian/sway-config.sha256"
+SWAY_CUR="$CONFIG_DIR/sway/config"
+mkdir -p "$STATE_DIR"
+if $REINSTALL && [ -f "$SWAY_CUR" ] && ! cmp -s "$TEBIAN_DIR/configs/sway/config" "$SWAY_CUR" &&
+   [ "$(cat "$SWAY_REC")" != "$(sha256sum "$SWAY_CUR" | awk '{ print $1 }')" ]; then
+    # Edited since Tebian installed it: same rule as tebian-update
+    cp "$TEBIAN_DIR/configs/sway/config" "$SWAY_CUR.tebian-new"
+    log_info "Your sway config has local changes and was kept; the default is in $SWAY_CUR.tebian-new"
+else
+    if $REINSTALL; then
+        cp "$TEBIAN_DIR/configs/sway/config" "$SWAY_CUR"
+    else
+        install_config "$TEBIAN_DIR/configs/sway/config" "$SWAY_CUR"
+    fi
+    # Lets tebian-update replace it later while it's still unedited
+    sha256sum "$SWAY_CUR" | awk '{ print $1 }' > "$SWAY_REC"
+fi
 
 if [ ! -f "$TEBIAN_DIR/configs/themes/glass/sway-theme" ]; then
     log_error "Glass theme not found"
     exit 1
 fi
-cp "$TEBIAN_DIR/configs/themes/glass/sway-theme" "$CONFIG_DIR/sway/theme"
+$REINSTALL && [ -f "$CONFIG_DIR/sway/theme" ] ||
+    cp "$TEBIAN_DIR/configs/themes/glass/sway-theme" "$CONFIG_DIR/sway/theme"
 
 # config.user - preserve if exists
 if [ ! -f "$CONFIG_DIR/sway/config.user" ]; then
@@ -195,11 +227,11 @@ sed -i '/^[[:space:]]*output[[:space:]]\+eDP[[:alnum:]_.:-]*\([[:space:]].*\)\?$
 
 # Kitty
 mkdir -p "$CONFIG_DIR/kitty"
-cp "$TEBIAN_DIR/configs/themes/glass/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
+install_config "$TEBIAN_DIR/configs/themes/glass/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
 
 # Fuzzel
 mkdir -p "$CONFIG_DIR/fuzzel"
-cp "$TEBIAN_DIR/configs/themes/glass/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
+install_config "$TEBIAN_DIR/configs/themes/glass/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
 
 # Environment variables (QT theming, etc)
 mkdir -p "$CONFIG_DIR/environment.d"
@@ -371,15 +403,27 @@ if [ -f /etc/default/grub ]; then
     sudo update-grub 2>/dev/null || true
 fi
 
-# Apply security profile from manifest (or default to standard)
+# Apply the security profile: tebian.conf's default, or the one this
+# machine chose in Settings (machine.conf). Skipped when that profile is
+# already what's applied — Settings records "hardened" once kernel
+# hardening is on, and re-running the whole profile would add parts the
+# user never picked, such as key-only SSH. Same rule as tebian-rebuild.
 SECURITY_SCRIPT="$TEBIAN_DIR/modules/core/security.sh"
+SECURITY_APPLIED="$STATE_DIR/security-applied"
 if [ -f "$SECURITY_SCRIPT" ]; then
     SECURITY_PROFILE="standard"
-    if [ -f "$TEBIAN_DIR/tebian.conf" ]; then
-        source "$TEBIAN_DIR/tebian.conf"
+    # shellcheck disable=SC1091
+    [ -f "$TEBIAN_DIR/tebian.conf" ] && source "$TEBIAN_DIR/tebian.conf"
+    # shellcheck disable=SC1091
+    [ -f "$CONFIG_DIR/tebian/machine.conf" ] && source "$CONFIG_DIR/tebian/machine.conf"
+    SECURITY_PROFILE="${SECURITY_PROFILE:-standard}"
+    if [ "$(cat "$SECURITY_APPLIED" 2>/dev/null)" = "$SECURITY_PROFILE" ]; then
+        log_info "Security profile unchanged ($SECURITY_PROFILE) — not re-applied"
+    else
+        log_info "Applying security profile: $SECURITY_PROFILE"
+        bash "$SECURITY_SCRIPT" "$SECURITY_PROFILE"
+        echo "$SECURITY_PROFILE" > "$SECURITY_APPLIED"
     fi
-    log_info "Applying security profile: ${SECURITY_PROFILE:-standard}"
-    bash "$SECURITY_SCRIPT" "${SECURITY_PROFILE:-standard}"
 fi
 
 echo ""

@@ -1,9 +1,12 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN REBUILD
-# Reads tebian.conf and applies declared state. Idempotent.
-# tebian.conf is the source of truth: Settings records theme and security
-# profile changes there, so re-applying it restores what the user chose.
+# Applies the declared state. Idempotent.
+#   ~/Tebian/tebian.conf            defaults (or a fleet's manifest, in git)
+#   ~/.config/tebian/machine.conf   this machine's choices, recorded by
+#                                   Settings (theme, security profile, Tor,
+#                                   DNS privacy) — wins over tebian.conf
+# Re-applying them restores what the user chose, never Tebian's defaults.
 # Usage: tebian-rebuild
 # ==============================================================================
 
@@ -11,6 +14,8 @@ set -euo pipefail
 
 TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
 CONF="$TEBIAN_DIR/tebian.conf"
+MACHINE_CONF="$HOME/.config/tebian/machine.conf"
+STATE_DIR="$HOME/.local/share/tebian"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -21,14 +26,27 @@ log_info() { echo -e "${GREEN}[rebuild]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[rebuild]${NC} $1"; }
 log_error() { echo -e "${RED}[rebuild]${NC} $1" >&2; }
 
-if [ ! -f "$CONF" ]; then
+if [ ! -f "$CONF" ] && [ ! -f "$MACHINE_CONF" ]; then
     log_error "Manifest not found: $CONF"
     echo "Restore the default with: tebian-update (or copy tebian.conf from the Tebian source)"
     exit 1
 fi
 
-# Source manifest
-source "$CONF"
+# Defaults for the lists, so a manifest that leaves one out still works
+EXTRA_PACKAGES=() ENABLE_SERVICES=() DISABLE_SERVICES=()
+# shellcheck disable=SC1090
+[ -f "$CONF" ] && source "$CONF"
+# shellcheck disable=SC1090
+[ -f "$MACHINE_CONF" ] && source "$MACHINE_CONF"
+
+# Files about to be replaced that differ from what replaces them are kept
+# here first — a rebuild is one click away in Settings
+BACKUP_DIR="$STATE_DIR/backups/rebuild-$(date +%Y%m%d-%H%M%S)"
+keep_copy() {  # <file about to be replaced> <its replacement>
+    [ -f "$1" ] && ! cmp -s "$1" "$2" || return 0
+    mkdir -p "$BACKUP_DIR"
+    cp -p "$1" "$BACKUP_DIR/$(basename "$(dirname "$1")")-$(basename "$1")"
+}
 
 echo ""
 echo "  ┌─────────────────────┐"
@@ -48,10 +66,23 @@ CONFIG_DIR="$HOME/.config"
 LOCAL_BIN="$HOME/.local/bin"
 
 if [ -d "$TEBIAN_DIR/configs/sway" ]; then
-    mkdir -p "$CONFIG_DIR/sway"
-    cp "$TEBIAN_DIR/configs/sway/config" "$CONFIG_DIR/sway/config"
-    mkdir -p "$HOME/.local/share/tebian"
-    sha256sum "$CONFIG_DIR/sway/config" | awk '{ print $1 }' > "$HOME/.local/share/tebian/sway-config.sha256"
+    mkdir -p "$CONFIG_DIR/sway" "$STATE_DIR"
+    # Same rule as tebian-update: Tebian's file is replaced only while it is
+    # what Tebian last installed (recorded checksum); an edited one is kept
+    # and the default saved next to it
+    SWAY_NEW="$TEBIAN_DIR/configs/sway/config"
+    SWAY_CUR="$CONFIG_DIR/sway/config"
+    SWAY_REC="$STATE_DIR/sway-config.sha256"
+    if [ ! -f "$SWAY_CUR" ] || cmp -s "$SWAY_NEW" "$SWAY_CUR" ||
+       [ "$(cat "$SWAY_REC" 2>/dev/null)" = "$(sha256sum "$SWAY_CUR" | awk '{ print $1 }')" ]; then
+        cp "$SWAY_NEW" "$SWAY_CUR"
+        sha256sum "$SWAY_CUR" | awk '{ print $1 }' > "$SWAY_REC"
+        rm -f "$SWAY_CUR.tebian-new"
+    else
+        cp "$SWAY_NEW" "$SWAY_CUR.tebian-new"
+        log_warn "Your ~/.config/sway/config has local changes, so it was kept."
+        log_warn "The default is in ~/.config/sway/config.tebian-new (personal settings belong in config.user)."
+    fi
     # Preserve config.user (never overwrite user customizations)
     if [ ! -f "$CONFIG_DIR/sway/config.user" ]; then
         if [ -f "$TEBIAN_DIR/configs/sway/config.user" ]; then
@@ -79,6 +110,7 @@ if [ -d "$THEME_DIR" ]; then
     if [ -f "$THEME_DIR/kitty.conf" ]; then
         mkdir -p "$CONFIG_DIR/kitty"
         kitty_font=$(grep -E '^(font_family|font_size)[[:space:]]' "$CONFIG_DIR/kitty/kitty.conf" 2>/dev/null || true)
+        keep_copy "$CONFIG_DIR/kitty/kitty.conf" "$THEME_DIR/kitty.conf"
         cp "$THEME_DIR/kitty.conf" "$CONFIG_DIR/kitty/kitty.conf"
         if [ -n "$kitty_font" ]; then
             sed -i -E '/^(font_family|font_size)[[:space:]]/d' "$CONFIG_DIR/kitty/kitty.conf"
@@ -88,6 +120,7 @@ if [ -d "$THEME_DIR" ]; then
     if [ -f "$THEME_DIR/fuzzel.ini" ]; then
         mkdir -p "$CONFIG_DIR/fuzzel"
         fuzzel_font=$(grep -E '^font=' "$CONFIG_DIR/fuzzel/fuzzel.ini" 2>/dev/null | head -1 || true)
+        keep_copy "$CONFIG_DIR/fuzzel/fuzzel.ini" "$THEME_DIR/fuzzel.ini"
         cp "$THEME_DIR/fuzzel.ini" "$CONFIG_DIR/fuzzel/fuzzel.ini"
         if [ -n "$fuzzel_font" ]; then
             # font= belongs to [main]; replace in place when the theme has one
@@ -100,6 +133,7 @@ if [ -d "$THEME_DIR" ]; then
     fi
     if [ -f "$THEME_DIR/mako" ]; then
         mkdir -p "$CONFIG_DIR/mako"
+        keep_copy "$CONFIG_DIR/mako/config" "$THEME_DIR/mako"
         cp "$THEME_DIR/mako" "$CONFIG_DIR/mako/config"
     fi
     log_info "Theme applied: $THEME"
@@ -145,7 +179,7 @@ SECURITY_SCRIPT="$TEBIAN_DIR/modules/core/security.sh"
 # from individual toggles (e.g. "hardened" once kernel hardening is on), and
 # blindly re-running the full profile would add parts the user never chose,
 # such as key-only SSH.
-SECURITY_APPLIED="$HOME/.local/share/tebian/security-applied"
+SECURITY_APPLIED="$STATE_DIR/security-applied"
 if [ -f "$SECURITY_SCRIPT" ] && [ "$(cat "$SECURITY_APPLIED" 2>/dev/null)" = "$SECURITY" ]; then
     log_info "Security profile unchanged ($SECURITY) — not re-applied"
 elif [ -f "$SECURITY_SCRIPT" ]; then
@@ -159,7 +193,7 @@ fi
 # --- 6. Tor toggle ---
 if [ -f "$SECURITY_SCRIPT" ]; then
     if [[ "${ENABLE_TOR:-no}" == "yes" ]]; then
-        bash "$SECURITY_SCRIPT" tor-on
+        systemctl is-active --quiet tor 2>/dev/null || bash "$SECURITY_SCRIPT" tor-on
     elif [[ "$SECURITY" == "paranoid" ]]; then
         # Paranoid routes all traffic through Tor whatever ENABLE_TOR says;
         # stopping it here would cut the machine off the network
@@ -175,7 +209,13 @@ fi
 # --- 7. DNS Privacy toggle ---
 if [ -f "$SECURITY_SCRIPT" ]; then
     if [[ "${ENABLE_DNS_PRIVACY:-no}" == "yes" ]]; then
-        bash "$SECURITY_SCRIPT" dns-on "${DNS_PROVIDER:-quad9}"
+        # Already on with this provider: leave it (dns-on restarts the
+        # resolver and NetworkManager)
+        dns_now=$(grep -o 'cloudflare\|quad9' /etc/systemd/resolved.conf.d/99-tebian-dns.conf 2>/dev/null | head -1 || true)
+        if [ "$dns_now" != "${DNS_PROVIDER:-quad9}" ]; then
+            bash "$SECURITY_SCRIPT" dns-on "${DNS_PROVIDER:-quad9}" ||
+                log_warn "DNS privacy could not be turned on (see above)"
+        fi
     else
         # Only disable if config exists
         if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
@@ -201,4 +241,5 @@ if pgrep -x sway &>/dev/null; then
 fi
 
 echo ""
+[ -d "$BACKUP_DIR" ] && log_info "Replaced theme files saved in $BACKUP_DIR"
 log_info "Rebuild complete!"

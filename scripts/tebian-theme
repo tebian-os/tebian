@@ -159,7 +159,9 @@ CSSEOF
         [ -z "$t_wob_red" ] && t_wob_red="#bf616a"
         [ -n "$t_base" ] && sed -i "s/^background_color = .*/background_color = ${t_base#\#}DD/" "$wob_conf"
         [ -n "$t_wob_accent" ] && sed -i "s/^border_color = .*/border_color = ${t_wob_accent#\#}4D/" "$wob_conf"
-        [ -n "$t_surface" ] && sed -i "s/^bar_color = .*/bar_color = ${t_surface#\#}FF/" "$wob_conf"
+        # The bar in the accent colour: SURFACE0 on BASE is nearly invisible
+        # (contrast about 1.1)
+        [ -n "$t_wob_accent" ] && sed -i "s/^bar_color = .*/bar_color = ${t_wob_accent#\#}FF/" "$wob_conf"
         [ -n "$t_base" ] && sed -i "s/^overflow_background_color = .*/overflow_background_color = ${t_base#\#}DD/" "$wob_conf"
         [ -n "$t_wob_red" ] && sed -i "s/^overflow_border_color = .*/overflow_border_color = ${t_wob_red#\#}80/" "$wob_conf"
         [ -n "$t_wob_red" ] && sed -i "s/^overflow_bar_color = .*/overflow_bar_color = ${t_wob_red#\#}FF/" "$wob_conf"
@@ -191,8 +193,10 @@ CSSEOF
         fi
     fi
 
-    # Record the choice in tebian.conf: tebian-rebuild re-applies the theme
-    # named there, and would otherwise reset it to the default
+    # Record the choice as this machine's (tebian_conf_set writes
+    # ~/.config/tebian/machine.conf, not the shipped tebian.conf):
+    # tebian-rebuild re-applies the theme named there, and would otherwise
+    # reset it to the default
     declare -F tebian_conf_set >/dev/null && tebian_conf_set TEBIAN_THEME "$theme"
 
     # 12. Reload running services

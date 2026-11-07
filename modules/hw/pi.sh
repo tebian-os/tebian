@@ -35,6 +35,12 @@ done
 if [ -z "$CONFIG_TXT" ]; then
     echo "  config.txt not found — skipping (not a Raspberry Pi firmware layout)"
 elif ! grep -q "^[[:space:]]*dtoverlay=vc4-kms-v3d" "$CONFIG_TXT"; then
+    # Lines after a filter section such as [cm4] or [pi4] apply only to that
+    # model; [all] makes the overlay apply to every Pi whatever came before
+    last_section=$(grep -E '^[[:space:]]*\[' "$CONFIG_TXT" | tail -1 | tr -d '[:space:]' || true)
+    if [ -n "$last_section" ] && [ "$last_section" != "[all]" ]; then
+        printf '\n[all]\n' | sudo tee -a "$CONFIG_TXT" >/dev/null
+    fi
     echo "dtoverlay=vc4-kms-v3d" | sudo tee -a "$CONFIG_TXT" >/dev/null
     echo "  Enabled vc4-kms-v3d in $CONFIG_TXT (takes effect after reboot)"
 fi

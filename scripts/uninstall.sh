@@ -34,13 +34,15 @@ echo ""
 echo "  Uninstall Tebian"
 echo ""
 echo "  From your home directory this removes:"
-echo "    - sway, kitty, fuzzel, mako, gtklock, wob configs and Tebian's settings"
+echo "    - sway, kitty, fuzzel, mako, gtklock, wob configs (moved to a backup"
+echo "      folder in your home, not deleted) and Tebian's settings"
 echo "    - Tebian scripts in ~/.local/bin"
 echo "  System-wide it reverts (you'll be asked for your password):"
 echo "    - Tebian's login screen (your previous one is restored if there was one)"
 echo "    - Tebian's helpers in /usr/local, its udev rule and apt hook"
-echo "    - Security profile extras: hardened kernel/SSH settings, browser"
+echo "    - Security profile extras: hardened kernel/SSH settings, app"
 echo "      sandbox links, transparent Tor, MAC randomization, DNS-over-TLS"
+echo "    - Passwordless sudo, if it was turned on in Settings"
 echo ""
 echo "  Your ~/Tebian folder stays (delete it yourself if you like)."
 echo ""
@@ -50,14 +52,32 @@ ask "Continue? [y/N]" || { echo "  Cancelled."; exit 0; }
 echo ""
 echo "  Home directory..."
 
-rm -rf ~/.config/sway ~/.config/kitty ~/.config/fuzzel ~/.config/mako \
-       ~/.config/gtklock ~/.config/wob ~/.config/tebian
+# These folders also hold the user's own files (sway config.user, scripts,
+# themes), so they are moved aside rather than deleted
+CONFIG_BACKUP="$HOME/tebian-configs-$(date +%Y%m%d-%H%M%S)"
+for d in sway kitty fuzzel mako gtklock wob; do
+    [ -e ~/.config/$d ] || continue
+    mkdir -p "$CONFIG_BACKUP"
+    mv ~/.config/$d "$CONFIG_BACKUP/"
+    # Configs the user had before Tebian replaced them (desktop.sh)
+    for pre in "$CONFIG_BACKUP/$d/"*.pre-tebian; do
+        [ -f "$pre" ] || continue
+        mkdir -p ~/.config/$d
+        cp -p "$pre" ~/.config/$d/"$(basename "${pre%.pre-tebian}")"
+        step "Your pre-Tebian ~/.config/$d/$(basename "${pre%.pre-tebian}") is back"
+    done
+done
+rm -rf ~/.config/tebian
 rm -f ~/.config/tebian-onboarded
 rm -f ~/.config/environment.d/tebian-*.conf
 rm -f ~/.config/fontconfig/conf.d/50-tebian-font-rendering.conf
 rm -f ~/.config/xdg-desktop-portal/sway-portals.conf
 rm -rf ~/.local/share/tebian
-step "Configs removed"
+if [ -d "$CONFIG_BACKUP" ]; then
+    step "Configs moved to ${CONFIG_BACKUP/#$HOME/~}"
+else
+    step "Configs removed"
+fi
 
 # Scripts: everything the Tebian tree ships, plus the naming patterns in case
 # the tree is gone. tebian-settings.d is a directory — rm -f alone fails on it.
@@ -143,7 +163,9 @@ fi
 
 # Tebian's sway build (tebian-build-sway): back to Debian's own package,
 # the newest version Debian's archive has that isn't a Tebian build
-if dpkg-query -W -f='${Version}' sway 2>/dev/null | grep -q '+tebian'; then
+# (+tebianN builds before 3.5, +0tebianN since)
+sway_ver=$(dpkg-query -W -f='${Version}' sway 2>/dev/null || true)
+if [[ "$sway_ver" =~ \+0?tebian ]]; then
     debian_sway=$(apt-cache madison sway 2>/dev/null | awk -F'|' '$2 !~ /tebian/ { gsub(/ /, "", $2); print $2; exit }')
     if [ -n "$debian_sway" ] && sudo apt-get install -y --allow-downgrades "sway=$debian_sway" >/dev/null; then
         step "Sway: Debian's package restored ($debian_sway)"
@@ -152,10 +174,12 @@ if dpkg-query -W -f='${Version}' sway 2>/dev/null | grep -q '+tebian'; then
     fi
 fi
 
-# Firejail links: only /usr/local/bin entries that point at firejail
-for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable; do
-    if [ -L "/usr/local/bin/$bin" ] && readlink "/usr/local/bin/$bin" | grep -q firejail; then
-        sudo rm -f "/usr/local/bin/$bin"
+# Firejail links: every /usr/local/bin entry that points at firejail —
+# Settings sandboxes mail and chat apps too, and a link left behind breaks
+# that app once firejail is removed
+for link in /usr/local/bin/*; do
+    if [ -L "$link" ] && [[ "$(readlink "$link")" == */firejail ]]; then
+        sudo rm -f "$link"
     fi
 done
 
@@ -173,12 +197,14 @@ fi
 
 # Kernel and SSH drop-ins (hardened profile, and the old core module)
 changed_sysctl=""
-for f in /etc/sysctl.d/99-tebian-hardening.conf /etc/sysctl.d/99-tebian.conf; do
+for f in /etc/sysctl.d/99-tebian-hardening.conf /etc/sysctl.d/99-tebian.conf \
+         /etc/sysctl.d/99-tebian-mem.conf; do
     [ -f "$f" ] && { sudo rm -f "$f"; changed_sysctl=1; }
 done
 [ -n "$changed_sysctl" ] && step "Hardened kernel settings removed (defaults return after reboot)"
 changed_ssh=""
-for f in /etc/ssh/sshd_config.d/99-tebian-keyonly.conf /etc/ssh/sshd_config.d/99-tebian.conf; do
+for f in /etc/ssh/sshd_config.d/00-tebian-keyonly.conf /etc/ssh/sshd_config.d/99-tebian-keyonly.conf \
+         /etc/ssh/sshd_config.d/99-tebian.conf; do
     [ -f "$f" ] && { sudo rm -f "$f"; changed_ssh=1; }
 done
 if [ -n "$changed_ssh" ]; then
@@ -186,14 +212,30 @@ if [ -n "$changed_ssh" ]; then
     step "SSH settings back to Debian defaults"
 fi
 
-if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
-    sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf
-    sudo systemctl restart systemd-resolved 2>/dev/null
+# DNS-over-TLS: undone the way Settings undoes it — resolv.conf goes back
+# to NetworkManager
+if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ] ||
+   [ -f /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf ]; then
+    sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf \
+               /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf
+    sudo systemctl disable --now systemd-resolved 2>/dev/null
+    if [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf | grep -q '/systemd/resolve/'; then
+        sudo rm -f /etc/resolv.conf
+    fi
+    sudo systemctl restart NetworkManager 2>/dev/null
     step "DNS-over-TLS removed"
 fi
-if [ -f /etc/NetworkManager/conf.d/99-tebian-mac-random.conf ]; then
-    sudo rm -f /etc/NetworkManager/conf.d/99-tebian-mac-random.conf
-    note "MAC randomization removed — takes effect when NetworkManager restarts (next boot)"
+
+# Nouveau blacklist from Settings → Graphics Drivers. Only without an
+# Nvidia driver installed: with one, nouveau must stay off
+if [ -f /etc/modprobe.d/nvidia-blacklist.conf ]; then
+    if dpkg-query -W -f='${Status}' nvidia-driver 2>/dev/null | grep -q "ok installed"; then
+        note "Nouveau blacklist kept (/etc/modprobe.d/nvidia-blacklist.conf): the Nvidia driver is installed"
+    else
+        sudo rm -f /etc/modprobe.d/nvidia-blacklist.conf
+        sudo update-initramfs -u >/dev/null 2>&1
+        step "Nouveau blacklist removed (takes effect after reboot)"
+    fi
 fi
 
 # GRUB: Tebian's wallpaper and console colors
@@ -231,13 +273,60 @@ if ask "Remove Tebian's desktop packages? (sway, fuzzel, kitty, mako, greetd...)
     fi
 fi
 
+if [ -f /etc/NetworkManager/conf.d/99-tebian-mac-random.conf ]; then
+    sudo rm -f /etc/NetworkManager/conf.d/99-tebian-mac-random.conf
+    note "MAC randomization removed — takes effect when NetworkManager restarts (next boot)"
+fi
+
+# Passwordless sudo (Settings → Security) — last, so the steps above
+# didn't need the password again. Removing it must not take sudo
+# away: older installs granted sudo only through such a file, not the sudo
+# group — so a password-required rule goes in first, as the Settings
+# toggle does. Every file is checked with visudo before it goes in.
+sudo_nopasswd_files=()
+sudo test -f /etc/sudoers.d/tebian-nopasswd && sudo_nopasswd_files+=(/etc/sudoers.d/tebian-nopasswd)
+if sudo test -f "/etc/sudoers.d/$USER" &&
+   [ "$(sudo grep -cvE '^[[:space:]]*(#|$)' "/etc/sudoers.d/$USER")" = 1 ] &&
+   sudo grep -qxE "$USER ALL=\(ALL(:ALL)?\) NOPASSWD: ?ALL" "/etc/sudoers.d/$USER"; then
+    sudo_nopasswd_files+=("/etc/sudoers.d/$USER")
+fi
+if [ ${#sudo_nopasswd_files[@]} -gt 0 ]; then
+    if [ "$(sudo passwd -S "$USER" 2>/dev/null | cut -d' ' -f2)" != P ]; then
+        note "Passwordless sudo kept: $USER has no password (set one with passwd, then re-run)"
+    else
+        ok_rule=""
+        if id -nG "$USER" | tr ' ' '\n' | grep -qx sudo || sudo test -f /etc/sudoers.d/tebian-sudo; then
+            sudo rm -f "${sudo_nopasswd_files[@]}" && ok_rule=1
+        else
+            tmp=$(mktemp)
+            printf '%s ALL=(ALL:ALL) ALL\n' "$USER" > "$tmp"
+            # One sudo call: once the password rule is in, the next sudo
+            # would already ask for the password
+            sudo visudo -cqf "$tmp" &&
+                sudo sh -c 'install -o root -g root -m 0440 "$1" /etc/sudoers.d/tebian-sudo && shift && rm -f "$@"' \
+                    sh "$tmp" "${sudo_nopasswd_files[@]}" && ok_rule=1
+            rm -f "$tmp"
+        fi
+        if [ -n "$ok_rule" ]; then
+            step "Passwordless sudo removed (sudo asks for your password again)"
+        else
+            note "Passwordless sudo kept: could not install a password rule to replace it"
+        fi
+    fi
+fi
+
 echo ""
 echo -e "${GREEN}  Tebian has been removed.${NC}"
 echo ""
 echo "  Left in place:"
 echo "    - ~/Tebian (the source folder)"
+[ -d "$CONFIG_BACKUP" ] &&
+    echo "    - Your previous Tebian configs, in ${CONFIG_BACKUP/#$HOME/~}"
 echo "    - Packages installed along the way that you may use elsewhere"
-echo "      (ufw, fail2ban, firejail, apparmor, tor, NetworkManager, fonts)"
+echo "      (ufw, fail2ban, firejail, apparmor, tor, NetworkManager, fonts),"
+echo "      and apt repositories added for apps (e.g. Tailscale)"
+[ -n "${ok_rule:-}" ] &&
+    echo "    - Your sudo rule (sudo group or /etc/sudoers.d/tebian-sudo; password required)"
 [ -f /etc/apt/sources.list.d/tebian-backports.list ] &&
     echo "    - The backports repository (Settings → Graphics Drivers): /etc/apt/sources.list.d/tebian-backports.list"
 echo "    - Boot splash and kernel boot options set by the Tebian installer"

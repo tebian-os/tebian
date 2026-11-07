@@ -1,7 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN VERSION CHECK (V1.0)
-# Returns current Tebian version and checks for script updates
+# Prints the current Tebian version; --check compares the installed
+# scripts with ~/Tebian (tebian-update is what syncs them)
 # ==============================================================================
 
 TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
@@ -35,7 +36,9 @@ check_scripts() {
     
     if [ $outdated -eq 1 ]; then
         echo ""
-        echo "Run: cp -r $TEBIAN_DIR/scripts/* ~/.local/bin/"
+        # Not a plain copy: that would put installer-only scripts on PATH and
+        # overwrite scripts while they run
+        echo "Run: tebian-update"
         return 1
     else
         echo "  ✅ All scripts up to date"

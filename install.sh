@@ -1,10 +1,14 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN REMOTE INSTALLER
-# Usage: curl -sL tebian.org/install | bash
+# Usage: curl -fsSL https://tebian.org/install | bash
 # Local: bash install.sh --local
-# Fleet: curl -sL tebian.org/install | bash -s -- --repo https://git.company.com/org/tebian.git
+# Fleet: curl -fsSL https://tebian.org/install | bash -s -- --repo https://git.company.com/org/tebian.git
 # Works on: Debian 13 (trixie) or newer, and trixie-based Raspberry Pi OS / Armbian
+#
+# Run again on a machine that has Tebian, it updates it (tebian-update) or,
+# if you choose Repair, re-runs the desktop setup. Either way the choices
+# made in Settings (~/.config/tebian/machine.conf) are kept.
 #
 # Unattended: TEBIAN_MODE=desktop|server skips the menu (needed when there's
 # no terminal to ask on). TEBIAN_CHANNEL=main installs the unreleased
@@ -22,6 +26,13 @@ NC='\033[0m'
 
 TEBIAN_DIR="$HOME/Tebian"
 TEBIAN_GH="https://github.com/tebian-os/tebian"
+STATE_DIR="$HOME/.local/share/tebian"
+MACHINE_CONF="$HOME/.config/tebian/machine.conf"
+# An existing install keeps the channel it was set to
+if [ -z "${TEBIAN_CHANNEL:-}" ]; then
+    TEBIAN_CHANNEL=$(cat "$TEBIAN_DIR/tebian.conf" "$MACHINE_CONF" 2>/dev/null |
+        sed -n 's/^TEBIAN_CHANNEL="\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' | tail -1) || true
+fi
 TEBIAN_CHANNEL="${TEBIAN_CHANNEL:-stable}"
 USE_GIT=""
 TEBIAN_REPO=""
@@ -97,7 +108,7 @@ check_supported_os() {
         echo "  Raspberry Pi OS / Armbian. Older releases and Ubuntu lack packages"
         echo "  Tebian depends on (sway 1.10, nwg-hello, gtklock)."
         echo ""
-        echo "  To try anyway: curl -sL tebian.org/install | TEBIAN_FORCE=1 bash"
+        echo "  To try anyway: curl -fsSL https://tebian.org/install | TEBIAN_FORCE=1 bash"
         exit 1
     fi
 }
@@ -121,7 +132,7 @@ elif [ -z "${TEBIAN_MODE:-}" ]; then
     echo ""
     echo "  Run this from an interactive terminal (over SSH, use ssh -t), or"
     echo "  choose the mode up front for an unattended install:"
-    echo "    curl -sL tebian.org/install | TEBIAN_MODE=desktop bash"
+    echo "    curl -fsSL https://tebian.org/install | TEBIAN_MODE=desktop bash"
     exit 1
 fi
 
@@ -163,7 +174,7 @@ fetch_tebian() {
            ! curl -fsSL -o "$work/SHA256SUMS" "$TEBIAN_GH/releases/download/$tag/SHA256SUMS"; then
             echo -e "${RED}  ✗ Release $tag is missing tebian-src.tar.gz or SHA256SUMS.${NC}" >&2
             echo "    To install the unverified development branch instead:" >&2
-            echo "    curl -sL tebian.org/install | TEBIAN_CHANNEL=main bash" >&2
+            echo "    curl -fsSL https://tebian.org/install | TEBIAN_CHANNEL=main bash" >&2
             return 1
         fi
         expected=$(awk '$2 == "tebian-src.tar.gz" || $2 == "*tebian-src.tar.gz" { print $1 }' "$work/SHA256SUMS")
@@ -222,52 +233,58 @@ if [[ "$USE_LOCAL" == "yes" ]]; then
     echo -e "${GREEN}  Local mode:${NC} $LOCAL_SRC"
 
     if [ "$LOCAL_SRC" != "$TEBIAN_DIR" ]; then
-        if [ -d "$TEBIAN_DIR" ]; then
-            echo -e "${YELLOW}  Updating $TEBIAN_DIR from local source...${NC}"
-        else
-            echo "  Linking local source to $TEBIAN_DIR..."
+        echo "  Linking local source to $TEBIAN_DIR..."
+        if [ -L "$TEBIAN_DIR" ]; then
+            rm -f "$TEBIAN_DIR"
+        elif [ -e "$TEBIAN_DIR" ]; then
+            # A real folder may hold someone's commits or tebian.conf edits —
+            # set it aside rather than delete it
+            aside="$TEBIAN_DIR.before-local-$(date +%Y%m%d-%H%M%S)"
+            mv "$TEBIAN_DIR" "$aside"
+            echo -e "${YELLOW}  Moved the existing $TEBIAN_DIR to $aside${NC}"
         fi
-        rm -rf "$TEBIAN_DIR"
-        ln -sf "$LOCAL_SRC" "$TEBIAN_DIR"
+        ln -s "$LOCAL_SRC" "$TEBIAN_DIR"
         echo -e "${GREEN}  ✓ Symlinked $TEBIAN_DIR -> $LOCAL_SRC${NC}"
     else
         echo -e "${GREEN}  ✓ Source is already at $TEBIAN_DIR${NC}"
     fi
 
-# Check if Tebian is already installed
+# Already installed: update it the way tebian-update does (backups of local
+# edits, files a release dropped removed, settings untouched) instead of
+# re-running the whole desktop setup over the user's choices
 elif [ -d "$TEBIAN_DIR" ]; then
-    echo -e "${YELLOW}  Tebian directory already exists at $TEBIAN_DIR${NC}"
+    echo -e "${YELLOW}  Tebian is already installed at $TEBIAN_DIR${NC}"
     echo ""
-    confirm=$(ask "  Update and reinstall? [Y/n]: " Y)
-    if [[ "$confirm" =~ ^[Nn] ]]; then
-        echo "  Cancelled."
-        exit 0
-    fi
-    echo "  Updating existing install..."
-    if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ]; then
-        # --ff-only: never merge over local commits; a refusal is reported
-        if ! git -C "$TEBIAN_DIR" pull --ff-only; then
-            echo -e "${RED}  ✗ git pull failed — resolve it in $TEBIAN_DIR, then re-run.${NC}"
-            exit 1
-        fi
-    elif [ -L "$TEBIAN_DIR" ]; then
+    if [ -L "$TEBIAN_DIR" ]; then
         # A --local install links ~/Tebian to a working copy — never pour a
         # release over someone's source tree
         echo -e "${RED}  ✗ $TEBIAN_DIR links to $(readlink -f "$TEBIAN_DIR") (local mode).${NC}"
         echo "    Update that tree yourself, or use: bash install.sh --local"
         exit 1
+    fi
+    echo "  [1] Update (keeps your settings)"
+    echo "  [2] Repair: update, then re-run the desktop setup (settings kept)"
+    echo ""
+    action=$(ask "  Select [1/2, n to cancel]: " 1)
+    case "$action" in
+        1|2) ;;
+        *) echo "  Cancelled."; exit 0 ;;
+    esac
+    if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ] &&
+       git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        # Fleet or dev clone: tebian-update pulls it
+        bash "$TEBIAN_DIR/scripts/tebian-update" || exit 1
     else
-        # Download and verify completely before touching the existing tree
+        # The downloaded release's own tebian-update does the work: the
+        # installed one may be too old to update this machine at all
+        # (installs whose Config Tracking left a remote-less .git in
+        # ~/Tebian failed every update)
         NEW=$(fetch_tebian "$WORK")
-        # Keep the machine's own manifest; everything else is Tebian's
-        if [ -f "$TEBIAN_DIR/tebian.conf" ]; then
-            cp -p "$TEBIAN_DIR/tebian.conf" "$WORK/tebian.conf.keep"
-        fi
-        cp -a "$NEW/." "$TEBIAN_DIR/"
-        if [ -f "$WORK/tebian.conf.keep" ]; then
-            cp -p "$WORK/tebian.conf.keep" "$TEBIAN_DIR/tebian.conf"
-        fi
-        echo -e "${GREEN}  ✓ Updated to $(cat "$TEBIAN_DIR/VERSION")${NC}"
+        TEBIAN_UPDATE_SRC="$NEW" TEBIAN_CHANNEL="$TEBIAN_CHANNEL" \
+            bash "$NEW/scripts/tebian-update" || exit 1
+    fi
+    if [ "$action" != 2 ]; then
+        exit 0
     fi
 else
     if [[ "$USE_GIT" == "yes" ]]; then
@@ -282,6 +299,11 @@ else
     else
         NEW=$(fetch_tebian "$WORK")
         mv "$NEW" "$TEBIAN_DIR"
+        # Seed tebian-update's manifest (as the ISO installer does): without
+        # it the first update can't tell which files a later release dropped
+        mkdir -p "$STATE_DIR"
+        ( cd "$TEBIAN_DIR" && find . -type f ! -path './.git/*' ! -name tebian.conf -printf '%P\0' |
+            sort -z | xargs -0 -r sha256sum ) > "$STATE_DIR/manifest.sha256"
         echo -e "${GREEN}  ✓ Tebian $(cat "$TEBIAN_DIR/VERSION") downloaded to $TEBIAN_DIR${NC}"
     fi
 fi

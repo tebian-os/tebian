@@ -14,11 +14,13 @@
 #                                      already this patched build
 #
 # Debian's source package is used as-is, with the patch added the Debian way
-# (a quilt patch in debian/patches) and "+tebian1" on the version, so apt
-# sees an ordinary sway package one step newer than Debian's. A Debian update
-# to sway (e.g. a security fix) has a higher version and simply replaces it:
-# windows stop snapping until this is run again, and nothing breaks, because
-# Tebian's config uses no option that plain sway would reject.
+# (a quilt patch in debian/patches) and "+0tebian1" on the version. The "0"
+# matters: dpkg orders 1.10.1-2 < 1.10.1-2+0tebian1 < 1.10.1-2+deb13u1, so
+# apt keeps this build over the release it came from but still installs a
+# Debian stable or security update to sway ("+tebian1" sorted above those
+# and blocked them). Windows stop snapping until this is run again —
+# tebian-update does that, from the updated source — and nothing breaks
+# meanwhile, because Tebian's config uses no option plain sway would reject.
 #
 # The source comes from Debian's archive through a private source list, so
 # the system's apt setup isn't touched; apt checks it against Debian's
@@ -49,8 +51,8 @@ while [ $# -gt 0 ]; do
         --install) install=true ;;
         --clean) clean=true ;;
         --output) out="${2:?--output needs a folder}"; shift ;;
-        --check) [[ "$(installed_version)" == *"+tebian$TEBIAN_REV" ]]; exit ;;
-        *) sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+        --check) [[ "$(installed_version)" == *"+0tebian$TEBIAN_REV" ]]; exit ;;
+        *) sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     esac
     shift
 done
@@ -97,7 +99,7 @@ src=$(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'sway-*' | head -1)
 [ -n "$src" ] || fail "sway's source didn't unpack"
 
 base=$(cd "$src" && dpkg-parsechangelog -S Version)
-version="${base}+tebian${TEBIAN_REV}"
+version="${base}+0tebian${TEBIAN_REV}"
 arch=$(dpkg --print-architecture)
 say "Debian sway $base -> $version"
 
@@ -138,7 +140,9 @@ cp "$WORK/$deb" "$out/"
 say "Built $out/$deb"
 
 if $install; then
-    $SUDO apt-get install -y -q "$out/$deb" >/dev/null || fail "Could not install $deb"
+    # --allow-downgrades: replacing an older "+tebianN" build, which sorts
+    # above this one (see the top of this file)
+    $SUDO apt-get install -y -q --allow-downgrades "$out/$deb" >/dev/null || fail "Could not install $deb"
     say "Installed. Log out and back in to use it."
 fi
 

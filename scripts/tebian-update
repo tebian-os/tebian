@@ -3,15 +3,19 @@
 # TEBIAN UPDATE
 # Brings ~/Tebian, the installed scripts and Tebian's few root-owned files up
 # to the latest release. Your settings are left alone: theme, security
-# profile, sway config.user and tebian.conf are never touched.
+# profile, sway config.user, tebian.conf and ~/.config/tebian/machine.conf
+# are never touched.
 #
-# Usage: tebian-update [--rebuild]
-#   --rebuild   afterwards, also re-apply tebian.conf (tebian-rebuild)
+# Usage: tebian-update [--rebuild] [--allow-downgrade]
+#   --rebuild          afterwards, also re-apply tebian.conf (tebian-rebuild)
+#   --allow-downgrade  accept a release older than the installed one
+#                      (or TEBIAN_ALLOW_DOWNGRADE=1)
 #
-# Channel: TEBIAN_CHANNEL in tebian.conf (or the environment)
+# Channel: TEBIAN_CHANNEL in machine.conf / tebian.conf (or the environment)
 #   stable (default)  latest GitHub release, checked against its SHA256SUMS
 #   main              development branch, unverified
-# A git checkout of ~/Tebian (fleet or dev machine) is updated with git pull.
+# A git checkout of ~/Tebian that tracks a remote (fleet or dev machine) is
+# updated with git pull.
 # ==============================================================================
 
 set -euo pipefail
@@ -22,6 +26,8 @@ TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
 TEBIAN_GH="https://github.com/tebian-os/tebian"
 LOCAL_BIN="$HOME/.local/bin"
 STATE_DIR="$HOME/.local/share/tebian"
+# This machine's Settings choices, layered over tebian.conf's defaults
+MACHINE_CONF="$HOME/.config/tebian/machine.conf"
 # sha256 of every file as last synced — how local edits are told apart
 # from upstream changes
 MANIFEST="$STATE_DIR/manifest.sha256"
@@ -36,10 +42,12 @@ warn() { echo -e "${YELLOW}[update]${NC} $*"; }
 fail() { echo -e "${RED}[update]${NC} $*" >&2; exit 1; }
 
 REBUILD=""
+ALLOW_DOWNGRADE="${TEBIAN_ALLOW_DOWNGRADE:-}"
 for arg in "$@"; do
     case "$arg" in
         --rebuild) REBUILD=1 ;;
-        -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
+        -h|--help) sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) fail "Unknown option: $arg (see tebian-update --help)" ;;
     esac
 done
@@ -58,9 +66,11 @@ echo ""
 
 [ -d "$TEBIAN_DIR" ] || fail "Tebian not found at $TEBIAN_DIR"
 
-if [ -z "${TEBIAN_CHANNEL:-}" ] && [ -f "$TEBIAN_DIR/tebian.conf" ]; then
-    # Read just this key — sourcing the whole manifest here isn't needed
-    TEBIAN_CHANNEL=$(sed -n 's/^TEBIAN_CHANNEL="\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$TEBIAN_DIR/tebian.conf" | tail -1)
+if [ -z "${TEBIAN_CHANNEL:-}" ]; then
+    # Read just this key — sourcing the whole manifest here isn't needed.
+    # machine.conf comes last: the machine's own choice wins.
+    TEBIAN_CHANNEL=$(cat "$TEBIAN_DIR/tebian.conf" "$MACHINE_CONF" 2>/dev/null |
+        sed -n 's/^TEBIAN_CHANNEL="\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' | tail -1) || true
 fi
 TEBIAN_CHANNEL="${TEBIAN_CHANNEL:-stable}"
 
@@ -75,7 +85,10 @@ mkdir -p "$STATE_DIR"
 fetch_tebian() {
     local work="$1" tarball="$1/tebian-src.tar.gz" tag expected top
 
-    if [ "$TEBIAN_CHANNEL" = main ]; then
+    if [ -n "${TEBIAN_UPDATE_SRC:-}" ]; then
+        # install.sh already downloaded and verified this release
+        top="$TEBIAN_UPDATE_SRC"
+    elif [ "$TEBIAN_CHANNEL" = main ]; then
         warn "Channel: main (development branch, unverified)" >&2
         curl -fsSL -o "$tarball" "$TEBIAN_GH/archive/refs/heads/main.tar.gz" ||
             { echo -e "${RED}[update]${NC} Download failed" >&2; return 1; }
@@ -104,9 +117,11 @@ fetch_tebian() {
         echo -e "${GREEN}[update]${NC} Checksum verified" >&2
     fi
 
-    mkdir -p "$work/src"
-    tar xzf "$tarball" -C "$work/src"
-    top=$(find "$work/src" -mindepth 1 -maxdepth 1 -type d)
+    if [ -z "${TEBIAN_UPDATE_SRC:-}" ]; then
+        mkdir -p "$work/src"
+        tar xzf "$tarball" -C "$work/src"
+        top=$(find "$work/src" -mindepth 1 -maxdepth 1 -type d)
+    fi
     if [ "$(printf '%s\n' "$top" | wc -l)" -ne 1 ] || [ ! -f "$top/bootstrap.sh" ] ||
        [ ! -d "$top/scripts" ] || [ ! -f "$top/VERSION" ]; then
         echo -e "${RED}[update]${NC} The downloaded archive doesn't look like Tebian." >&2
@@ -171,11 +186,62 @@ backup_if_edited() {
 OLD_VERSION=$(cat "$TEBIAN_DIR/VERSION" 2>/dev/null || echo "?")
 STALE_LIST="$STATE_DIR/stale-scripts"
 
+# Only a clone that tracks a remote can be pulled. A .git without one is
+# local history — Settings' Config Tracking used to `git init` ~/Tebian —
+# and taking the git path for it failed every update from then on.
+GIT_MODE=""
+if [ -d "$TEBIAN_DIR/.git" ]; then
+    command -v git >/dev/null || fail "$TEBIAN_DIR is a git checkout but git isn't installed."
+    if git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        GIT_MODE=1
+    elif [ -z "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
+        warn "$TEBIAN_DIR/.git tracks no remote, so updating from releases instead."
+        warn "Its history is left as it is (files Tebian updates will show as changed there)."
+    fi
+fi
+
+# Settings used to record choices in tebian.conf itself; in a git checkout
+# that edit makes every pull that touches the file fail. Move plain
+# KEY="value" edits to machine.conf (where Settings records them now) and
+# give the file back to git. Anything else is a hand edit — left alone.
+migrate_tracked_conf() {
+    local diff line key
+    git -C "$TEBIAN_DIR" diff --quiet -- tebian.conf 2>/dev/null && return 0
+    diff=$(git -C "$TEBIAN_DIR" diff -U0 -- tebian.conf | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ') || true
+    [ -n "$diff" ] || return 0
+    if printf '%s\n' "$diff" | grep -qvE '^[-+][A-Z_][A-Z0-9_]*="[A-Za-z0-9._/-]*"([[:space:]]*#.*)?$'; then
+        warn "tebian.conf has local edits that block git pull; move them to $MACHINE_CONF"
+        return 0
+    fi
+    mkdir -p "${MACHINE_CONF%/*}"
+    while IFS= read -r line; do
+        [[ "$line" == +* ]] || continue
+        line="${line#+}"
+        line="${line%%[[:space:]]#*}"
+        key="${line%%=*}"
+        grep -qs "^$key=" "$MACHINE_CONF" || echo "$line" >> "$MACHINE_CONF"
+    done <<< "$diff"
+    git -C "$TEBIAN_DIR" checkout -q -- tebian.conf
+    info "Your Settings choices moved from tebian.conf to $MACHINE_CONF"
+}
+
+# Never go backwards silently: a pulled release, or switching from main to
+# stable, would otherwise install older files over newer ones
+check_downgrade() {  # <new tree>
+    local new
+    new=$(cat "$1/VERSION" 2>/dev/null) || return 0
+    [ "$OLD_VERSION" != "?" ] && [ -n "$new" ] && command -v dpkg >/dev/null || return 0
+    dpkg --compare-versions "$new" ge "$OLD_VERSION" 2>/dev/null && return 0
+    [ -n "$ALLOW_DOWNGRADE" ] && { warn "Downgrading $OLD_VERSION → $new (--allow-downgrade)"; return 0; }
+    fail "The $TEBIAN_CHANNEL channel has $new, older than the installed $OLD_VERSION — nothing was changed.
+         To install it anyway: tebian-update --allow-downgrade"
+}
+
 if [ -n "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
     : # re-executed by the previous version after it synced the tree
-elif [ -d "$TEBIAN_DIR/.git" ]; then
-    command -v git >/dev/null || fail "$TEBIAN_DIR is a git checkout but git isn't installed."
+elif [ -n "$GIT_MODE" ]; then
     info "Git checkout — pulling..."
+    migrate_tracked_conf
     # --ff-only never merges over local commits; uncommitted edits that
     # collide make git refuse, which is the right outcome
     git -C "$TEBIAN_DIR" pull --ff-only || fail "git pull failed — nothing else was changed. Resolve it in $TEBIAN_DIR."
@@ -186,6 +252,7 @@ elif [ -L "$TEBIAN_DIR" ]; then
     fail "$TEBIAN_DIR links to $(readlink -f "$TEBIAN_DIR") (local mode). Update that tree yourself, then re-run with TEBIAN_UPDATE_POST_SYNC=1 to sync scripts."
 else
     NEW=$(fetch_tebian "$WORK") || fail "Update aborted — nothing was changed."
+    check_downgrade "$NEW"
 
     CHANGED=0
     declare -A NEW_FILES=()
@@ -242,17 +309,40 @@ if [ -z "${TEBIAN_UPDATE_POST_SYNC:-}" ]; then
 fi
 
 # --- 2. Scripts → ~/.local/bin ---------------------------------------------------
+# Release installs copy only what the release ships (the manifest): a file
+# a release dropped can linger in ~/Tebian when there was no manifest yet
+# to reveal it, and a lingering settings module would keep being sourced.
+# Pulled clones and local-source trees ship whatever is in them.
+SHIPPED_ONLY=""
+if [ -f "$MANIFEST" ] && [ -z "$GIT_MODE" ] && [ ! -L "$TEBIAN_DIR" ]; then
+    SHIPPED_ONLY=1
+fi
+is_shipped() {  # <path relative to ~/Tebian>
+    [ -z "$SHIPPED_ONLY" ] && return 0
+    awk -v p="$1" '$2 == p { found = 1; exit } END { exit !found }' "$MANIFEST"
+}
 mkdir -p "$LOCAL_BIN/tebian-settings.d"
 for script in "$TEBIAN_DIR/scripts/"*; do
     [ -f "$script" ] || continue
     name=$(basename "$script")
     case " $SKIP_SCRIPTS " in *" $name "*) continue ;; esac
+    is_shipped "scripts/$name" || continue
     replace_file "$script" "$LOCAL_BIN/$name"
     chmod +x "$LOCAL_BIN/$name"
 done
 for module in "$TEBIAN_DIR/scripts/tebian-settings.d/"*.sh; do
+    [ -f "$module" ] || continue
+    is_shipped "scripts/tebian-settings.d/${module##*/}" || continue
     replace_file "$module" "$LOCAL_BIN/tebian-settings.d/${module##*/}"
 done
+# tebian-settings sources every module in that directory, so one the
+# release no longer ships must go even when no old manifest named it
+if [ -n "$SHIPPED_ONLY" ]; then
+    for module in "$LOCAL_BIN/tebian-settings.d/"*.sh; do
+        [ -f "$module" ] || continue
+        is_shipped "scripts/tebian-settings.d/${module##*/}" || rm -f "$module"
+    done
+fi
 
 # Stale copies matter: tebian-settings sources every module in its directory,
 # so a module deleted upstream would keep redefining functions forever
@@ -325,6 +415,26 @@ if [ "${#ROOT_DST[@]}" -gt 0 ]; then
     fi
 fi
 
+# --- Unblock apt (before the installs below) ------------------------------------
+# Older Tebian forced Mojang's minecraft-launcher .deb past an unmet
+# dependency and held it, which leaves apt refusing every install and
+# upgrade (the steps below included). Purged only while apt is actually
+# broken; worlds and settings in ~/.minecraft are not touched.
+if dpkg-query -W minecraft-launcher >/dev/null 2>&1 && ! apt-get check >/dev/null 2>&1; then
+    info "Removing the old Minecraft package that blocks apt..."
+    if sudo -v; then
+        sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1 || true
+        if sudo dpkg --purge minecraft-launcher; then
+            info "Minecraft package removed (your worlds in ~/.minecraft are kept)."
+            info "Reinstall it from Settings → Software & Gaming."
+        else
+            warn "Could not remove minecraft-launcher — apt stays blocked until it is: sudo dpkg --purge minecraft-launcher"
+        fi
+    else
+        warn "No sudo — apt is blocked by the old Minecraft package. Run tebian-update in a terminal."
+    fi
+fi
+
 # --- 3a. Packages the Modern bar needs ---------------------------------------------
 # Updates otherwise only move files: someone who turned the Modern bar on
 # before a release added a dependency (upower for the Power panel,
@@ -391,7 +501,7 @@ fi
 if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
         "$LOCAL_BIN/tebian-install-swayfx" --check ||
-            warn "SwayFX needs rebuilding for window snapping: Settings → UI → Window Snapping"
+            warn "SwayFX needs rebuilding (window snapping or library fixes): Settings → UI → Window Snapping"
     elif ! "$LOCAL_BIN/tebian-build-sway" --check; then
         info "Sway: adding window snapping (rebuilding Debian's sway, about a minute)"
         if sudo -v; then

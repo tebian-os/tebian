@@ -93,7 +93,14 @@ case "$choice" in
         # Pre-flight checks
         echo ""
         echo "  Running pre-flight checks..."
-        if ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+        # Asks Debian's mirror over HTTPS — what the install needs. A ping
+        # fails on networks that drop ICMP and behind Tor (paranoid mode).
+        if command -v curl >/dev/null; then
+            net_check() { curl -fsS --max-time 10 -o /dev/null https://deb.debian.org/debian/; }
+        else
+            net_check() { timeout 10 getent ahosts deb.debian.org >/dev/null; }
+        fi
+        if ! net_check 2>/dev/null; then
             echo -e "${RED}  ✗ No internet connection. Connect to a network first.${NC}"
             exit 1
         fi
@@ -111,8 +118,10 @@ case "$choice" in
         echo -e "${GREEN}Installing Tebian Desktop...${NC}"
         if bash "$TEBIAN_DIR/scripts/desktop.sh"; then
             # Apply the manifest (extra packages, services, Tor/DNS toggles —
-            # what a fleet tebian.conf declares). Safe here: nothing has been
-            # customized yet on a fresh install.
+            # what a fleet tebian.conf declares). Also safe on a Repair of an
+            # existing install: Settings choices are recorded in
+            # machine.conf, which rebuild reads, an edited sway config is
+            # kept, and an unchanged security profile isn't re-applied.
             if [ -f "$TEBIAN_DIR/tebian.conf" ]; then
                 echo ""
                 echo -e "${GREEN}Applying system manifest...${NC}"
@@ -169,12 +178,13 @@ case "$choice" in
                 rm -rf "$TEBIAN_DIR"
                 echo -e "${GREEN}  ✓ Removed $TEBIAN_DIR${NC}"
             fi
+            # Only with DELETE confirmed: a desktop session still running
+            # needs these scripts
+            rm -f ~/.local/bin/tebian-* 2>/dev/null || true
+            rm -rf ~/.local/bin/tebian-settings.d
+            rm -f ~/.local/bin/status.sh 2>/dev/null || true
+            rm -f ~/.local/bin/update-all 2>/dev/null || true
         fi
-        
-        rm -f ~/.local/bin/tebian-* 2>/dev/null || true
-        rm -rf ~/.local/bin/tebian-settings.d
-        rm -f ~/.local/bin/status.sh 2>/dev/null || true
-        rm -f ~/.local/bin/update-all 2>/dev/null || true
         
         echo ""
         echo -e "${GREEN}✅ Pure Debian.${NC}"

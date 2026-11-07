@@ -618,17 +618,30 @@ tebian_bt_agent_start() {
 }
 
 # ==============================================================================
-# tebian.conf — the per-machine manifest tebian-rebuild reads. Settings that
-# rebuild re-applies (theme, security profile) must be recorded here, or the
-# next rebuild resets them to the defaults.
+# Per-machine choices. ~/Tebian/tebian.conf holds Tebian's defaults (on a
+# fleet machine, the fleet's manifest in git); what the user picks in
+# Settings is recorded in ~/.config/tebian/machine.conf, which tebian-rebuild,
+# desktop.sh and tebian-update read after tebian.conf, so it wins. Writing
+# tebian.conf itself dirtied the git checkout (pulls then failed) and mixed
+# the user's choices into a file updates own.
 # ==============================================================================
+TEBIAN_MACHINE_CONF="$HOME/.config/tebian/machine.conf"
+
 tebian_conf_set() {
     local key="$1" value="$2"
-    local conf="${TEBIAN_DIR:-$HOME/Tebian}/tebian.conf"
+    local conf="$TEBIAN_MACHINE_CONF"
     [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || return 1
     # Values are sourced by bash later; keep them to a safe character set
     [[ "$value" =~ ^[A-Za-z0-9._/-]*$ ]] || return 1
-    [ -f "$conf" ] || touch "$conf" 2>/dev/null || return 1
+    if [ ! -f "$conf" ]; then
+        mkdir -p "${conf%/*}" || return 1
+        printf '%s\n' \
+            "# This machine's settings, recorded by Tebian Settings. Each KEY=\"value\"" \
+            "# overrides the default in ~/Tebian/tebian.conf. Apply edits: tebian-rebuild" \
+            > "$conf" || return 1
+    fi
+    # Unchanged: leave the file (and its timestamp) alone
+    grep -qxF "${key}=\"${value}\"" "$conf" && return 0
     if grep -qE "^${key}=" "$conf"; then
         K="$key" V="$value" awk '
             index($0, ENVIRON["K"] "=") == 1 { print ENVIRON["K"] "=\"" ENVIRON["V"] "\""; next }
@@ -684,21 +697,6 @@ dns_works() {
         sleep 1
     done
     return 1
-}
-
-# Undo DNS Privacy: hand /etc/resolv.conf back to NetworkManager
-dns_privacy_off() {
-    sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf \
-               /etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf
-    sudo systemctl disable --now systemd-resolved 2>/dev/null
-    # Only remove a symlink into systemd-resolved: a regular file here is
-    # already someone else's (NetworkManager's or the admin's)
-    if [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf | grep -q '/systemd/resolve/'; then
-        sudo rm -f /etc/resolv.conf
-    fi
-    # With the file gone and resolved stopped, NetworkManager writes a fresh
-    # /etc/resolv.conf from the connection's DNS servers on restart
-    sudo systemctl restart NetworkManager
 }
 
 # ==============================================================================

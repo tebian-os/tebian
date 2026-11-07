@@ -43,12 +43,19 @@ running.
 ### On an existing Debian 13 system
 
 ```bash
-curl -sL tebian.org/install | bash
+curl -fsSL https://tebian.org/install | bash
 ```
 
 Needs Debian 13 (trixie) or newer, including Raspberry Pi OS and Armbian
 images built on trixie — this is the way to install on ARM boards. It asks
-whether to set up the Tebian desktop or a hardened headless server.
+whether to set up the Tebian desktop or a hardened headless server. Run it
+again on an installed machine and it updates Tebian (or, with Repair,
+re-runs the desktop setup) without resetting your settings.
+
+The choices you make in Settings (theme, security profile, Tor, DNS
+privacy) are recorded per machine in `~/.config/tebian/machine.conf`, layered
+over the defaults in `~/Tebian/tebian.conf`, so updates, **Rebuild System**
+and re-installs keep them.
 
 ## Using it
 
@@ -89,11 +96,12 @@ matching wallpaper, bar, notification, lock screen and terminal colours.
 ```
 bootstrap.sh        # Mode picker (desktop / server) used by install.sh
 install.sh          # Remote installer (curl | bash)
-tebian.conf         # Per-machine manifest applied by tebian-rebuild
+tebian.conf         # Default manifest applied by tebian-rebuild (per-machine
+                    # choices: ~/.config/tebian/machine.conf)
 scripts/            # Control Center, menus, installer, ISO builder, tools
 configs/            # sway, kitty, mako, greetd, udev rules, themes
 modules/            # core/ (security), hw/ (x86, pi)
-config/             # live-build inputs (boot menu, templates)
+config/             # live-build inputs (boot menu)
 assets/             # wallpapers, plymouth splash
 ```
 

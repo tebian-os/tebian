@@ -24,9 +24,10 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 SWAYFX_VERSION="0.6"
-# Tebian's patch (patches/swayfx/floating-snap.patch): floating windows snap
-# to screen edges and corners, and are easier to resize. Bump with the patch,
-# so installed builds without the current one get rebuilt.
+# Bump when the patch (patches/swayfx/floating-snap.patch: floating windows
+# snap to edges and corners, easier resize) OR any pinned source below
+# changes. The private libraries in $PREFIX/lib get fixes only through a
+# rebuild, and tebian-update asks for one (--check) when this changes.
 TEBIAN_REV=1
 BUILD_ID="$SWAYFX_VERSION+tebian$TEBIAN_REV"
 PREFIX="/opt/tebian-swayfx"
@@ -55,6 +56,18 @@ WAYLAND_PROTOCOLS_VERSION="1.47"      # trixie: 1.44 (wlroots needs >=1.47)
 PIXMAN_VERSION="pixman-0.46.4"        # trixie: 0.44 (wlroots needs >=0.46)
 LIBDRM_VERSION="libdrm-2.4.131"       # trixie: 2.4.124 (scenefx needs >=2.4.129)
 XKBCOMMON_VERSION="xkbcommon-1.13.1"  # trixie: 1.7 (scenefx needs >=1.8)
+# ...and the commit each tag pointed to when it was pinned. Tags can be
+# moved (swayfx's and scenefx's are lightweight), and this code ends up
+# installed as root, so a clone is used only if it is exactly this commit.
+# Re-pin with: git ls-remote <url> 'refs/tags/<tag>^{}' (or refs/tags/<tag>)
+SWAYFX_COMMIT="fd71a6bdc061bd633b488ae7b83e8a6981d22f86"
+WLROOTS_COMMIT="d783533489e1f75d6886c2ab5c5960090ef268f8"
+SCENEFX_COMMIT="37ccd723bef49e6891156ffafce8f549f01446cc"
+WAYLAND_COMMIT="736d12ac67c20c60dc406dc49bb06be878501f86"
+WAYLAND_PROTOCOLS_COMMIT="88223018d1b578d0d8869866da66d9608e05f928"
+PIXMAN_COMMIT="9cc163c9da0fb4da430641715313d95a6ec466d9"
+LIBDRM_COMMIT="6bfcfc725fbe0ece0918535556d61ee567b1ffff"
+XKBCOMMON_COMMIT="6f76d19db72b5d450e927b41e1e96cbe3252aba8"
 
 BUILD_DIR="$HOME/.cache/tebian-swayfx-build"
 # MARKER holds the installed build; an empty one means the old 0.5.3 build
@@ -101,18 +114,25 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-clone() {  # <tag> <url> [dir]
-    git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$1" "$2" ${3:+"$3"}
+clone() {  # <tag> <commit> <url> [dir]
+    local dir="${4:-$(basename "$3" .git)}" got
+    git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$1" "$3" "$dir"
+    got=$(git -C "$dir" rev-parse HEAD)
+    if [ "$got" != "$2" ]; then
+        echo "  ✗ $3 tag $1 is now commit $got, not the pinned $2."
+        echo "    The tag was moved upstream — refusing to build it. Nothing was installed."
+        exit 1
+    fi
 }
 
-clone "$SWAYFX_VERSION" https://github.com/wlrfx/swayfx.git
+clone "$SWAYFX_VERSION" "$SWAYFX_COMMIT" https://github.com/wlrfx/swayfx.git
 cd swayfx
 git apply "$PATCH" || { echo "Tebian's patch doesn't apply to SwayFX $SWAYFX_VERSION."; exit 1; }
 mkdir -p subprojects
 cd subprojects
 
-clone "$WLROOTS_VERSION" https://gitlab.freedesktop.org/wlroots/wlroots.git
-clone "$SCENEFX_VERSION" https://github.com/wlrfx/scenefx.git
+clone "$WLROOTS_VERSION" "$WLROOTS_COMMIT" https://gitlab.freedesktop.org/wlroots/wlroots.git
+clone "$SCENEFX_VERSION" "$SCENEFX_COMMIT" https://github.com/wlrfx/scenefx.git
 # wlroots ships wraps for these, but they track git HEAD — pin them instead
 rm -rf wlroots/subprojects
 
@@ -120,18 +140,18 @@ rm -rf wlroots/subprojects
 # which dependency names this directory supplies. Together with
 # --force-fallback-for below, every user (swayfx, wlroots, scenefx) links
 # the same pinned copy instead of mixing in trixie's older one.
-subproject() {  # <dir> <url> <tag> <dependency names>
-    clone "$3" "$2" "$1"
+subproject() {  # <dir> <url> <tag> <commit> <dependency names>
+    clone "$3" "$4" "$2" "$1"
     printf '[wrap-git]\ndirectory = %s\nurl = %s\nrevision = %s\ndepth = 1\n\n[provide]\ndependency_names = %s\n' \
-        "$1" "$2" "$3" "$4" > "$1.wrap"
+        "$1" "$2" "$4" "$5" > "$1.wrap"
 }
-subproject wayland https://gitlab.freedesktop.org/wayland/wayland.git "$WAYLAND_VERSION" \
+subproject wayland https://gitlab.freedesktop.org/wayland/wayland.git "$WAYLAND_VERSION" "$WAYLAND_COMMIT" \
     "wayland-server, wayland-client, wayland-cursor, wayland-egl, wayland-scanner"
 subproject wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git \
-    "$WAYLAND_PROTOCOLS_VERSION" "wayland-protocols"
-subproject pixman https://gitlab.freedesktop.org/pixman/pixman.git "$PIXMAN_VERSION" "pixman-1"
-subproject libdrm https://gitlab.freedesktop.org/mesa/drm.git "$LIBDRM_VERSION" "libdrm"
-subproject libxkbcommon https://github.com/xkbcommon/libxkbcommon.git "$XKBCOMMON_VERSION" "xkbcommon"
+    "$WAYLAND_PROTOCOLS_VERSION" "$WAYLAND_PROTOCOLS_COMMIT" "wayland-protocols"
+subproject pixman https://gitlab.freedesktop.org/pixman/pixman.git "$PIXMAN_VERSION" "$PIXMAN_COMMIT" "pixman-1"
+subproject libdrm https://gitlab.freedesktop.org/mesa/drm.git "$LIBDRM_VERSION" "$LIBDRM_COMMIT" "libdrm"
+subproject libxkbcommon https://github.com/xkbcommon/libxkbcommon.git "$XKBCOMMON_VERSION" "$XKBCOMMON_COMMIT" "xkbcommon"
 
 cd ..
 

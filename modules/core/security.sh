@@ -1,7 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN SECURITY MODULE
-# Usage: bash security.sh [minimal|standard|hardened|paranoid|tor-on|tor-off|dns-on|dns-off|mac-on|mac-off|paranoid-off]
+# Usage: bash security.sh [minimal|standard|hardened|paranoid|paranoid-off|tor-on|tor-off|
+#                         dns-on [quad9|cloudflare]|dns-off|mac-on|mac-off|ssh-keyonly|ssh-password]
 # ==============================================================================
 
 set -euo pipefail
@@ -18,6 +19,11 @@ log_error() { echo -e "${RED}[security]${NC} $1" >&2; }
 PROFILE="${1:-standard}"
 # Present exactly while paranoid mode's transparent Tor is set up
 TOR_RULES=/etc/tebian-tor-iptables.sh
+# Key-only SSH. sshd keeps the FIRST value it reads for a setting and reads
+# sshd_config.d/*.conf in name order, so this must sort before anything
+# else there (cloud-init's 50-cloud-init.conf turns passwords on)
+SSH_KEYONLY=/etc/ssh/sshd_config.d/00-tebian-keyonly.conf
+SSH_KEYONLY_OLD=/etc/ssh/sshd_config.d/99-tebian-keyonly.conf
 
 # --- Helper functions ---
 
@@ -68,6 +74,16 @@ firejail_symlink() {
         fi
         log_info "Firejail sandbox enabled for $bin"
     fi
+}
+
+# Every /usr/local/bin link into firejail — the profiles link browsers,
+# the Settings menu also mail and chat apps
+firejail_linked_apps() {
+    local link
+    for link in /usr/local/bin/*; do
+        [ -L "$link" ] && [[ "$(readlink "$link")" == */firejail ]] && basename "$link"
+    done
+    return 0
 }
 
 firejail_remove_symlink() {
@@ -124,11 +140,51 @@ remove_hardening() {
         sudo sysctl --system >/dev/null 2>&1 || true
         log_info "Removed hardened kernel settings (defaults fully return after a reboot)"
     fi
-    if [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
-        sudo rm -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf
-        sudo systemctl reload ssh 2>/dev/null || true
-        log_info "SSH password logins allowed again"
+    if [ -f "$SSH_KEYONLY" ] || [ -f "$SSH_KEYONLY_OLD" ]; then
+        ssh_password_on
     fi
+}
+
+ssh_reload() {
+    sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
+}
+
+# What sshd will actually do — another drop-in can still win, and saying
+# "key-only" while passwords work would be worse than saying nothing
+sshd_password_auth() {
+    local cfg
+    cfg=$(sudo sshd -T 2>/dev/null) || return 1
+    awk '$1 == "passwordauthentication" { print $2; exit }' <<< "$cfg"
+}
+
+ssh_keyonly_on() {
+    # Never without a key to log in with: on a headless Pi reached over
+    # SSH, disabling passwords first would be a lockout
+    if ! has_ssh_key; then
+        log_warn "SSH password login left ON: no key in $(ssh_user_home)/.ssh/authorized_keys."
+        log_warn "Add one (ssh-copy-id from your other machine), then try again."
+        return 1
+    fi
+    sudo mkdir -p /etc/ssh/sshd_config.d
+    printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nX11Forwarding no\n' |
+        sudo tee "$SSH_KEYONLY" >/dev/null
+    sudo rm -f "$SSH_KEYONLY_OLD"
+    ssh_reload
+    if ! command -v sshd >/dev/null && [ ! -x /usr/sbin/sshd ]; then
+        log_info "SSH set to key-only authentication (applies once openssh-server is installed)"
+    elif [ "$(sshd_password_auth)" = no ]; then
+        log_info "SSH set to key-only authentication"
+    else
+        log_warn "SSH still accepts passwords — another file in /etc/ssh overrides it."
+        log_warn "Check: sudo sshd -T | grep -i passwordauthentication"
+        return 1
+    fi
+}
+
+ssh_password_on() {
+    sudo rm -f "$SSH_KEYONLY" "$SSH_KEYONLY_OLD"
+    ssh_reload
+    log_info "SSH password logins allowed again"
 }
 
 # --- Profile handlers ---
@@ -152,12 +208,12 @@ apply_minimal() {
     # AppArmor is left as Debian ships it. Putting every profile into
     # complain mode would make "minimal" weaker than a stock Debian install.
 
-    # Remove Firejail browser symlinks
-    firejail_remove_symlink firefox
-    firejail_remove_symlink firefox-esr
-    firejail_remove_symlink chromium
-    firejail_remove_symlink chromium-browser
-    firejail_remove_symlink google-chrome-stable
+    # Remove every Firejail link, the ones Settings added for mail and chat
+    # apps included
+    local app
+    for app in $(firejail_linked_apps); do
+        firejail_remove_symlink "$app"
+    done
 
     log_info "Minimal profile applied"
 }
@@ -187,7 +243,11 @@ apply_standard() {
     # breaks apps in ways that are hard to trace back to this.
     ensure_apparmor
     sudo systemctl enable --now apparmor 2>/dev/null || true
-    log_info "AppArmor active"
+    if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+        log_info "AppArmor active"
+    else
+        log_warn "AppArmor is not enabled in this kernel — its profiles have no effect here"
+    fi
 
     # Firejail for browsers
     if ! command -v firejail &>/dev/null; then
@@ -223,24 +283,16 @@ net.ipv4.conf.default.accept_redirects=0
 net.ipv4.conf.all.send_redirects=0
 net.ipv4.conf.default.send_redirects=0
 net.ipv4.icmp_echo_ignore_broadcasts=1
-net.ipv6.conf.all.accept_redirects=0
-net.ipv6.conf.default.accept_redirects=0
+# "-": skipped rather than an error where IPv6 is off (ipv6.disable=1)
+-net.ipv6.conf.all.accept_redirects=0
+-net.ipv6.conf.default.accept_redirects=0
 EOF
-    sudo sysctl -p /etc/sysctl.d/99-tebian-hardening.conf
+    # -e: a key this kernel lacks mustn't abort the rest of the profile
+    sudo sysctl -e -p /etc/sysctl.d/99-tebian-hardening.conf
     log_info "Extended kernel hardening applied"
 
-    # SSH key-only — but never without a key to log in with. On a headless
-    # Pi reached over SSH, disabling passwords first would be a lockout.
-    if has_ssh_key; then
-        sudo mkdir -p /etc/ssh/sshd_config.d
-        printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nX11Forwarding no\n' |
-            sudo tee /etc/ssh/sshd_config.d/99-tebian-keyonly.conf >/dev/null
-        sudo systemctl reload ssh 2>/dev/null || true
-        log_info "SSH set to key-only authentication"
-    else
-        log_warn "SSH password login left ON: no key in $(ssh_user_home)/.ssh/authorized_keys."
-        log_warn "Add one (ssh-copy-id from your other machine), then re-apply the hardened profile."
-    fi
+    # SSH key-only (refused, with a note, when there's no key to log in with)
+    ssh_keyonly_on || true
 
     log_info "Hardened profile applied"
 }
@@ -274,12 +326,32 @@ toggle_tor_off() {
     log_info "Tor disabled"
 }
 
+DNS_CONF=/etc/systemd/resolved.conf.d/99-tebian-dns.conf
+NM_DNS_CONF=/etc/NetworkManager/conf.d/99-tebian-dns-resolved.conf
+
+# True if a well-known name resolves within a few seconds
+dns_works() {
+    for _ in 1 2 3 4 5; do
+        timeout 3 getent ahosts deb.debian.org >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# Settings → Security → DNS Privacy runs these too, so the menu and
+# tebian-rebuild leave the machine in the same state
 toggle_dns_on() {
-    local provider="${2:-quad9}"
+    local provider="${2:-quad9}" servers
+    case "$provider" in
+        cloudflare) servers="1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com" ;;
+        quad9)      servers="9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net" ;;
+        *) log_error "Unknown DNS provider: $provider (quad9 or cloudflare)"; return 1 ;;
+    esac
     log_info "Enabling DNS-over-TLS ($provider)..."
 
     # trixie ships systemd-resolved as its own package, not installed by
-    # default. Without it, pointing resolv.conf at its stub kills all DNS.
+    # default. Installing it is the only step allowed to fail: nothing has
+    # been changed yet. (Without it, a stub resolv.conf kills all DNS.)
     if ! dpkg -s systemd-resolved >/dev/null 2>&1; then
         if ! sudo apt install -y systemd-resolved; then
             log_error "Could not install systemd-resolved — DNS settings left unchanged."
@@ -287,51 +359,48 @@ toggle_dns_on() {
         fi
     fi
 
-    sudo mkdir -p /etc/systemd/resolved.conf.d
-    case "$provider" in
-        cloudflare)
-            cat <<'EOF' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf
-[Resolve]
-DNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com
-DNSOverTLS=yes
-DNSSEC=allow-downgrade
-Domains=~.
-EOF
-            ;;
-        *)  # quad9 (default)
-            cat <<'EOF' | sudo tee /etc/systemd/resolved.conf.d/99-tebian-dns.conf
-[Resolve]
-DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net
-DNSOverTLS=yes
-DNSSEC=allow-downgrade
-Domains=~.
-EOF
-            ;;
-    esac
-
-    sudo systemctl enable --now systemd-resolved
+    sudo mkdir -p /etc/systemd/resolved.conf.d /etc/NetworkManager/conf.d
+    printf '[Resolve]\nDNS=%s\nDNSOverTLS=yes\nDNSSEC=allow-downgrade\nDomains=~.\n' "$servers" |
+        sudo tee "$DNS_CONF" >/dev/null
+    # NetworkManager hands each connection's DNS to resolved instead of
+    # writing resolv.conf itself
+    printf '[main]\ndns=systemd-resolved\n' | sudo tee "$NM_DNS_CONF" >/dev/null
+    sudo systemctl enable systemd-resolved
     sudo systemctl restart systemd-resolved
 
     # Only repoint resolv.conf once resolved is demonstrably up
     if ! systemctl is-active --quiet systemd-resolved || [ ! -f /run/systemd/resolve/stub-resolv.conf ]; then
-        sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf
-        log_error "systemd-resolved did not start — DNS settings left unchanged."
+        log_error "systemd-resolved did not start — rolling back."
+        toggle_dns_off
         return 1
     fi
-    if [ ! -L /etc/resolv.conf ] || ! readlink /etc/resolv.conf | grep -q stub-resolv; then
-        sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-    fi
+    sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    sudo systemctl restart NetworkManager 2>/dev/null || true
 
+    # Some networks block port 853 (DNS-over-TLS). No DNS at all is worse
+    # than no privacy.
+    if ! dns_works; then
+        log_error "No DNS answers over TLS (the network may block port 853) — rolling back."
+        toggle_dns_off
+        return 1
+    fi
     log_info "DNS-over-TLS enabled ($provider)"
 }
 
+# Hand /etc/resolv.conf back to NetworkManager
 toggle_dns_off() {
     log_info "Disabling DNS-over-TLS..."
-    sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        sudo systemctl restart systemd-resolved
+    sudo rm -f "$DNS_CONF" "$NM_DNS_CONF"
+    sudo systemctl disable --now systemd-resolved 2>/dev/null || true
+    # Only a symlink into systemd-resolved: a regular file here is already
+    # someone else's (NetworkManager's or the admin's)
+    if [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf | grep -q '/systemd/resolve/'; then
+        sudo rm -f /etc/resolv.conf
     fi
-    log_info "DNS-over-TLS disabled (using default DNS)"
+    # With the file gone and resolved stopped, NetworkManager writes a fresh
+    # /etc/resolv.conf from the connection's DNS servers on restart
+    sudo systemctl restart NetworkManager 2>/dev/null || true
+    log_info "DNS-over-TLS disabled (using your network's DNS)"
 }
 
 enable_transparent_tor() {
@@ -353,11 +422,18 @@ EOF
     sudo systemctl enable --now tor
 
     # iptables rules to redirect all traffic through Tor
-    local tor_uid
+    local tor_uid ntp_uid=""
     tor_uid=$(id -u debian-tor 2>/dev/null || id -u tor 2>/dev/null) || {
         log_error "Could not find Tor user UID"
         return 1
     }
+    # Tor refuses to connect with a clock that's far off. Boards without a
+    # real-time clock (Raspberry Pi) boot with the last shutdown's time, so
+    # there the clock service may still reach NTP directly — its own user
+    # only, and only NTP. Machines with an RTC keep NTP blocked.
+    if [ ! -e /dev/rtc0 ] && id -u systemd-timesync >/dev/null 2>&1; then
+        ntp_uid=$(id -u systemd-timesync)
+    fi
 
     # Rules from before this rewrite lived directly in OUTPUT; clear them so
     # they don't linger alongside the new chains
@@ -377,6 +453,7 @@ EOF
 # Tebian transparent Tor rules — generated by modules/core/security.sh.
 # Usage: $TOR_RULES [start|stop]
 TOR_UID=$tor_uid
+NTP_UID=$ntp_uid
 LAN="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16"
 
 remove() {
@@ -397,7 +474,6 @@ set -e
 remove
 iptables -w -t nat -N TEBIAN_TOR
 iptables -w -N TEBIAN_TOR
-ip6tables -w -N TEBIAN_TOR
 
 # nat: Tor's own traffic and loopback leave untouched; all DNS goes to
 # Tor's DNSPort, whatever server it was meant for; new TCP goes to TransPort
@@ -412,23 +488,34 @@ iptables -w -t nat -A TEBIAN_TOR -p tcp --syn -j REDIRECT --to-ports 9040
 
 # filter: allow what was redirected (it now targets loopback), Tor itself,
 # DHCP and the local network; reject the rest (UDP, ICMP, QUIC, WebRTC...)
-iptables -w -A TEBIAN_TOR -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Established traffic only in the reply direction (answers to connections
+# made TO this machine): NAT only redirects a connection's first packet, so
+# a connection opened before these rules — a browser's keep-alive or
+# websocket — would otherwise carry on straight past Tor.
+iptables -w -A TEBIAN_TOR -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT
 iptables -w -A TEBIAN_TOR -o lo -j ACCEPT
 iptables -w -A TEBIAN_TOR -m owner --uid-owner \$TOR_UID -j ACCEPT
 iptables -w -A TEBIAN_TOR -p udp --sport 68 --dport 67 -j ACCEPT
+[ -n "\$NTP_UID" ] && iptables -w -A TEBIAN_TOR -p udp --dport 123 -m owner --uid-owner \$NTP_UID -j ACCEPT
 # DNS over TCP to a LAN resolver would be forwarded upstream in the clear
 iptables -w -A TEBIAN_TOR -p tcp --dport 53 -j REJECT
 for net in \$LAN; do iptables -w -A TEBIAN_TOR -d \$net -j ACCEPT; done
 iptables -w -A TEBIAN_TOR -j REJECT
 
+# First in OUTPUT, ahead of ufw's chains — ufw accepts new outgoing
+# connections, which would let UDP out before it ever reached this chain.
+# IPv4 is complete before IPv6 is touched, so an IPv6 failure can't leave
+# IPv4 traffic unredirected.
+iptables -w -t nat -I OUTPUT 1 -j TEBIAN_TOR
+iptables -w -I OUTPUT 1 -j TEBIAN_TOR
+
+# No IPv6 in this kernel (ipv6.disable=1): nothing to reject, and
+# ip6tables would fail
+[ -d /proc/sys/net/ipv6 ] || exit 0
+ip6tables -w -N TEBIAN_TOR
 ip6tables -w -A TEBIAN_TOR -o lo -j ACCEPT
 ip6tables -w -A TEBIAN_TOR -m owner --uid-owner \$TOR_UID -j ACCEPT
 ip6tables -w -A TEBIAN_TOR -j REJECT
-
-# First in OUTPUT, ahead of ufw's chains — ufw accepts new outgoing
-# connections, which would let UDP out before it ever reached this chain
-iptables -w -t nat -I OUTPUT 1 -j TEBIAN_TOR
-iptables -w -I OUTPUT 1 -j TEBIAN_TOR
 ip6tables -w -I OUTPUT 1 -j TEBIAN_TOR
 EOFW
     sudo chmod 755 "$TOR_RULES"
@@ -549,8 +636,9 @@ apply_paranoid() {
     enable_mac_randomization
 
     # DNS through Tor (disable standalone DoT — Tor handles DNS)
-    sudo rm -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf 2>/dev/null
-    sudo systemctl restart systemd-resolved 2>/dev/null || true
+    if [ -f "$DNS_CONF" ]; then
+        toggle_dns_off
+    fi
 
     # Transparent Tor
     enable_transparent_tor
@@ -607,9 +695,11 @@ case "$PROFILE" in
     dns-off)      toggle_dns_off ;;
     mac-on)       enable_mac_randomization ;;
     mac-off)      disable_mac_randomization ;;
+    ssh-keyonly)  ssh_keyonly_on ;;
+    ssh-password) ssh_password_on ;;
     *)
         log_error "Unknown profile: $PROFILE"
-        echo "Usage: bash security.sh [minimal|standard|hardened|paranoid|paranoid-off|tor-on|tor-off|dns-on|dns-off|mac-on|mac-off]"
+        echo "Usage: bash security.sh [minimal|standard|hardened|paranoid|paranoid-off|tor-on|tor-off|dns-on [quad9|cloudflare]|dns-off|mac-on|mac-off|ssh-keyonly|ssh-password]"
         exit 1
         ;;
 esac

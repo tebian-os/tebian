@@ -81,55 +81,57 @@ temple_os() {
     "
 }
 
+# Copy the configs a backup covers into <dir> (dereferencing symlinks, so
+# the backup holds files, not links into the repo)
+backup_configs() {
+    local dir="$1" item
+    mkdir -p "$dir" || return 1
+    for item in sway kitty fuzzel mako gtklock; do
+        [ -d "$HOME/.config/$item" ] || continue
+        cp -rL "$HOME/.config/$item" "$dir/" || return 1
+    done
+    for item in .bashrc .bash_profile .profile; do
+        [ -f "$HOME/$item" ] || continue
+        cp "$HOME/$item" "$dir/" || return 1
+    done
+    printf 'Tebian Backup - %s\nHostname: %s\n' "${dir##*/}" "$(hostname)" > "$dir/manifest.txt"
+}
+
 backup_menu() {
     while true; do
     BACKUP_OPTS="󰆏 Backup Configs to ~/Tebian-Backup
 󰑋 Restore from Backup
 󰈔 View Current Backup
 󰌍 Back"
-    
+
     B_CHOICE=$(echo -e "$BACKUP_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
-    
+
     if is_back "$B_CHOICE"; then return; fi
 
     if [[ "$B_CHOICE" =~ "Backup Configs" ]]; then
-        BACKUP_DIR="$HOME/Tebian-Backup"
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-        
-        mkdir -p "$BACKUP_DIR/$TIMESTAMP"
-        
-        # Backup configs (dereference symlinks so we get actual files, not links into repo)
-        cp -rL ~/.config/sway "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp -rL ~/.config/kitty "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp -rL ~/.config/fuzzel "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp -rL ~/.config/mako "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp -rL ~/.config/gtklock "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp ~/.bashrc "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp ~/.bash_profile "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        cp ~/.profile "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null
-        
-        # Create manifest
-        echo "Tebian Backup - $TIMESTAMP" > "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
-        echo "Hostname: $(hostname)" >> "$BACKUP_DIR/$TIMESTAMP/manifest.txt"
-        
-        notify-send "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
-        
+        if backup_configs "$HOME/Tebian-Backup/$TIMESTAMP"; then
+            notify-send "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
+        else
+            notify-send "Backup" "Could not write ~/Tebian-Backup/$TIMESTAMP"
+        fi
+
     elif [[ "$B_CHOICE" =~ "Restore" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
-        
+
         if [ ! -d "$BACKUP_DIR" ]; then
             notify-send "Restore" "No backups found"
             continue
         fi
-        
+
         # List available backups
         BACKUPS=$(ls -1t "$BACKUP_DIR" | head -10)
         R_CHOICE=$(echo -e "󰌍 Back\n$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
-        
+
         if is_back "$R_CHOICE"; then
             continue
         fi
-        
+
         RESTORE_DIR="$BACKUP_DIR/$R_CHOICE"
 
         # Stray files in ~/Tebian-Backup show up in the list — don't "restore"
@@ -139,18 +141,45 @@ backup_menu() {
             continue
         fi
 
-        if [ -d "$RESTORE_DIR/sway" ]; then cp -r "$RESTORE_DIR/sway" ~/.config/; fi
-        if [ -d "$RESTORE_DIR/kitty" ]; then cp -r "$RESTORE_DIR/kitty" ~/.config/; fi
-        if [ -d "$RESTORE_DIR/fuzzel" ]; then cp -r "$RESTORE_DIR/fuzzel" ~/.config/; fi
-        if [ -d "$RESTORE_DIR/mako" ]; then cp -r "$RESTORE_DIR/mako" ~/.config/; fi
-        if [ -d "$RESTORE_DIR/gtklock" ]; then cp -r "$RESTORE_DIR/gtklock" ~/.config/; fi
-        if [ -f "$RESTORE_DIR/.bashrc" ]; then cp "$RESTORE_DIR/.bashrc" ~/; fi
-        if [ -f "$RESTORE_DIR/.bash_profile" ]; then cp "$RESTORE_DIR/.bash_profile" ~/; fi
-        if [ -f "$RESTORE_DIR/.profile" ]; then cp "$RESTORE_DIR/.profile" ~/; fi
-        
-        swaymsg reload 2>/dev/null &
-        notify-send "Restore Complete" "Restored from $R_CHOICE"
-        
+        # Restoring replaces the current configs — ask, and keep them first
+        # as a backup of their own, so a wrong pick can be undone
+        local confirm
+        confirm=$(echo -e "No, cancel\nYes, replace my current configs" | tfuzzel -d --match-mode=exact -p " Restore $R_CHOICE? | " --width 50)
+        [[ "$confirm" =~ "Yes" ]] || continue
+        local before
+        before="$BACKUP_DIR/$(date +%Y%m%d_%H%M%S)-before-restore"
+        if ! backup_configs "$before"; then
+            notify-send "Restore" "Could not back up the current configs first — nothing was changed"
+            continue
+        fi
+
+        # Each item is copied next to its target, then swapped in: the
+        # result is exactly the backup (no leftover files mixed in), and a
+        # failed copy leaves the current one in place
+        local item failed=""
+        for item in sway kitty fuzzel mako gtklock; do
+            [ -d "$RESTORE_DIR/$item" ] || continue
+            rm -rf "$HOME/.config/$item.restoring"
+            if cp -r "$RESTORE_DIR/$item" "$HOME/.config/$item.restoring"; then
+                rm -rf "$HOME/.config/$item"
+                mv "$HOME/.config/$item.restoring" "$HOME/.config/$item" || failed+=" $item"
+            else
+                rm -rf "$HOME/.config/$item.restoring"
+                failed+=" $item"
+            fi
+        done
+        for item in .bashrc .bash_profile .profile; do
+            [ -f "$RESTORE_DIR/$item" ] || continue
+            cp "$RESTORE_DIR/$item" "$HOME/$item" || failed+=" $item"
+        done
+
+        swaymsg reload >/dev/null 2>&1 &
+        if [ -n "$failed" ]; then
+            notify-send "Restore incomplete" "Not restored:$failed — your previous configs are in ${before#"$HOME"/}"
+        else
+            notify-send "Restore Complete" "Restored from $R_CHOICE (previous configs: ${before#"$HOME"/})"
+        fi
+
     elif [[ "$B_CHOICE" =~ "View Current" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
         if [ -d "$BACKUP_DIR" ]; then
@@ -162,12 +191,38 @@ backup_menu() {
     done
 }
 
+# Config Tracking keeps the history of this machine's own settings in a
+# repository of its own, outside ~/Tebian: ~/Tebian belongs to tebian-update,
+# and turning it into a git repo made every update take the git-pull path
+# and fail. Work tree is $HOME; only the files listed here are tracked.
+CONFIG_GIT_DIR="$HOME/.local/share/tebian/config.git"
+CONFIG_TRACKED=(
+    .config/tebian/machine.conf
+    .config/sway/config.user .config/sway/outputs
+    .config/kitty/kitty.conf .config/fuzzel/fuzzel.ini .config/mako/config
+)
+cfg_git() { git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" "$@"; }
+
 config_menu() {
     while true; do
     TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+    local MACHINE_CONF="$HOME/.config/tebian/machine.conf"
+    local TRACK_OPTS
+    if [ -d "$CONFIG_GIT_DIR" ]; then
+        TRACK_OPTS="󰊢 View Config Changes
+󰆓 Save Config Snapshot
+󰋚 Config History
+󰆓 Set Config Remote URL"
+        cfg_git remote get-url origin >/dev/null 2>&1 && TRACK_OPTS+="
+󰕒 Push Config to Remote"
+    else
+        TRACK_OPTS="󰊢 Enable Config Tracking (git)"
+    fi
 
-    # Detect git state
-    if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ]; then
+    # ~/Tebian as a git clone of Tebian (fleet or dev machine): one that
+    # tracks a remote, which is what tebian-update pulls
+    if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ] &&
+       git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
         GIT_BRANCH=$(git -C "$TEBIAN_DIR" branch --show-current 2>/dev/null || echo "unknown")
         GIT_DIRTY=$(git -C "$TEBIAN_DIR" status --porcelain 2>/dev/null | head -1)
         GIT_REMOTE=$(git -C "$TEBIAN_DIR" remote get-url origin 2>/dev/null || echo "none")
@@ -182,19 +237,20 @@ config_menu() {
 󰋽 $REMOTE_LABEL
 󰚰 Update Tebian
 󰑓 Rebuild System
-📝 Edit tebian.conf
-󰊢 View Diff
-󰆓 Set Remote URL
+📝 Edit Machine Settings
+󰊢 View Tebian Diff
+󰆓 Set Tebian Remote URL
+$TRACK_OPTS
 󰌍 Back"
     else
         C_OPTS="󰚰 Update Tebian
 󰑓 Rebuild System
-📝 Edit tebian.conf
-󰊢 Enable Config Tracking (git)
+📝 Edit Machine Settings
+$TRACK_OPTS
 󰌍 Back"
     fi
 
-    C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | ")
+    C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | " --width 40)
 
     if is_back "$C_CHOICE"; then return; fi
 
@@ -211,12 +267,20 @@ config_menu() {
             echo ''
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Edit tebian.conf" ]]; then
-        if [ ! -f "$TEBIAN_DIR/tebian.conf" ]; then
-            touch "$TEBIAN_DIR/tebian.conf"
+    elif [[ "$C_CHOICE" =~ "Edit Machine Settings" ]]; then
+        # This machine's choices live in machine.conf, layered over
+        # ~/Tebian/tebian.conf — which is Tebian's file (tracked in git on
+        # fleet machines), so editing it here would block updates
+        if [ ! -f "$MACHINE_CONF" ]; then
+            mkdir -p "${MACHINE_CONF%/*}"
+            {
+                echo "# This machine's settings. Each KEY=\"value\" here overrides the default"
+                echo "# in ~/Tebian/tebian.conf (see that file for every key). Settings records"
+                echo "# your choices here; apply edits with: tebian-rebuild"
+            } > "$MACHINE_CONF"
         fi
-        $TERM_CMD nano "$TEBIAN_DIR/tebian.conf"
-    elif [[ "$C_CHOICE" =~ "View Diff" ]]; then
+        $TERM_CMD nano "$MACHINE_CONF"
+    elif [[ "$C_CHOICE" =~ "View Tebian Diff" ]]; then
         $TERM_CMD bash -c "
             echo '=== Config Changes ==='
             echo ''
@@ -228,7 +292,7 @@ config_menu() {
             echo ''
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Set Remote URL" ]]; then
+    elif [[ "$C_CHOICE" =~ "Set Tebian Remote URL" ]]; then
         $TERM_CMD bash -c "
             echo '=== Set Git Remote ==='
             echo ''
@@ -249,31 +313,89 @@ config_menu() {
             read -p 'Press Enter to close...'
         "
     elif [[ "$C_CHOICE" =~ "Enable Config Tracking" ]]; then
-        $TERM_CMD bash -c "
-            echo '=== Enable Config Tracking ==='
-            echo ''
-            echo 'This will install git and initialize version tracking'
-            echo 'for your Tebian configuration.'
-            echo ''
-            read -p 'Continue? [Y/n]: ' confirm
-            if [[ \"\$confirm\" =~ ^[Nn]$ ]]; then
-                echo 'Cancelled.'
-                read -p 'Press Enter to close...'
-                exit 0
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" TRACKED="${CONFIG_TRACKED[*]}" $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1"; read -p "Press Enter to close..."; exit 1; }
+            echo "=== Enable Config Tracking ==="
+            echo ""
+            echo "Keeps a history of your own settings (machine.conf, sway"
+            echo "config.user and outputs, kitty, fuzzel and mako configs) in"
+            echo "${CONFIG_GIT_DIR/#$HOME/~}. ~/Tebian is not touched."
+            echo ""
+            read -p "Continue? [Y/n]: " confirm
+            [[ "$confirm" =~ ^[Nn]$ ]] && { echo "Cancelled."; read -p "Press Enter to close..."; exit 0; }
+            if ! command -v git >/dev/null; then
+                echo "Installing git..."
+                { sudo apt update -qq && sudo apt install -y git; } || fail "Could not install git"
             fi
-            echo ''
-            echo 'Installing git...'
-            sudo apt update -qq && sudo apt install -y git
-            echo ''
-            cd '$TEBIAN_DIR'
-            git init
-            git add -A
-            git commit -m 'Initial Tebian config'
-            echo ''
-            echo 'Done! Config tracking enabled.'
-            echo 'Use View Diff to see changes, Set Remote to sync.'
-            read -p 'Press Enter to close...'
-        "
+            g() { git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" "$@"; }
+            mkdir -p "${CONFIG_GIT_DIR%/*}"
+            git init -q --bare "$CONFIG_GIT_DIR" || fail "git init failed"
+            # Only the listed files: the work tree is all of $HOME
+            g config status.showUntrackedFiles no
+            # A fresh system has no git identity, and commit refuses without one
+            g config user.name >/dev/null || g config user.name "${USER:-$(id -un)}"
+            g config user.email >/dev/null || g config user.email "${USER:-$(id -un)}@$(hostname)"
+            cd "$HOME" || fail "No home directory"
+            for f in $TRACKED; do [ -f "$f" ] && { g add -- "$f" || fail "Could not add $f"; }; done
+            g commit -q -m "Initial snapshot" || fail "The first commit failed — see the message above"
+            echo ""
+            echo "Done! Config tracking enabled."
+            echo "Save Config Snapshot records changes; View Config Changes shows them."
+            read -p "Press Enter to close..."
+        '
+    elif [[ "$C_CHOICE" =~ "View Config Changes" ]]; then
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
+            cd "$HOME" && git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" -c color.ui=always diff | less -R
+            git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" status --short
+            read -p "Press Enter to close..."
+        '
+    elif [[ "$C_CHOICE" =~ "Save Config Snapshot" ]]; then
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" TRACKED="${CONFIG_TRACKED[*]}" $TERM_CMD bash -c '
+            g() { git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" "$@"; }
+            cd "$HOME" || exit 1
+            # Files that appeared since tracking began (e.g. machine.conf)
+            for f in $TRACKED; do [ -f "$f" ] && g add -- "$f"; done
+            g add -u
+            if g diff --cached --quiet; then
+                echo "Nothing changed since the last snapshot."
+            else
+                read -p "Describe this snapshot (optional): " msg
+                if g commit -q -m "${msg:-Snapshot $(date "+%Y-%m-%d %H:%M")}"; then
+                    echo "Snapshot saved."
+                else
+                    echo "❌ The snapshot was not saved — see the message above."
+                fi
+            fi
+            read -p "Press Enter to close..."
+        '
+    elif [[ "$C_CHOICE" =~ "Config History" ]]; then
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
+            git -c color.ui=always --git-dir="$CONFIG_GIT_DIR" log --stat --date=short | less -R
+        '
+    elif [[ "$C_CHOICE" =~ "Set Config Remote URL" ]]; then
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
+            g() { git --git-dir="$CONFIG_GIT_DIR" "$@"; }
+            echo "Current remote: $(g remote get-url origin 2>/dev/null || echo none)"
+            echo ""
+            read -p "New remote URL (your own private repo): " url
+            if [ -z "$url" ]; then
+                echo "Cancelled."
+            elif g remote get-url origin >/dev/null 2>&1; then
+                g remote set-url origin "$url" && echo "Remote set to: $url"
+            else
+                g remote add origin "$url" && echo "Remote set to: $url"
+            fi
+            read -p "Press Enter to close..."
+        '
+    elif [[ "$C_CHOICE" =~ "Push Config to Remote" ]]; then
+        CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
+            if git --git-dir="$CONFIG_GIT_DIR" push -u origin HEAD; then
+                echo "Pushed."
+            else
+                echo "❌ Push failed — see the message above."
+            fi
+            read -p "Press Enter to close..."
+        '
     fi
     done
 }
@@ -357,33 +479,25 @@ notification_history_menu() {
         notify-send "Notifications" "mako not installed"
         return
     fi
-    # Get notification history from mako (JSON) and format for fuzzel
-    HISTORY=$(makoctl history 2>/dev/null | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    for n in data.get('data', [[]])[0]:
-        summary = n.get('summary', {}).get('data', 'No title')
-        body = n.get('body', {}).get('data', '')
-        app = n.get('app-name', {}).get('data', '')
-        line = f'{app}: {summary}'
-        if body:
-            line += f' - {body[:60]}'
-        print(line)
-except:
-    print('No notifications')
-" 2>/dev/null)
-    if [ -z "$HISTORY" ] || [ "$HISTORY" = "No notifications" ]; then
+    # mako 1.9+ (trixie has 1.10) prints history as text, one block each:
+    #   Notification 12: <summary>
+    #     App name: <app>
+    # (no body). Becomes "app: summary" per line, newest first.
+    HISTORY=$(makoctl history 2>/dev/null | awk '
+        function flush() { if (have) print (app != "" ? app ": " : "") summary; have = 0 }
+        /^Notification [0-9]+:/ { flush(); summary = $0; sub(/^Notification [0-9]+: ?/, "", summary); app = ""; have = 1; next }
+        /^  App name: / { app = $0; sub(/^  App name: /, "", app) }
+        END { flush() }' | cut -c1-80)
+    if [ -z "$HISTORY" ]; then
         HISTORY="(No recent notifications)"
     fi
-    HIST_OPTS="$HISTORY
-🗑️  Clear All
-󰌍 Back"
-    H_CHOICE=$(echo -e "$HIST_OPTS" | tfuzzel -d -p " 󰍡 Notifications | ")
-    if [[ "$H_CHOICE" =~ "Clear All" ]]; then
-        # Dismiss visible notifications AND history entries (-h) — a plain
-        # dismiss only hides visible ones and adds them to history. Restart
-        # mako to flush what remains.
+    # printf, not echo -e: notification text comes from any app and may
+    # hold backslashes
+    H_CHOICE=$(printf '%s\n' "$HISTORY" "🗑️  Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 60)
+    if [[ "$H_CHOICE" == "🗑️  Clear All" ]]; then
+        # -h (--no-history) dismisses the visible ones without adding them
+        # to history. History itself has no clear command; it lives only in
+        # mako's memory, so restarting mako empties it.
         makoctl dismiss -a -h 2>/dev/null || makoctl dismiss --all 2>/dev/null
         systemctl --user restart mako 2>/dev/null || { pkill mako; (mako &) }
         tnotify "Notifications" "History cleared"
