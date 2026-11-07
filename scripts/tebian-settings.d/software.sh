@@ -355,23 +355,28 @@ Install Legacy System Utils (man, locate...)
                 echo -e 'ALGO=zstd\nPERCENT=60' | sudo tee /etc/default/zramswap > /dev/null 2>&1
                 sudo systemctl restart zramswap 2>/dev/null || true
             fi
-            # Configure greetd for nwg-hello
+            # Switch greetd to the nwg-hello login screen only when nwg-hello
+            # is there to start: otherwise this replaced a working greeter
+            # (tuigreet, say) with one that can't run, and nothing to log in
+            # with. The shipped config is installed rather than a copy of it
+            # here, so it keeps its NVIDIA and keyboard-layout handling.
+            greetd_cfg=\"\${TEBIAN_DIR:-\$HOME/Tebian}/configs/greetd/config.toml\"
             if [ -f /etc/greetd/config.toml ] && ! grep -q 'nwg-hello' /etc/greetd/config.toml; then
-                echo 'Configuring login screen...'
-                sudo tee /etc/greetd/config.toml > /dev/null << 'GREETDCFG'
-[terminal]
-vt = 7
-
-[default_session]
-command = \"sway --config /etc/nwg-hello/sway-config\"
-user = \"greeter\"
-GREETDCFG
+                if [ -f /etc/nwg-hello/sway-config ] && [ -f \"\$greetd_cfg\" ]; then
+                    echo 'Configuring login screen (old config kept as /etc/greetd/config.toml.tebian-bak)...'
+                    sudo cp -a /etc/greetd/config.toml /etc/greetd/config.toml.tebian-bak &&
+                        sudo install -m 644 \"\$greetd_cfg\" /etc/greetd/config.toml
+                else
+                    echo 'Login screen left as it is: nwg-hello is not installed.'
+                fi
             fi
             echo ''
             echo 'Done! Some features require Sway restart.'
             read -p 'Press Enter to close...'
         "
-        tnotify "Tebian" "Desktop Essentials installed!"
+        if command -v thunar >/dev/null; then
+            tnotify "Tebian" "Desktop Essentials installed!"
+        fi
     elif [[ "$E_CHOICE" =~ "File Manager" ]]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y thunar thunar-archive-plugin file-roller; echo 'Done!'; read -p 'Press Enter...'"
     elif [[ "$E_CHOICE" =~ "Notifications" ]]; then
@@ -449,7 +454,9 @@ Current default: ${DEFAULT_TERM:-kitty}
             sudo apt update && sudo apt install -y foot || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
 
 
+            # Only seed a config if there is none, as for kitty
             mkdir -p ~/.config/foot
+            if [ ! -f ~/.config/foot/foot.ini ]; then
             cat > ~/.config/foot/foot.ini << 'FOOTCONF'
 [main]
 font=JetBrainsMono Nerd Font:size=11
@@ -461,6 +468,7 @@ foreground=eceff4
 selection-background=434c5e
 selection-foreground=eceff4
 FOOTCONF
+            fi
 
             echo ''
             echo 'Done! foot is now your default terminal.'
@@ -473,7 +481,9 @@ FOOTCONF
             sudo apt update && sudo apt install -y alacritty || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
 
 
+            # Only seed a config if there is none, as for kitty
             mkdir -p ~/.config/alacritty
+            if [ ! -f ~/.config/alacritty/alacritty.toml ]; then
             cat > ~/.config/alacritty/alacritty.toml << 'ALACONF'
 [font]
 normal = { family = \"JetBrainsMono Nerd Font\", style = \"Regular\" }
@@ -487,6 +497,7 @@ foreground = \"#eceff4\"
 x = 12
 y = 12
 ALACONF
+            fi
 
             echo ''
             echo 'Done! alacritty is now your default terminal.'
@@ -520,8 +531,13 @@ ALACONF
         continue
     fi
 
-    # Refresh TERM_CMD so this session uses the new terminal
-    TERM_CMD=$(get_term)
+    # This session's terminal follows the pick: get_term would still answer
+    # kitty whenever kitty is installed. Not gnome-terminal, which returns
+    # at once instead of waiting for the command it runs, and every
+    # "$TERM_CMD bash -c ..." here relies on that wait.
+    case "$picked" in
+        kitty|foot|alacritty) TERM_CMD="$picked -e" ;;
+    esac
     swaymsg reload 2>/dev/null &
     tnotify "Tebian" "Terminal updated. Sway reloaded."
     done
@@ -532,8 +548,19 @@ software_menu() {
     # Detect states
     HAS_STEAM=$(command -v steam >/dev/null && echo "YES" || echo "NO")
     HAS_HEROIC=$(ls ~/Applications/Heroic.AppImage &>/dev/null && echo "YES" || echo "NO")
-    HAS_MC=$(command -v minecraft-launcher >/dev/null && echo "YES" || echo "NO")
+    # Older Tebian forced Mojang's .deb past dpkg and held it, which leaves
+    # apt refusing every install and upgrade; it gets its own fix-it entry
+    if dpkg-query -W minecraft-launcher >/dev/null 2>&1; then
+        HAS_MC="DEB"
+    elif [ -x ~/Games/minecraft-launcher/minecraft-launcher ]; then
+        HAS_MC="YES"
+    else
+        HAS_MC="NO"
+    fi
     HAS_POKE=$(ls ~/Games/PokeMMO/PokeMMO.sh &>/dev/null && echo "YES" || echo "NO")
+    # Steam (needs i386) and the Minecraft launcher only exist for x86-64
+    local ARCH
+    ARCH=$(dpkg --print-architecture 2>/dev/null)
 
     # Build Dynamic Menu
     APPS="󰌍 Back
@@ -544,7 +571,7 @@ software_menu() {
     # Steam Logic
     if [[ "$HAS_STEAM" == "YES" ]]; then
         APPS+="\n󰓓 Launch Steam\n󰆴 Uninstall Steam"
-    else
+    elif [[ "$ARCH" == "amd64" ]]; then
         APPS+="\n󰓓 Install Steam"
     fi
 
@@ -556,9 +583,11 @@ software_menu() {
     fi
 
     # Minecraft Logic
-    if [[ "$HAS_MC" == "YES" ]]; then
+    if [[ "$HAS_MC" == "DEB" ]]; then
+        APPS+="\n󰺵 Reinstall Minecraft (fixes blocked updates)\n󰆴 Uninstall Minecraft"
+    elif [[ "$HAS_MC" == "YES" ]]; then
         APPS+="\n󰺵 Launch Minecraft\n󰆴 Uninstall Minecraft"
-    else
+    elif [[ "$ARCH" == "amd64" ]]; then
         APPS+="\n󰺵 Install Minecraft"
     fi
 
@@ -578,7 +607,7 @@ software_menu() {
         APPS+="\n󰢮 Graphics Drivers (Current: Debian Stable)"
     fi
 
-    A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | ")
+    A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | " --width 50)
     
     if is_back "$A_CHOICE"; then return; fi
 
@@ -586,7 +615,7 @@ software_menu() {
     if [[ "$A_CHOICE" =~ "Install Flatpak" ]]; then
         $TERM_CMD bash -c "echo 'Installing Flatpak & Flathub...'; sudo apt update && sudo apt install -y flatpak && flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; read -p 'Done! Reboot recommended. Press Enter...'"
     elif [[ "$A_CHOICE" =~ "Install Distrobox" ]]; then
-        $TERM_CMD bash -c "echo 'Installing Distrobox & Podman...'; sudo apt update && sudo apt install -y distrobox podman; echo '--------------------------------'; echo 'To use AUR:'; echo '1. distrobox create --name arch --image archlinux'; echo '2. distrobox enter arch'; echo '3. git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si'; read -p 'Done! Press Enter...'"
+        $TERM_CMD bash -c "echo 'Installing Distrobox & Podman...'; sudo apt update && sudo apt install -y distrobox podman; echo '--------------------------------'; echo 'To use AUR:'; echo '1. distrobox create --name arch --image archlinux'; echo '2. distrobox enter arch'; echo '3. sudo pacman -S --needed git base-devel'; echo '4. git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si'; read -p 'Done! Press Enter...'"
     elif [[ "$A_CHOICE" =~ "Install Nix" ]]; then
         # Debian's own Nix packages: signed by the Debian archive like
         # everything else apt installs, instead of piping a script from
@@ -634,14 +663,28 @@ software_menu() {
         $TERM_CMD bash -c "sudo apt purge -y steam-installer steam; sudo apt autoremove -y; read -p 'Steam removed. Enter...'"
     
     elif [[ "$A_CHOICE" =~ "Install Heroic" ]]; then
-        $TERM_CMD bash -c "
+        $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1"; read -p "Press Enter..."; exit 1; }
+            case "$(dpkg --print-architecture)" in
+                amd64) asset=x86_64 ;;
+                arm64) asset=arm64 ;;
+                *) fail "Heroic publishes no build for this CPU." ;;
+            esac
+            # AppImages mount themselves with FUSE 2, which Debian no longer
+            # installs by default; without it Heroic silently never starts
+            echo "Installing FUSE 2 (AppImages need it)..."
+            sudo apt update
+            sudo apt install -y libfuse2t64 || sudo apt install -y libfuse2 || fail "Could not install FUSE 2."
+            echo ""
+            HEROIC_VER=$(curl -fsSL https://api.github.com/repos/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest | grep -oP "\"tag_name\": \"v\K[^\"]*")
+            [ -n "$HEROIC_VER" ] || fail "Could not look up the latest Heroic release."
+            echo "Downloading Heroic $HEROIC_VER ($asset)..."
             mkdir -p ~/Applications
-            HEROIC_VER=\$(curl -s https://api.github.com/repos/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest | grep -oP '\"tag_name\": \"v\K[^\"]*')
-            if curl -fL -o ~/Applications/Heroic.AppImage \"https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest/download/Heroic-\${HEROIC_VER}-linux-x86_64.AppImage\"; then
+            if curl --proto "=https" -fL -o ~/Applications/Heroic.AppImage "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/v${HEROIC_VER}/Heroic-${HEROIC_VER}-linux-${asset}.AppImage"; then
                 chmod +x ~/Applications/Heroic.AppImage
             else
                 rm -f ~/Applications/Heroic.AppImage
-                echo 'Download failed — check your connection or the release page.'; read -p 'Press Enter...'; exit 1
+                fail "Download failed — check your connection or the release page."
             fi
             mkdir -p ~/.local/share/applications
             cat > ~/.local/share/applications/heroic.desktop << DESKEOF
@@ -653,35 +696,80 @@ Icon=heroic
 Type=Application
 Categories=Game;
 DESKEOF
-            echo 'Done!'
-            read -p 'Press Enter...'
-        "
+            echo ""
+            echo "Done!"
+            read -p "Press Enter..."
+        '
     elif [[ "$A_CHOICE" =~ "Launch Heroic" ]]; then
-        ~/Applications/Heroic.AppImage &
+        # Installs from before Heroic's menu entry pulled in FUSE 2 lack it
+        if ! compgen -G "/usr/lib/*/libfuse.so.2" >/dev/null && ! compgen -G "/lib/*/libfuse.so.2" >/dev/null; then
+            tebian_term_apt_install libfuse2t64 || { tnotify "Heroic" "Heroic needs FUSE 2 (libfuse2t64) to start"; continue; }
+        fi
+        setsid ~/Applications/Heroic.AppImage >/dev/null 2>&1 &
     elif [[ "$A_CHOICE" =~ "Uninstall Heroic" ]]; then
         rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && notify-send "Tebian" "Heroic removed."
 
-    elif [[ "$A_CHOICE" =~ "Install Minecraft" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing Minecraft...'
-            echo ''
-            echo 'Downloading launcher...'
-            curl -fSL -o /tmp/mc.deb https://launcher.mojang.com/download/Minecraft.deb || { echo 'Download failed.'; read -p 'Press Enter...'; exit 1; }
-            echo 'Installing dependencies...'
+    elif [[ "$A_CHOICE" =~ "Install Minecraft" || "$A_CHOICE" =~ "Reinstall Minecraft" ]]; then
+        # Mojang's tarball, unpacked in the home folder. Their .deb depends
+        # on library names from before Debian's 64-bit time transition
+        # (libgdk-pixbuf2.0-0), which trixie doesn't have, so it can't be
+        # installed by apt; forcing it past dpkg instead left an unmet
+        # dependency that blocked every apt install and upgrade, security
+        # updates included. The launcher fetches its own Java.
+        $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1"; read -p "Press Enter..."; exit 1; }
+            echo "Installing Minecraft..."
+            echo ""
+            sudo -v || fail "Authentication failed."
+            if dpkg-query -W minecraft-launcher >/dev/null 2>&1; then
+                echo "Removing the old Minecraft package that was blocking apt..."
+                sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1
+                sudo dpkg --purge minecraft-launcher || fail "Could not remove the old minecraft-launcher package."
+                echo ""
+            fi
+            # Same libraries the .deb asks for, by the names this release uses
+            pick() { if apt-cache show "$1" >/dev/null 2>&1; then echo "$1"; else echo "$2"; fi; }
             sudo apt update
-            sudo apt install -y default-jre libasound2t64 libgtk-3-0t64 libcups2t64 xdg-utils xwayland 2>/dev/null || true
-            # The .deb uses old dependency names (pre-t64 transition) — force install then hold
-            sudo dpkg -i --force-depends /tmp/mc.deb
-            sudo apt-mark hold minecraft-launcher
-            rm -f /tmp/mc.deb
-            echo ''
-            echo 'Done! Launch Minecraft from the menu.'
-            read -p 'Press Enter...'
-        "
+            echo ""
+            echo "Installing the libraries the launcher needs..."
+            sudo apt install -y "$(pick libgtk-3-0t64 libgtk-3-0)" "$(pick libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-0)" \
+                "$(pick libasound2t64 libasound2)" "$(pick libcups2t64 libcups2)" \
+                libnss3 libgbm1 libxss1 libxtst6 xdg-utils xwayland || fail "Could not install the libraries."
+            echo ""
+            echo "Downloading the launcher from Mojang..."
+            tmp=$(mktemp -d) || fail "Could not create a temporary folder."
+            trap "rm -rf \"$tmp\"" EXIT
+            curl --proto "=https" -fSL -o "$tmp/mc.tar.gz" https://launcher.mojang.com/download/Minecraft.tar.gz ||
+                fail "Download failed."
+            tar -xzf "$tmp/mc.tar.gz" -C "$tmp" && [ -x "$tmp/minecraft-launcher/minecraft-launcher" ] ||
+                fail "The download is not the launcher Mojang usually ships."
+            mkdir -p ~/Games
+            rm -rf ~/Games/minecraft-launcher
+            mv "$tmp/minecraft-launcher" ~/Games/ || fail "Could not install to ~/Games."
+            mkdir -p ~/.local/share/applications
+            cat > ~/.local/share/applications/minecraft-launcher.desktop << DESKEOF
+[Desktop Entry]
+Name=Minecraft Launcher
+Comment=Official Minecraft launcher
+Exec=$HOME/Games/minecraft-launcher/minecraft-launcher
+Icon=applications-games
+Type=Application
+Categories=Game;
+DESKEOF
+            echo ""
+            echo "Done! Launch Minecraft from the menu."
+            read -p "Press Enter..."
+        '
     elif [[ "$A_CHOICE" =~ "Launch Minecraft" ]]; then
-        minecraft-launcher &
+        setsid ~/Games/minecraft-launcher/minecraft-launcher >/dev/null 2>&1 &
     elif [[ "$A_CHOICE" =~ "Uninstall Minecraft" ]]; then
-        $TERM_CMD bash -c "sudo apt purge -y minecraft-launcher; sudo apt autoremove -y; read -p 'Minecraft removed. Enter...'"
+        # Worlds and settings live in ~/.minecraft and are kept
+        if [[ "$HAS_MC" == "DEB" ]]; then
+            $TERM_CMD bash -c "sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1; sudo dpkg --purge minecraft-launcher; rm -f ~/.local/share/applications/minecraft-launcher.desktop; read -p 'Minecraft removed (worlds in ~/.minecraft are kept). Enter...'"
+        else
+            rm -rf ~/Games/minecraft-launcher ~/.local/share/applications/minecraft-launcher.desktop &&
+                tnotify "Tebian" "Minecraft removed (worlds in ~/.minecraft are kept)"
+        fi
 
     elif [[ "$A_CHOICE" =~ "Install PokeMMO" ]]; then
         $TERM_CMD bash -c "
@@ -692,10 +780,12 @@ DESKEOF
             sudo apt install -y default-jre unzip xwayland 2>/dev/null || true
             echo 'Downloading PokeMMO client...'
             mkdir -p ~/Games/PokeMMO
-            curl -fSL -o /tmp/PokeMMO-Client.zip https://dl.pokemmo.com/PokeMMO-Client.zip || { echo 'Download failed.'; read -p 'Press Enter...'; exit 1; }
+            # Private temp file: a fixed /tmp name can be planted by another user
+            zip=\$(mktemp --suffix=.zip) || exit 1
+            curl --proto '=https' -fSL -o \"\$zip\" https://dl.pokemmo.com/PokeMMO-Client.zip || { rm -f \"\$zip\"; echo 'Download failed.'; read -p 'Press Enter...'; exit 1; }
             echo 'Extracting...'
-            unzip -o /tmp/PokeMMO-Client.zip -d ~/Games/PokeMMO
-            rm -f /tmp/PokeMMO-Client.zip
+            unzip -o \"\$zip\" -d ~/Games/PokeMMO
+            rm -f \"\$zip\"
             chmod +x ~/Games/PokeMMO/PokeMMO.sh 2>/dev/null
             mkdir -p ~/.local/share/applications
             cat > ~/.local/share/applications/pokemmo.desktop << DESKEOF
@@ -746,7 +836,11 @@ gfx_drivers_menu() {
         if [[ "$G_CHOICE" =~ "Switch to Backports" ]]; then
             $TERM_CMD bash -c "
                 echo 'Enabling trixie-backports (NotAutomatic: nothing else will upgrade)...'
-                echo 'deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware' | sudo tee /etc/apt/sources.list.d/tebian-backports.list >/dev/null
+                # A second entry for a suite already in the sources makes
+                # apt warn 'configured multiple times' on every update
+                if ! grep -rqs 'trixie-backports' /etc/apt/sources.list /etc/apt/sources.list.d/; then
+                    echo 'deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware' | sudo tee /etc/apt/sources.list.d/tebian-backports.list >/dev/null
+                fi
                 sudo apt update
                 PKGS='mesa-vulkan-drivers libgl1-mesa-dri'
                 # Steam needs the 32-bit half too — match whatever is installed
@@ -818,7 +912,7 @@ apt_search() {
     if [[ -z "$QUERY" ]]; then return; fi
 
     local RESULTS
-    RESULTS=$(apt-cache search "$QUERY" 2>/dev/null)
+    RESULTS=$(apt-cache search "$QUERY" 2>/dev/null | pkg_rank_by_name "$QUERY" ' - ')
     local COUNT
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
@@ -827,11 +921,11 @@ apt_search() {
         return
     fi
 
-    if [[ "$COUNT" -gt 200 ]]; then
-        notify-send "Package Browser" "$COUNT results — showing first 50. Try a more specific search."
+    if [[ "$COUNT" -gt 50 ]]; then
+        notify-send "Package Browser" "$COUNT results — showing the best 50. Try a more specific search."
     fi
 
-    # Get first 50 results
+    # Ranked above, so the package actually searched for is never cut off
     local TOP_RESULTS
     TOP_RESULTS=$(echo "$RESULTS" | head -50)
 
@@ -847,14 +941,14 @@ apt_search() {
         PKG_NAME=$(echo "$LINE" | awk -F' - ' '{print $1}')
         local DESC="${LINE#* - }"
         if echo "$INSTALLED_PKGS" | grep -qx "$PKG_NAME"; then
-            MENU+="\n󰄬 $PKG_NAME - $DESC"
+            MENU+=$'\n'"󰄬 $PKG_NAME - $DESC"
         else
-            MENU+="\n󰄰 $PKG_NAME - $DESC"
+            MENU+=$'\n'"󰄰 $PKG_NAME - $DESC"
         fi
     done <<< "$TOP_RESULTS"
 
     local SEL
-    SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Results ($COUNT) | ")
+    SEL=$(printf '%s\n' "$MENU" | tfuzzel -d -p " 󰏗 Results ($COUNT) | ")
 
     if is_back "$SEL"; then return; fi
 
@@ -890,15 +984,8 @@ apt_package_action() {
 
     if is_back "$A_CHOICE"; then return; fi
 
-    if [[ "$A_CHOICE" =~ "Install" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing $PKG...'
-            sudo apt update && sudo apt install -y '$PKG'
-            echo ''
-            echo 'Done!'
-            read -p 'Press Enter to close...'
-        "
-    elif [[ "$A_CHOICE" =~ "Uninstall" ]]; then
+    # Whole-label matches: the description row can contain "Install" too
+    if [[ "$A_CHOICE" == *"Uninstall $PKG" ]]; then
         $TERM_CMD bash -c "
             echo 'Removing $PKG...'
             sudo apt remove -y '$PKG'
@@ -906,7 +993,37 @@ apt_package_action() {
             echo 'Done!'
             read -p 'Press Enter to close...'
         "
+    elif [[ "$A_CHOICE" == *"Install $PKG" ]]; then
+        $TERM_CMD bash -c "
+            echo 'Installing $PKG...'
+            sudo apt update && sudo apt install -y '$PKG'
+            echo ''
+            echo 'Done!'
+            read -p 'Press Enter to close...'
+        "
     fi
+}
+
+# Sort search results so the package you typed comes first: exact name,
+# then names starting with the query, then names containing it, then
+# matches only in the description; shorter names first among name matches
+# (git, git-all, git-lfs before git-buildpackage-...). apt-cache's own
+# order is by package index, and only 50 are shown: searching "firefox"
+# or "git" left the package itself off the list entirely.
+# Reads "name<SEP>rest" lines. Args: query sep
+pkg_rank_by_name() {
+    Q="$1" SEP="$2" awk '
+        BEGIN { q = tolower(ENVIRON["Q"]); sep = ENVIRON["SEP"] }
+        {
+            i = index($0, sep)
+            name = tolower(i ? substr($0, 1, i - 1) : $0)
+            if (name == q) r = 0
+            else if (index(name, q) == 1) r = 1
+            else if (index(name, q)) r = 2
+            else r = 3
+            # Description-only matches keep the order apt-cache gave
+            print r "\t" (r < 3 ? length(name) : 0) "\t" NR "\t" $0
+        }' | sort -t $'\t' -k1,1n -k2,2n -k3,3n | cut -f4-
 }
 
 apt_installed_browser() {
@@ -948,8 +1065,12 @@ flatpak_search() {
     QUERY=$(echo "" | tfuzzel -d -p " 󰍉 Flatpak Search: ")
     if [[ -z "$QUERY" ]]; then return; fi
 
+    # Name first so it can be ranked like the APT results. Remotes so the
+    # install comes from the remote that has the app, not always flathub;
+    # before the description, which can be empty (read would then shift)
     local RESULTS
-    RESULTS=$(flatpak search "$QUERY" --columns=application,name,description 2>/dev/null | tail -n +1)
+    RESULTS=$(flatpak search "$QUERY" --columns=name,application,remotes,description 2>/dev/null |
+        pkg_rank_by_name "$QUERY" $'\t')
     local COUNT
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
@@ -963,19 +1084,21 @@ flatpak_search() {
     INSTALLED_APPS=$(flatpak list --app --columns=application 2>/dev/null)
 
     local MENU="󰌍 Back"
-    while IFS=$'\t' read -r APP_ID APP_NAME APP_DESC; do
+    local -A APP_REMOTE=()
+    while IFS=$'\t' read -r APP_NAME APP_ID APP_REMOTES APP_DESC; do
         [ -z "$APP_ID" ] && continue
+        APP_REMOTE[$APP_ID]="${APP_REMOTES%%,*}"
         local LABEL="$APP_NAME"
         [ -n "$APP_DESC" ] && LABEL="$APP_NAME - $APP_DESC"
         if echo "$INSTALLED_APPS" | grep -qx "$APP_ID"; then
-            MENU+="\n󰄬 $LABEL [$APP_ID]"
+            MENU+=$'\n'"󰄬 $LABEL [$APP_ID]"
         else
-            MENU+="\n󰄰 $LABEL [$APP_ID]"
+            MENU+=$'\n'"󰄰 $LABEL [$APP_ID]"
         fi
     done <<< "$RESULTS"
 
     local SEL
-    SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Flatpak ($COUNT) | ")
+    SEL=$(printf '%s\n' "$MENU" | tfuzzel -d -p " 󰏗 Flatpak ($COUNT) | ")
 
     if is_back "$SEL"; then return; fi
 
@@ -999,22 +1122,24 @@ flatpak_search() {
 
     if is_back "$FP_CHOICE"; then return; fi
 
-    if [[ "$FP_CHOICE" =~ "Install" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing $APP_ID...'
-            flatpak install -y flathub '$APP_ID'
-            echo ''
-            echo 'Done!'
-            read -p 'Press Enter to close...'
-        "
-    elif [[ "$FP_CHOICE" =~ "Uninstall" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Removing $APP_ID...'
-            flatpak uninstall -y '$APP_ID'
-            echo ''
-            echo 'Done!'
-            read -p 'Press Enter to close...'
-        "
+    # Whole-label matches: "Uninstall org.x.Installer" contains "Install"
+    if [[ "$FP_CHOICE" == *"Uninstall $APP_ID" ]]; then
+        APP_ID="$APP_ID" $TERM_CMD bash -c '
+            echo "Removing $APP_ID..."
+            flatpak uninstall -y "$APP_ID"
+            echo ""
+            echo "Done!"
+            read -p "Press Enter to close..."
+        '
+    elif [[ "$FP_CHOICE" == *"Install $APP_ID" ]]; then
+        local FP_REMOTE="${APP_REMOTE[$APP_ID]:-flathub}"
+        APP_ID="$APP_ID" FP_REMOTE="$FP_REMOTE" $TERM_CMD bash -c '
+            echo "Installing $APP_ID from $FP_REMOTE..."
+            flatpak install -y "$FP_REMOTE" "$APP_ID"
+            echo ""
+            echo "Done!"
+            read -p "Press Enter to close..."
+        '
     fi
 }
 

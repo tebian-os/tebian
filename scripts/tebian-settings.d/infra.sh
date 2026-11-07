@@ -175,7 +175,13 @@ container_create_menu() {
     elif [[ "$CR_CHOICE" =~ "Custom" ]]; then
         image=$(echo "" | tfuzzel -d -p " 📝 Image (e.g. debian:sid): ")
         if [ -z "$image" ]; then return; fi
-        box_name=$(echo "$image" | sed 's|.*/||;s|:.*||')
+        # Typed text ends up in a command line — only image-reference
+        # characters, as for Docker below
+        if [[ ! "$image" =~ ^[a-z0-9][a-z0-9._/:@-]*$ ]]; then
+            tnotify "Containers" "Not a valid image name: $image"
+            return
+        fi
+        box_name=$(echo "$image" | sed 's|.*/||;s|[:@].*||')
     fi
 
     [ -z "$image" ] && return
@@ -227,7 +233,7 @@ container_action_menu() {
 
     if is_back "$A_CHOICE"; then return; fi
 
-    if [[ "$A_CHOICE" =~ "Enter" ]]; then
+    if [[ "$A_CHOICE" == *"Enter $name" ]]; then
         local image
         image=$(distrobox list --no-color 2>/dev/null | awk -F'|' -v n="$name" 'NR>1 {t=$2; gsub(/^ +| +$/,"",t); if (t==n) print $4}' | xargs)
         $TERM_CMD bash -c "
@@ -239,19 +245,27 @@ container_action_menu() {
             echo ''
             distrobox enter '$name' || { echo ''; echo 'Container failed to start. Check errors above.'; read -p 'Press Enter to close...'; }
         "
-    elif [[ "$A_CHOICE" =~ "Stop" ]]; then
-        distrobox stop "$name" -Y 2>/dev/null
-        tnotify "Containers" "$name stopped"
-    elif [[ "$A_CHOICE" =~ "Export App" ]]; then
+    # The labels hold the container's name, so match whole labels: with
+    # =~ "Stop", picking "Configure Stopwatch" stopped the container
+    elif [[ "$A_CHOICE" == *"Stop $name" ]]; then
+        if distrobox stop "$name" -Y >/dev/null 2>&1; then
+            tnotify "Containers" "$name stopped"
+        else
+            tnotify "Containers" "Could not stop $name"
+        fi
+    elif [[ "$A_CHOICE" == *"Export App to Host Menu" ]]; then
         container_export_menu "$name"
-    elif [[ "$A_CHOICE" =~ "Configure" ]]; then
+    elif [[ "$A_CHOICE" == *"Configure $name" ]]; then
         container_config_menu "$name"
-    elif [[ "$A_CHOICE" =~ "Remove" ]]; then
+    elif [[ "$A_CHOICE" == *"Remove $name" ]]; then
         local CONFIRM
         CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " ⚠️ Delete $name? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
-            distrobox rm "$name" -f 2>/dev/null
-            tnotify "Containers" "$name removed"
+            if distrobox rm "$name" -f >/dev/null 2>&1; then
+                tnotify "Containers" "$name removed"
+            else
+                tnotify "Containers" "Could not remove $name"
+            fi
         fi
     fi
 }
@@ -275,15 +289,20 @@ container_export_menu() {
 
     if is_back "$APP_CHOICE"; then return; fi
 
-    # Find the .desktop file matching the selected app name
+    # Find the .desktop file matching the selected app name. The name comes
+    # from the container's packages, so it goes in as an argument, never
+    # into the command text (this runs with your $HOME mounted)
     local desktop_file
-    desktop_file=$(distrobox enter "$name" -- bash -c "grep -rl '^Name=$APP_CHOICE\$' /usr/share/applications/ 2>/dev/null | head -1" 2>/dev/null)
+    desktop_file=$(distrobox enter "$name" -- bash -c 'grep -rlxF -- "Name=$1" /usr/share/applications/ 2>/dev/null | head -1' _ "$APP_CHOICE" 2>/dev/null)
 
     if [ -n "$desktop_file" ]; then
         local app_id
         app_id=$(basename "$desktop_file" .desktop)
-        distrobox enter "$name" -- distrobox-export --app "$app_id" 2>/dev/null
-        tnotify "Export" "$APP_CHOICE exported to host app menu"
+        if distrobox enter "$name" -- distrobox-export --app "$app_id" >/dev/null 2>&1; then
+            tnotify "Export" "$APP_CHOICE exported to host app menu"
+        else
+            tnotify "Export" "Could not export $APP_CHOICE"
+        fi
     else
         tnotify "Export" "Could not find .desktop file for $APP_CHOICE"
     fi
@@ -330,7 +349,8 @@ docker_action_menu() {
 
     if is_back "$A_CHOICE"; then return; fi
 
-    if [[ "$A_CHOICE" =~ "Enter" ]]; then
+    # Whole labels, which hold the name: "Start Stopwatch" matched =~ "Stop"
+    if [[ "$A_CHOICE" == *"Enter $name" ]]; then
         $TERM_CMD bash -c "
             echo 'Entering container: $name'
             echo 'Type \"exit\" to return to Tebian'
@@ -338,20 +358,29 @@ docker_action_menu() {
             docker start '$name' 2>/dev/null
             docker exec -it '$name' sh -c 'exec bash 2>/dev/null || exec sh' || { echo ''; echo 'Failed to enter container.'; read -p 'Press Enter to close...'; }
         "
-    elif [[ "$A_CHOICE" =~ "Stop" ]]; then
-        docker stop "$name" 2>/dev/null
-        tnotify "Docker" "$name stopped"
-    elif [[ "$A_CHOICE" =~ "Start" ]]; then
-        docker start "$name" 2>/dev/null
-        tnotify "Docker" "$name started"
-    elif [[ "$A_CHOICE" =~ "View Logs" ]]; then
+    elif [[ "$A_CHOICE" == *"Stop $name" ]]; then
+        if docker stop "$name" >/dev/null 2>&1; then
+            tnotify "Docker" "$name stopped"
+        else
+            tnotify "Docker" "Could not stop $name"
+        fi
+    elif [[ "$A_CHOICE" == *"Start $name" ]]; then
+        if docker start "$name" >/dev/null 2>&1; then
+            tnotify "Docker" "$name started"
+        else
+            tnotify "Docker" "Could not start $name — see View Logs"
+        fi
+    elif [[ "$A_CHOICE" == *"View Logs" ]]; then
         $TERM_CMD bash -c "docker logs --tail 100 '$name' 2>&1; echo ''; read -p 'Press Enter to close...'"
-    elif [[ "$A_CHOICE" =~ "Remove" ]]; then
+    elif [[ "$A_CHOICE" == *"Remove $name" ]]; then
         local CONFIRM
         CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " ⚠️ Delete $name? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
-            docker rm -f "$name" 2>/dev/null
-            tnotify "Docker" "$name removed"
+            if docker rm -f "$name" >/dev/null 2>&1; then
+                tnotify "Docker" "$name removed"
+            else
+                tnotify "Docker" "Could not remove $name"
+            fi
         fi
     fi
 }
@@ -372,6 +401,10 @@ docker_create_menu() {
     # Published ports bind to 127.0.0.1: Docker's own iptables rules bypass
     # UFW, so "0.0.0.0" would put these on the LAN (café WiFi included) no
     # matter what the firewall says. Passwords are random per container.
+    # They reach docker through the environment ("-e NAME" with no value
+    # takes it from there), never as arguments: the terminal's command
+    # line, and a server's inside the container, can be read by any local
+    # user in /proc.
     local image="" cname="" post_msg="" secret=""
     local -a run_args=()
     if [[ "$CR_CHOICE" =~ "Alpine SSH" ]]; then
@@ -386,7 +419,7 @@ docker_create_menu() {
             post_msg="SSH: ssh root@localhost -p 2222 (logs in with your SSH key)"
         else
             secret=$(docker_random_secret)
-            run_args=(-p 127.0.0.1:2222:22 -e "ROOT_PW=$secret" "$image" sh -c \
+            run_args=(-p 127.0.0.1:2222:22 -e ROOT_PW "$image" sh -c \
                 'apk add --no-cache openssh && ssh-keygen -A && echo "root:$ROOT_PW" | chpasswd && echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && exec /usr/sbin/sshd -D')
             post_msg="SSH: ssh root@localhost -p 2222"
         fi
@@ -399,7 +432,7 @@ docker_create_menu() {
         image="postgres:16-alpine"
         cname="postgres"
         secret=$(docker_random_secret)
-        run_args=(-p 127.0.0.1:5432:5432 -e "POSTGRES_PASSWORD=$secret" -v postgres_data:/var/lib/postgresql/data "$image")
+        run_args=(-p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD -v postgres_data:/var/lib/postgresql/data "$image")
         post_msg="Connect: psql -h localhost -U postgres"
         # POSTGRES_PASSWORD only applies when the data volume is created
         if docker volume inspect postgres_data >/dev/null 2>&1; then
@@ -409,7 +442,10 @@ docker_create_menu() {
         image="redis:alpine"
         cname="redis"
         secret=$(docker_random_secret)
-        run_args=(-p 127.0.0.1:6379:6379 "$image" redis-server --requirepass "$secret")
+        # Through a config file: --requirepass would put it in the server's
+        # command line
+        run_args=(-p 127.0.0.1:6379:6379 -e REDIS_PASSWORD "$image" sh -c \
+            'printf "requirepass %s\n" "$REDIS_PASSWORD" > /tmp/redis.conf && unset REDIS_PASSWORD && exec redis-server /tmp/redis.conf')
         post_msg="Connect: redis-cli -h localhost --askpass"
     elif [[ "$CR_CHOICE" =~ "Custom" ]]; then
         image=$(echo "" | tfuzzel -d -p " 📝 Image (e.g. nginx:latest): ")
@@ -443,7 +479,8 @@ docker_create_menu() {
     $TERM_CMD bash -c '
         echo "=== Creating $CNAME ==="
         echo ""
-        if docker run --name "$CNAME" -d "$@"; then
+        if ROOT_PW="$SECRET" POSTGRES_PASSWORD="$SECRET" REDIS_PASSWORD="$SECRET" \
+           docker run --name "$CNAME" -d "$@"; then
             echo ""
             echo "✅ $CNAME created (reachable from this computer only)."
             [ -n "$POST_MSG" ] && echo "" && echo "$POST_MSG"
@@ -492,7 +529,7 @@ vm_conf_set() {
 # Config menu for a VM
 vm_config_menu() {
     local vm_name="$1" conf_file="$2" disk_file="$3"
-    local cores ram disk
+    local cores ram disk_size
 
     while true; do
     cores=$(vm_conf_get "$conf_file" "cores" "4")
@@ -530,8 +567,12 @@ vm_config_menu() {
         local new_disk
         new_disk=$(echo -e "32\n64\n128\n256\n512" | tfuzzel -d -p " Disk GB (now: ${disk_size}GB) | ")
         if [ -n "$new_disk" ] && [ "$new_disk" -gt "$disk_size" ] 2>/dev/null; then
-            qemu-img resize "$disk_file" "${new_disk}G" 2>/dev/null
-            tnotify "$vm_name" "Disk resized to ${new_disk}GB"
+            # Fails on a running VM, whose image qemu holds locked
+            if qemu-img resize "$disk_file" "${new_disk}G" >/dev/null 2>&1; then
+                tnotify "$vm_name" "Disk resized to ${new_disk}GB"
+            else
+                tnotify "$vm_name" "Disk not resized — shut the VM down first"
+            fi
         elif [ -n "$new_disk" ] && [ "$new_disk" -le "$disk_size" ] 2>/dev/null; then
             tnotify "$vm_name" "Can only grow disk (${disk_size}GB -> larger)"
         fi
@@ -732,8 +773,13 @@ vm_setup_windows() {
         fi
 
         echo ""
-        echo "Step 2: Creating virtual disk (64GB)..."
-        qemu-img create -f qcow2 "$VM_DIR/windows.qcow2" 64G
+        # Never over an existing disk: that is an installed Windows
+        if [ -f "$VM_DIR/windows.qcow2" ]; then
+            echo "Step 2: Keeping the existing virtual disk (windows.qcow2)."
+        else
+            echo "Step 2: Creating virtual disk (64GB)..."
+            qemu-img create -f qcow2 "$VM_DIR/windows.qcow2" 64G
+        fi
         echo ""
         echo "========================================="
         echo "  Ready! Select \"Install Windows 11\""
@@ -745,116 +791,98 @@ vm_setup_windows() {
 
 vm_install_windows() {
     local VM_DIR="$HOME/VMs/windows"
-    local conf_file="$VM_DIR/vm.conf"
 
     if [ ! -f "$VM_DIR/windows.iso" ]; then
         tnotify "VM" "No Windows ISO found at ~/VMs/windows/windows.iso"
         return
     fi
 
-    if ! command -v swtpm &>/dev/null; then
-        tnotify "VM" "swtpm missing (Win11 needs TPM) — sudo apt install swtpm"
-        return
-    fi
-
     # Create disk if it doesn't exist
-    [ -f "$VM_DIR/windows.qcow2" ] || qemu-img create -f qcow2 "$VM_DIR/windows.qcow2" 64G
+    [ -f "$VM_DIR/windows.qcow2" ] || qemu-img create -f qcow2 "$VM_DIR/windows.qcow2" 64G >/dev/null
 
-    local cores=$(vm_conf_get "$conf_file" "cores" "4")
-    local ram=$(vm_conf_get "$conf_file" "ram" "4")
-
-    # Setup TPM
-    mkdir -p "$VM_DIR/tpm"
-    swtpm socket \
-        --tpmstate dir="$VM_DIR/tpm" \
-        --ctrl type=unixio,path="$VM_DIR/tpm/swtpm-sock" \
-        --tpm2 \
-        --log level=0 &
-    local tpm_pid=$!
-    sleep 1
-
-    tnotify "VM" "Starting Windows 11 installer..."
-
-    qemu-system-x86_64 \
-        -name "Windows 11" \
-        -machine q35,accel=kvm \
-        -cpu host \
-        -smp cores=$cores \
-        -m ${ram}G \
-        -drive file="$VM_DIR/windows.qcow2",format=qcow2,if=virtio \
-        -cdrom "$VM_DIR/windows.iso" \
-        -boot d \
-        -bios /usr/share/ovmf/OVMF.fd \
-        -chardev socket,id=chrtpm,path="$VM_DIR/tpm/swtpm-sock" \
-        -tpmdev emulator,id=tpm0,chardev=chrtpm \
-        -device tpm-tis,tpmdev=tpm0 \
-        -device virtio-net-pci,netdev=net0 \
-        -netdev user,id=net0 \
-        -device virtio-vga-gl,xres=1280,yres=720 \
-        -display sdl,gl=on \
-        -device qemu-xhci \
-        -device usb-tablet \
-        -audiodev pipewire,id=audio0 \
-        -device intel-hda -device hda-duplex,audiodev=audio0 &
-
-    # Cleanup TPM on VM exit
-    local qemu_pid=$!
-    wait $qemu_pid 2>/dev/null
-    kill $tpm_pid 2>/dev/null
+    vm_run_windows install
 }
 
 vm_launch_windows() {
     local VM_DIR="$HOME/VMs/windows"
-    local conf_file="$VM_DIR/vm.conf"
 
     if [ ! -f "$VM_DIR/windows.qcow2" ]; then
         tnotify "VM" "No Windows VM found. Run Setup first."
         return
     fi
 
+    vm_run_windows launch
+}
+
+# Starts the Windows VM (with its TPM) detached from Settings, which used
+# to sit in `wait` for the whole session: reopening Settings killed that
+# waiting copy, so the TPM emulator was never stopped. Arg: install|launch
+vm_run_windows() {
+    local mode="$1" VM_DIR="$HOME/VMs/windows"
+    local conf_file="$VM_DIR/vm.conf" cores ram disk_bus
     if ! command -v swtpm &>/dev/null; then
         tnotify "VM" "swtpm missing (Win11 needs TPM) — sudo apt install swtpm"
         return
     fi
+    # The usual failure right after installing KVM: the kvm group only
+    # applies from the next login, and qemu then died with no message
+    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        tnotify "VM" "No access to /dev/kvm yet — log out and back in, then try again"
+        return
+    fi
+    cores=$(vm_conf_get "$conf_file" "cores" "4")
+    ram=$(vm_conf_get "$conf_file" "ram" "4")
+    # Windows Setup has no virtio disk or network driver, so a virtio disk
+    # showed no drive to install to. NVMe and e1000e work out of the box.
+    # disk_bus=virtio in vm.conf keeps a VM that has the virtio drivers.
+    disk_bus=$(vm_conf_get "$conf_file" "disk_bus" "nvme")
+    local -a disk=(-drive "file=$VM_DIR/windows.qcow2,format=qcow2,if=none,id=disk0")
+    if [ "$disk_bus" = virtio ]; then
+        disk+=(-device "virtio-blk-pci,drive=disk0")
+    else
+        disk+=(-device "nvme,drive=disk0,serial=tebian-win")
+    fi
+    local -a extra=()
+    [ "$mode" = install ] && extra=(-cdrom "$VM_DIR/windows.iso" -boot d)
 
-    local cores=$(vm_conf_get "$conf_file" "cores" "4")
-    local ram=$(vm_conf_get "$conf_file" "ram" "4")
-
-    # Setup TPM
+    tnotify "VM" "Starting Windows 11..."
     mkdir -p "$VM_DIR/tpm"
-    swtpm socket \
-        --tpmstate dir="$VM_DIR/tpm" \
-        --ctrl type=unixio,path="$VM_DIR/tpm/swtpm-sock" \
-        --tpm2 \
-        --log level=0 &
-    local tpm_pid=$!
-    sleep 1
-
-    tnotify "VM" "Launching Windows 11..."
-
-    qemu-system-x86_64 \
+    # setsid: its own session, so it outlives Settings. --terminate stops
+    # swtpm when qemu disconnects; the kill afterwards covers a qemu that
+    # never connected. qemu's errors go to a log and a notification.
+    setsid bash -c '
+        VM_DIR="$1"; shift
+        swtpm socket --tpmstate dir="$VM_DIR/tpm" \
+            --ctrl type=unixio,path="$VM_DIR/tpm/swtpm-sock" \
+            --tpm2 --terminate --log level=0 &
+        tpm_pid=$!
+        sleep 1
+        if ! qemu-system-x86_64 "$@" 2> "$VM_DIR/qemu.log"; then
+            notify-send -u critical "Windows VM stopped with an error" \
+                "$(tail -n 3 "$VM_DIR/qemu.log") (full log: $VM_DIR/qemu.log)"
+        fi
+        kill "$tpm_pid" 2>/dev/null
+    ' _ "$VM_DIR" \
         -name "Windows 11" \
         -machine q35,accel=kvm \
         -cpu host \
-        -smp cores=$cores \
-        -m ${ram}G \
-        -drive file="$VM_DIR/windows.qcow2",format=qcow2,if=virtio \
+        -smp "cores=$cores" \
+        -m "${ram}G" \
+        "${disk[@]}" \
+        "${extra[@]}" \
         -bios /usr/share/ovmf/OVMF.fd \
         -chardev socket,id=chrtpm,path="$VM_DIR/tpm/swtpm-sock" \
         -tpmdev emulator,id=tpm0,chardev=chrtpm \
         -device tpm-tis,tpmdev=tpm0 \
-        -device virtio-net-pci,netdev=net0 \
+        -device e1000e,netdev=net0 \
         -netdev user,id=net0 \
         -device virtio-vga-gl,xres=1280,yres=720 \
         -display sdl,gl=on \
         -device qemu-xhci \
         -device usb-tablet \
         -audiodev pipewire,id=audio0 \
-        -device intel-hda -device hda-duplex,audiodev=audio0 &
-
-    local qemu_pid=$!
-    wait $qemu_pid 2>/dev/null
-    kill $tpm_pid 2>/dev/null
+        -device intel-hda -device hda-duplex,audiodev=audio0 \
+        >/dev/null 2>&1 < /dev/null &
 }
 
 # ── macOS VM ──
@@ -875,30 +903,48 @@ vm_setup_macos() {
         echo "========================================="
         echo ""
 
-        # Clone OSX-KVM if not present
-        if [ ! -d "$VM_DIR/OSX-KVM" ]; then
+        fail() { echo ""; echo "❌ $1 — nothing after this step was done."; read -p "Press Enter to close..."; exit 1; }
+
+        # OSX-KVM is a third-party repo whose script runs here, so it is
+        # pinned to one commit rather than whatever HEAD is that day.
+        # Bump it after looking at what changed upstream.
+        OSXKVM_COMMIT=4c378a4b5e0b219783683012bec680325eb40719
+        if [ ! -d "$VM_DIR/OSX-KVM/.git" ]; then
             echo "Cloning OSX-KVM..."
-            git clone --depth 1 https://github.com/kholia/OSX-KVM.git "$VM_DIR/OSX-KVM"
+            git init -q "$VM_DIR/OSX-KVM" &&
+                git -C "$VM_DIR/OSX-KVM" remote add origin https://github.com/kholia/OSX-KVM.git ||
+                fail "Could not set up the OSX-KVM folder"
         fi
-        cd "$VM_DIR/OSX-KVM"
+        if [ "$(git -C "$VM_DIR/OSX-KVM" rev-parse HEAD 2>/dev/null)" != "$OSXKVM_COMMIT" ]; then
+            git -C "$VM_DIR/OSX-KVM" fetch -q --depth 1 origin "$OSXKVM_COMMIT" &&
+                git -C "$VM_DIR/OSX-KVM" -c advice.detachedHead=false checkout -q "$OSXKVM_COMMIT" ||
+                fail "Could not fetch OSX-KVM"
+        fi
+        cd "$VM_DIR/OSX-KVM" || fail "OSX-KVM folder missing"
 
         echo ""
         echo "Fetching macOS installer from Apple..."
         echo "You will be asked which version to download."
         echo ""
-        ./fetch-macOS-v2.py
+        ./fetch-macOS-v2.py || fail "The macOS download did not finish"
+        [ -f BaseSystem.dmg ] || fail "No BaseSystem.dmg was downloaded"
 
         echo ""
         echo "Converting BaseSystem to raw image..."
-        qemu-img convert BaseSystem.dmg -O raw "$VM_DIR/BaseSystem.img"
+        qemu-img convert BaseSystem.dmg -O raw "$VM_DIR/BaseSystem.img" || fail "Could not convert BaseSystem.dmg"
 
         echo ""
         echo "Creating OpenCore boot image..."
-        cp "$VM_DIR/OSX-KVM/OpenCore/OpenCore.qcow2" "$VM_DIR/OpenCore.qcow2"
+        cp "$VM_DIR/OSX-KVM/OpenCore/OpenCore.qcow2" "$VM_DIR/OpenCore.qcow2" || fail "Could not copy OpenCore"
 
         echo ""
-        echo "Creating virtual disk (64GB)..."
-        qemu-img create -f qcow2 "$VM_DIR/mac_hdd.qcow2" 64G
+        # Never over an existing disk: that is an installed macOS
+        if [ -f "$VM_DIR/mac_hdd.qcow2" ]; then
+            echo "Keeping the existing virtual disk (mac_hdd.qcow2)."
+        else
+            echo "Creating virtual disk (64GB)..."
+            qemu-img create -f qcow2 "$VM_DIR/mac_hdd.qcow2" 64G || fail "Could not create the virtual disk"
+        fi
 
         echo ""
         echo "========================================="
@@ -1077,10 +1123,15 @@ vpn_menu() {
         echo 'Import a .conf file or generate keys to get started.';
         read -p 'Press Enter to close...'"
     elif [[ "$VP_CHOICE" =~ "Disconnect" ]]; then
-        $TERM_CMD bash -c "echo 'Disconnecting WireGuard...';
-        sudo wg-quick down '$WG_IFACE' 2>/dev/null || sudo wg-quick down wg0;
-        echo 'Disconnected.';
-        read -p 'Press Enter to close...'"
+        # wg-quick only takes down tunnels it brought up; one NetworkManager
+        # manages goes down through nmcli instead
+        WG_IFACE="$WG_IFACE" $TERM_CMD bash -c 'echo "Disconnecting WireGuard ($WG_IFACE)..."
+        if sudo wg-quick down "$WG_IFACE" 2>/dev/null || nmcli connection down "$WG_IFACE" 2>/dev/null; then
+            echo "Disconnected."
+        else
+            echo "❌ $WG_IFACE is still up: neither wg-quick nor NetworkManager manages it."
+        fi
+        read -p "Press Enter to close..."'
     elif [[ "$VP_CHOICE" =~ "Connect:" ]]; then
         TUNNEL=$(echo "$VP_CHOICE" | sed 's/.*Connect: //')
         $TERM_CMD bash -c "echo 'Connecting to $TUNNEL...';
@@ -1151,26 +1202,45 @@ $TL_ACTION
     if is_back "$TL_CHOICE"; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Install Tailscale" ]]; then
-        $TERM_CMD bash -c "echo 'Installing Tailscale via apt repository...'
-        echo ''
-        # Add Tailscale apt repo (signed with their GPG key) for this release
-        CODENAME=\$(. /etc/os-release && echo \"\${VERSION_CODENAME:-trixie}\")
-        curl -fsSL \"https://pkgs.tailscale.com/stable/debian/\$CODENAME.noarmor.gpg\" | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-        curl -fsSL \"https://pkgs.tailscale.com/stable/debian/\$CODENAME.tailscale-keyring.list\" | sudo tee /etc/apt/sources.list.d/tailscale.list
-        sudo apt update
-        sudo apt install -y tailscale
-        echo ''
-        echo 'Tailscale installed via signed apt repository.'
-        read -p 'Press Enter...'"
+        # Same pinned-key path as tebian-browser: the key is checked against
+        # Tailscale's published fingerprint, and the deb line is written
+        # here rather than taken from their server, so neither a swapped key
+        # nor a swapped .list can add an apt source trusted as root.
+        # Tailscale signs every Debian suite with this one key (2020).
+        $TERM_CMD bash -c '
+            fail() { echo ""; echo "❌ $1"; read -p "Press Enter..."; exit 1; }
+            source "$TEBIAN_COMMON"
+            echo "Installing Tailscale from its apt repository..."
+            echo ""
+            codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+            case "$codename" in
+                bookworm|trixie) ;;
+                *) fail "No Tailscale repository known for \"${codename:-this release}\". See tailscale.com/download/linux." ;;
+            esac
+            sudo -v || fail "Authentication failed."
+            # gnupg checks the key; not in a minimal Debian
+            sudo apt update
+            sudo apt install -y gnupg curl ca-certificates || fail "Could not install gnupg."
+            tebian_apt_repo_add "https://pkgs.tailscale.com/stable/debian/$codename.asc" \
+                2596A99EAAB33821893C0A79458CA832957F5868 \
+                /usr/share/keyrings/tailscale-archive-keyring.gpg \
+                /etc/apt/sources.list.d/tailscale.list \
+                "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian $codename main" ||
+                fail "The Tailscale repository was not added."
+            sudo apt update && sudo apt install -y tailscale || fail "Tailscale did not install."
+            echo ""
+            echo "✅ Tailscale installed. Pick Connect to sign in."
+            read -p "Press Enter..."
+        '
     elif [[ "$TL_CHOICE" =~ "Connect" ]] && ! [[ "$TL_CHOICE" =~ "Headscale" ]]; then
-        $TERM_CMD bash -c "sudo tailscale up; read -p 'Connected! Press Enter...'"
+        $TERM_CMD bash -c "sudo tailscale up && echo '✅ Connected.' || echo '❌ Not connected — see above.'; read -p 'Press Enter...'"
     elif [[ "$TL_CHOICE" =~ "Headscale" ]]; then
         SERVER_URL=$(echo "" | tfuzzel -d -p " 🏰 Headscale URL: ")
         if [ -n "$SERVER_URL" ]; then
-            HEADSCALE_URL="$SERVER_URL" $TERM_CMD bash -c 'sudo tailscale up --login-server "$HEADSCALE_URL"; read -p "Connected! Press Enter..."'
+            HEADSCALE_URL="$SERVER_URL" $TERM_CMD bash -c 'sudo tailscale up --login-server "$HEADSCALE_URL" && echo "✅ Connected." || echo "❌ Not connected — see above."; read -p "Press Enter..."'
         fi
     elif [[ "$TL_CHOICE" =~ "Disconnect" ]]; then
-        $TERM_CMD bash -c "sudo tailscale down; read -p 'Disconnected. Press Enter...'"
+        $TERM_CMD bash -c "sudo tailscale down && echo 'Disconnected.' || echo '❌ Still connected — see above.'; read -p 'Press Enter...'"
     elif [[ "$TL_CHOICE" =~ "Network Status" ]]; then
         $TERM_CMD bash -c "tailscale status; read -p 'Press Enter...'"
     fi

@@ -75,7 +75,14 @@ drives_menu() {
                 tnotify "Drives" "Drive Doctor on — USB drives mount when plugged in"
             else
                 touch "$flag_off"
-                [ -f "$pid_file" ] && kill "$(cat "$pid_file")" 2>/dev/null
+                # The pid file can outlive the watcher and its PID be reused:
+                # only signal it if it is still Drive Doctor
+                local dd_pid
+                dd_pid=$(cat "$pid_file" 2>/dev/null) || dd_pid=""
+                if [[ "$dd_pid" =~ ^[0-9]+$ ]] &&
+                   grep -q tebian-drive-doctor "/proc/$dd_pid/cmdline" 2>/dev/null; then
+                    kill "$dd_pid" 2>/dev/null
+                fi
                 tnotify "Drives" "Drive Doctor off — USB drives are left alone"
             fi
         elif [[ "$D_CHOICE" =~ "Healthy Drives" ]]; then

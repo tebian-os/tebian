@@ -11,7 +11,13 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 get_term() {
-    if command -v kitty &>/dev/null; then echo "kitty"
+    # The terminal picked in Settings (config.user's "terminal" block),
+    # then the base config's, then whatever is installed
+    local t
+    t=$(tebian_block_get terminal 2>/dev/null | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
+    [ -n "$t" ] || t=$(awk '/^set \$term[[:space:]]/ { print $3; exit }' ~/.config/sway/config 2>/dev/null)
+    if [ -n "$t" ] && command -v "$t" &>/dev/null; then echo "$t"
+    elif command -v kitty &>/dev/null; then echo "kitty"
     elif command -v foot &>/dev/null; then echo "foot"
     elif command -v alacritty &>/dev/null; then echo "alacritty"
     elif command -v xterm &>/dev/null; then echo "xterm"
@@ -73,7 +79,11 @@ case "$CHOICE" in
 esac
 
 # 4. Launch terminal in that directory
+# The folder goes in as an argument: names come from the user's folders,
+# and one containing a quote broke the old "cd '$TARGET'" command
 case "$TERM_APP" in
     kitty) kitty --directory "$TARGET" ;;
-    *) "$TERM_APP" -e bash -c "cd '$TARGET' && exec bash" ;;
+    foot|alacritty) "$TERM_APP" --working-directory "$TARGET" ;;
+    gnome-terminal) gnome-terminal --working-directory="$TARGET" ;;
+    *) "$TERM_APP" -e bash -c 'cd "$1" && exec bash' _ "$TARGET" ;;
 esac

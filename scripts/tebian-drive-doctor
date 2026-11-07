@@ -263,6 +263,12 @@ handle() {
 cmd_scan() {
     local force="${1:-}" dev
     [ "$force" = "--all" ] && force=1
+    # handle() skips everything while Drive Doctor is off; say so when the
+    # user asked for this check (Settings), instead of doing nothing
+    if [ -n "$force" ] && [ -f "$CONF_DIR/drive_doctor_off" ]; then
+        notify "Drive Doctor is off" "Turn it on in Settings → More → Drives to check plugged-in drives."
+        return 0
+    fi
     while read -r dev; do
         handle "$dev" "$force"
     done < <(lsblk -nrpo NAME 2>/dev/null)
@@ -270,7 +276,7 @@ cmd_scan() {
 
 # Runs inside a terminal so the user watches exactly what touches their data
 cmd_repair() {
-    local dev="$1" label fstype state rc mnt
+    local dev="$1" label fstype state rc mnt confirm
     if [[ ! "$dev" =~ ^/dev/[a-zA-Z0-9]+$ ]] || [ ! -b "$dev" ]; then
         echo -e "${RED}Not a block device: $dev${NC}"; read -rp "Press Enter to close. "; return 1
     fi
@@ -295,6 +301,20 @@ cmd_repair() {
         echo "Repairing now would destroy Windows' saved session. Boot Windows and"
         echo "shut it down fully (hold Shift while clicking Shut down), then try again."
         read -rp "Press Enter to close. "; return 1
+    fi
+    # The plug-in check sends a badly damaged drive to read-only only, but
+    # Repair is still offered after a failed mount when that check never
+    # ran (no udev rule). A quick fix on a damaged filesystem can lose what
+    # a recovery tool would still find, so it takes an explicit yes.
+    if [ "$state" = corrupt ]; then
+        echo -e "${RED}This filesystem is badly damaged.${NC}"
+        echo "If the files matter, copy the drive first (ddrescue) or run chkdsk on"
+        echo "Windows: a quick repair can make what is left harder to recover."
+        echo
+        read -rp "Type REPAIR to try the quick repair anyway: " confirm
+        if [ "$confirm" != REPAIR ]; then
+            echo "Cancelled — nothing was changed."; read -rp "Press Enter to close. "; return 1
+        fi
     fi
     echo
 
@@ -447,7 +467,9 @@ cmd_format() {
     fi
     echo
 
-    # Unmount through udisks first so file managers let go cleanly
+    # Unmount through udisks first so file managers let go cleanly. The
+    # disk itself is included: a stick formatted with no partition table
+    # is mounted as the whole disk, and wipefs then failed as "busy"
     while read -r part; do
         is_mounted "$part" || continue
         echo "> unmount $part"
@@ -456,7 +478,7 @@ cmd_format() {
             echo -e "${RED}$part is busy — close anything using the drive and try again.${NC}"
             read -rp "Press Enter to close. "; return 1
         fi
-    done < <(lsblk -nrpo NAME "$disk" | tail -n +2)
+    done < <(lsblk -nrpo NAME "$disk")
 
     # MBR is what every TV, car stereo and old BIOS reads; only drives past
     # its 2 TiB limit get GPT. Type 7 covers both exFAT and NTFS on MBR.

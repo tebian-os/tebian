@@ -12,7 +12,7 @@ KEYBINDS="󰘔 Super+Enter → Terminal
 󰀻 Super+D → App Menu
 󰍉 Super+A → App Drawer
 󰅍 Super+V → Clipboard
-󰘋 Super+Q → Kill Window
+󰘋 Super+Shift+Q → Kill Window
 󰘕 Super+F → Fullscreen
 󰘖 Super+Space → Float Toggle
 󰘒 Super+R → Resize Mode
@@ -45,8 +45,10 @@ CHOICE=$(echo -e "$KEYBINDS" | tfuzzel -d -p " 󰌌 Keys | " --width 35)
 case "$CHOICE" in
     *"Terminal"*)
         # sway doesn't expand config variables like $term in IPC commands —
-        # resolve the real terminal from the config, falling back to detection
-        term=$(awk '/^set \$term[[:space:]]/{print $3; exit}' ~/.config/sway/config 2>/dev/null)
+        # resolve the real terminal: the one picked in Settings (config.user's
+        # "terminal" block), then the base config, then detection
+        term=$(tebian_block_get terminal 2>/dev/null | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
+        [ -n "$term" ] || term=$(awk '/^set \$term[[:space:]]/{print $3; exit}' ~/.config/sway/config 2>/dev/null)
         if [ -z "$term" ] || ! command -v "$term" &>/dev/null; then
             for t in kitty foot alacritty; do
                 command -v "$t" &>/dev/null && term="$t" && break

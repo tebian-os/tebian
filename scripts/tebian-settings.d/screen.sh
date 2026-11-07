@@ -2,7 +2,10 @@
 # tebian-settings module: screen.sh
 # Sourced by tebian-settings — do not run directly
 
-# Save current output layout to persistent config so it survives restarts
+# Save current output layout to persistent config so it survives restarts.
+# Switched-off outputs are left out on purpose: a saved "disable" outlives
+# the setup it was made for, and a laptop panel turned off while docked
+# then stayed off after undocking, a black screen at every login.
 save_display_layout() {
     local outfile="$HOME/.config/sway/outputs"
     mkdir -p "$HOME/.config/sway"
@@ -20,8 +23,6 @@ for o in outputs:
         h = m.get('height', 1080)
         r = m.get('refresh', 60000)
         lines.append(f'output {name} pos {x} {y} res {w}x{h}@{r/1000:.3f}Hz')
-    else:
-        lines.append(f'output {name} disable')
 print('\n'.join(lines))
 " > "$outfile" 2>/dev/null
 }
@@ -114,52 +115,37 @@ Current: ${TEMP}K
 
         if is_back "$NL_CHOICE" || [[ "$NL_CHOICE" =~ "Current" ]]; then return; fi
 
+        local NEW_TEMP=""
         if [[ "$NL_CHOICE" =~ "Turn Off" ]]; then
             pkill wlsunset
+            # Stays off after the next login too
+            tebian_block_remove nightlight
             tnotify "Night Light" "Disabled"
         elif [[ "$NL_CHOICE" =~ "Turn On" ]]; then
-            pkill wlsunset 2>/dev/null
-            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
-            # the display would stay at the 6500K day temp during computed daytime
-            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
-            disown
-            tnotify "Night Light" "Enabled (${TEMP}K)"
+            NEW_TEMP=$TEMP
         elif [[ "$NL_CHOICE" =~ "Low" ]]; then
-            TEMP=4500
-            echo "$TEMP" > "$CONF"
-            pkill wlsunset 2>/dev/null
-            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
-            # the display would stay at the 6500K day temp during computed daytime
-            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
-            disown
-            tnotify "Night Light" "Low warmth (4500K)"
+            NEW_TEMP=4500
         elif [[ "$NL_CHOICE" =~ "Medium" ]]; then
-            TEMP=3500
-            echo "$TEMP" > "$CONF"
-            pkill wlsunset 2>/dev/null
-            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
-            # the display would stay at the 6500K day temp during computed daytime
-            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
-            disown
-            tnotify "Night Light" "Medium warmth (3500K)"
+            NEW_TEMP=3500
         elif [[ "$NL_CHOICE" =~ "High" ]]; then
-            TEMP=2500
-            echo "$TEMP" > "$CONF"
-            pkill wlsunset 2>/dev/null
-            # Near-constant warmth: with the default sun-based schedule (lat/long 0)
-            # the display would stay at the 6500K day temp during computed daytime
-            wlsunset -t "$TEMP" -T $((TEMP + 100)) &
-            disown
-            tnotify "Night Light" "High warmth (2500K)"
+            NEW_TEMP=2500
         elif [[ "$NL_CHOICE" =~ "Max" ]]; then
-            TEMP=1500
+            NEW_TEMP=1500
+        fi
+
+        if [ -n "$NEW_TEMP" ]; then
+            TEMP=$NEW_TEMP
+            mkdir -p "$(dirname "$CONF")"
             echo "$TEMP" > "$CONF"
             pkill wlsunset 2>/dev/null
             # Near-constant warmth: with the default sun-based schedule (lat/long 0)
             # the display would stay at the 6500K day temp during computed daytime
             wlsunset -t "$TEMP" -T $((TEMP + 100)) &
             disown
-            tnotify "Night Light" "Max warmth (1500K)"
+            # Started by sway at login as well; nothing did before, so it
+            # was off again after every logout or reboot
+            tebian_block_set nightlight "exec wlsunset -t $TEMP -T $((TEMP + 100))"
+            tnotify "Night Light" "On (${TEMP}K)"
         fi
     done
 }
@@ -225,7 +211,6 @@ print(len([o for o in json.load(sys.stdin) if o.get('active')]))
     # Only show layout options when multiple outputs are connected
     if [ "$output_count" -gt 1 ]; then
         D_OPTS+="\n───────────────"
-        D_OPTS+="\n󰍺 Mirror All"
         D_OPTS+="\n󰇄 Extend Right"
         D_OPTS+="\n󰇅 Extend Left"
         D_OPTS+="\n󰆢 Extend Above"
@@ -237,19 +222,9 @@ print(len([o for o in json.load(sys.stdin) if o.get('active')]))
     D_CHOICE=$(echo -e "$D_OPTS" | tfuzzel -d -p " 󰍹 Displays | ")
     if is_back "$D_CHOICE"; then return; fi
 
-    if [[ "$D_CHOICE" =~ "Mirror All" ]]; then
-        # Every active output to 0,0 — including the primary, which may not be there
-        echo "$output_json" | python3 -c "
-import json, sys
-for o in json.load(sys.stdin):
-    if o.get('active'): print(o['name'])
-" 2>/dev/null | while read -r out; do
-            swaymsg "output $out pos 0 0"
-        done
-        tnotify "Display" "Mirrored all outputs"
-        save_display_layout
-
-    elif [[ "$D_CHOICE" =~ "Extend Right" ]]; then
+    # No "Mirror All": sway cannot mirror outputs; stacking them all at
+    # 0,0 showed different workspaces on each with a confused cursor
+    if [[ "$D_CHOICE" =~ "Extend Right" ]]; then
         local pos=0
         echo "$output_json" | python3 -c "
 import json, sys
@@ -364,8 +339,13 @@ for o in json.load(sys.stdin):
         local out_name
         out_name=$(echo "$D_CHOICE" | awk '{print $2}')
         if [[ "$D_CHOICE" =~ "●" ]]; then
+            # Never the last screen: nothing would be left to undo it from
+            if [ "${output_count:-0}" -le 1 ]; then
+                tnotify "Display" "$out_name is the only screen on — not turning it off"
+                continue
+            fi
             swaymsg "output $out_name disable"
-            tnotify "Display" "$out_name disabled"
+            tnotify "Display" "$out_name off until you log out or turn it back on"
             save_display_layout
         else
             swaymsg "output $out_name enable"
@@ -514,10 +494,10 @@ lock_menu() {
     [ -f "$TEBIAN_IDLE_CONF" ] && . "$TEBIAN_IDLE_CONF"
     if [ "$AUTOLOCK" = on ]; then
         IDLE_STATE="ON"
-        IDLE_LABEL="󰗊 Disable Auto-Lock (Currently: ON, ${LOCK_MINUTES} min)"
+        IDLE_LABEL="󰗊 Disable Auto-Lock (ON, ${LOCK_MINUTES} min; still locks on suspend)"
     else
         IDLE_STATE="OFF"
-        IDLE_LABEL="󰗈 Enable Auto-Lock (Currently: OFF)"
+        IDLE_LABEL="󰗈 Enable Auto-Lock (OFF; still locks on suspend)"
     fi
 
     if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
@@ -533,7 +513,7 @@ $IDLE_LABEL
 $KEY_LABEL
 󰔛 Set Lock Timeout
 󰌍 Back"
-    L_CHOICE=$(echo -e "$LOCK_OPTS" | tfuzzel -d -p " 󰌾 Lock | ")
+    L_CHOICE=$(echo -e "$LOCK_OPTS" | tfuzzel -d -p " 󰌾 Lock | " --width 56)
 
     if is_back "$L_CHOICE"; then return; fi
 

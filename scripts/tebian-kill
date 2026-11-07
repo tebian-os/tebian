@@ -33,11 +33,19 @@ Yes (Kill $NAME)" | tfuzzel -d -p " 󰷦 Confirm Kill? | " --lines 2)
     
     if [[ "$CONFIRM" =~ "Yes" ]]; then
         kill "$PID" 2>/dev/null
-        # Wait briefly, then force kill if still alive
-        sleep 1
+        # Give it up to 5 s to save and exit: browsers take a moment to
+        # write their session, and SIGKILL after 1 s lost it
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$PID" 2>/dev/null || break
+            sleep 0.5
+        done
         if kill -0 "$PID" 2>/dev/null; then
-            kill -9 "$PID" 2>/dev/null
-            notify-send "Tebian" "Force killed $NAME ($PID)"
+            FORCE=$(echo -e "No (leave it running)
+Yes (Force kill — unsaved work is lost)" | tfuzzel -d -p " 󰷦 $NAME is not responding | " --lines 2 --width 50)
+            if [[ "$FORCE" =~ "Yes" ]]; then
+                kill -9 "$PID" 2>/dev/null
+                notify-send "Tebian" "Force killed $NAME ($PID)"
+            fi
         else
             notify-send "Tebian" "Terminated $NAME ($PID)"
         fi

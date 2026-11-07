@@ -326,6 +326,10 @@ kr - Korean
             swaymsg "input type:keyboard xkb_layout $LAYOUT"
             sed -i '/input type:keyboard.*xkb_layout/d' "$SWAY_CFG" 2>/dev/null
             echo "input type:keyboard xkb_layout $LAYOUT" >> "$SWAY_CFG"
+            # The login screen (greetd exports it to sway) and the consoles read
+            # /etc/default/keyboard; localed writes it, asking through the polkit agent
+            localectl set-x11-keymap "$LAYOUT" 2>/dev/null ||
+                tnotify "Input" "Login screen keeps its old layout (couldn't update /etc/default/keyboard)"
             tnotify "Input" "Keyboard layout set to $LAYOUT"
         fi
     elif [[ "$I_CHOICE" =~ "Mouse Speed" ]]; then

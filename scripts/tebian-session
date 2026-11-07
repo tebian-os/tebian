@@ -21,8 +21,23 @@ export _JAVA_AWT_WM_NONREPARENTING=1
 # Settings writes e.g. the NVIDIA variables). systemd only hands these to
 # user services, not to sway, so export them here. Plain KEY=VALUE lines
 # only; values are taken literally, no expansion.
+#
+# The NVIDIA file (Settings > Performance) points GBM, GLX and VA-API at the
+# nvidia driver. Taken only when that driver actually loaded and drives the
+# display: if Secure Boot refused the module, or on a hybrid laptop whose
+# screen hangs off the integrated GPU, those variables break the GPU in use.
+nvidia_env=no
+if [ -d /sys/module/nvidia_drm ]; then
+    nvidia_env=yes
+    for drv in /sys/class/drm/card[0-9]*/device/driver; do
+        case "$(basename "$(readlink "$drv" 2>/dev/null)")" in
+            i915|xe|amdgpu|radeon|nouveau) nvidia_env=no ;;
+        esac
+    done
+fi
 for envfile in "$HOME"/.config/environment.d/*.conf; do
     [ -f "$envfile" ] || continue
+    [ "${envfile##*/}" = tebian-nvidia.conf ] && [ "$nvidia_env" = no ] && continue
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
             ''|'#'*) continue ;;
@@ -41,7 +56,15 @@ for envfile in "$HOME"/.config/environment.d/*.conf; do
         export "$key=$value"
     done < "$envfile"
 done
-unset envfile line key value
+unset envfile line key value nvidia_env drv
+
+# Displays switched off in Settings used to be saved as "output X disable",
+# which brought the black screen back at every login once that was the
+# only screen left (a laptop panel turned off while docked, then undocked).
+# Settings no longer saves them; clear the ones older versions wrote.
+if [ -f "$HOME/.config/sway/outputs" ] && grep -q ' disable$' "$HOME/.config/sway/outputs"; then
+    sed -i '/ disable$/d' "$HOME/.config/sway/outputs"
+fi
 
 # Fix up Settings-managed lines in config.user written by older versions
 # before sway parses it (see tebian_user_migrate in tebian-common)

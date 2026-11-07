@@ -42,12 +42,13 @@ wifi_menu() {
             nmcli dev wifi rescan 2>/dev/null
             sleep 2
             local scan_result
-            scan_result=$(nmcli -t -f SIGNAL,SSID device wifi list 2>/dev/null)
+            # SECURITY too, so open networks aren't asked for a password
+            scan_result=$(nmcli -t -f SIGNAL,SECURITY,SSID device wifi list 2>/dev/null)
             if [ -z "$scan_result" ]; then
                 # Retry once if first scan returned empty
                 nmcli dev wifi rescan 2>/dev/null
                 sleep 3
-                scan_result=$(nmcli -t -f SIGNAL,SSID device wifi list 2>/dev/null)
+                scan_result=$(nmcli -t -f SIGNAL,SECURITY,SSID device wifi list 2>/dev/null)
             fi
 
             # Get current connection
@@ -58,7 +59,7 @@ wifi_menu() {
             # Get available networks (terse mode handles SSIDs with spaces)
             # Dedupe per SSID after the descending signal sort — nmcli emits one
             # row per BSS, so one network can appear half a dozen times
-            WIFI_LIST=$(echo "$scan_result" | sort -rn -t: | awk -F: '{k=substr($0,index($0,":")+1)} !seen[k]++' | while IFS=: read -r signal ssid; do
+            WIFI_LIST=$(echo "$scan_result" | sort -rn -t: | awk '{k=$0; sub(/^[^:]*:[^:]*:/,"",k)} !seen[k]++' | while IFS=: read -r signal _ ssid; do
                 ssid=${ssid//\\:/:}
                 [ -z "$ssid" ] && continue
                 [ "$ssid" = "--" ] && continue
@@ -81,8 +82,10 @@ $CURRENT_LABEL
 $WIFI_LIST
 󰌍 Back"
 
-            # sed drops the blank row left by an empty CURRENT_LABEL
-            SSID_RAW=$(echo -e "$W_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰖩 WiFi | ")
+            # sed drops the blank row left by an empty CURRENT_LABEL. printf,
+            # not echo -e: network names come from anyone nearby, and one
+            # named "Cafe\c" cut the menu off at that point
+            SSID_RAW=$(printf '%s\n' "$W_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰖩 WiFi | ")
 
             if is_back "$SSID_RAW"; then return; fi
 
@@ -106,22 +109,50 @@ $WIFI_LIST
                 # Connect to selected network — strip only known signal icons,
                 # never the SSID's first word (icons are gone in no_icons mode)
                 SSID=$(echo "$SSID_RAW" | sed -E 's/^[󰤨󰤥󰤢󰤟󰤯] //; s/ \([0-9]{1,3}%\)$//')
-                # Note: fuzzel doesn't support password masking — input is visible
-                PASS=$(echo "" | tfuzzel -d -p " 󰷦 Password for $SSID | ")
-
-                if [ -n "$PASS" ]; then
-                    # (`nmcli connection load` refuses files outside NM's profile
-                    # dirs, so the old tempfile approach never connected. The
-                    # password is briefly visible in ps — acceptable on a
-                    # single-user desktop, and the tradeoff that actually works.)
-                    nmcli dev wifi connect "$SSID" password "$PASS" 2>/dev/null && tnotify "WiFi" "Connected to $SSID" || tnotify "WiFi" "Connection failed"
-                    unset PASS
-                else
-                    nmcli dev wifi connect "$SSID" && notify-send "WiFi" "Connected to $SSID" || tnotify "WiFi" "Connection failed"
-                fi
+                wifi_connect "$SSID" "$scan_result"
             fi
         fi
     done
+}
+
+# Connect to SSID. Arg 2 is the SIGNAL:SECURITY:SSID scan, to tell open
+# networks from secured ones.
+wifi_connect() {
+    local SSID="$1" scan="$2" sec="" err PASS rc
+    sec=$(echo "$scan" | while IFS=: read -r _ s rest; do
+        [ "${rest//\\:/:}" = "$SSID" ] && { echo "$s"; break; }
+    done)
+
+    # A saved network connects with what NetworkManager already knows,
+    # instead of asking for the password every time
+    if nmcli -t -f connection.id connection show id "$SSID" >/dev/null 2>&1; then
+        tnotify "WiFi" "Connecting to $SSID..."
+        if nmcli connection up id "$SSID" >/dev/null 2>&1; then
+            tnotify "WiFi" "Connected to $SSID"
+            return
+        fi
+        # Fall through: the saved password may be out of date
+    fi
+
+    if [ -z "$sec" ] || [ "$sec" = "--" ]; then
+        err=$(nmcli dev wifi connect "$SSID" 2>&1 >/dev/null); rc=$?
+    else
+        # Esc cancels; before, an empty answer went on to connect anyway
+        PASS=$(echo "" | tfuzzel -d --password -p " 󰷦 Password for $SSID | ")
+        [ -n "$PASS" ] || return
+        # (`nmcli connection load` refuses files outside NM's profile
+        # dirs, so the old tempfile approach never connected. The
+        # password is briefly visible in ps — acceptable on a
+        # single-user desktop, and the tradeoff that actually works.)
+        err=$(nmcli dev wifi connect "$SSID" password "$PASS" 2>&1 >/dev/null); rc=$?
+        unset PASS
+    fi
+    if [ "$rc" -eq 0 ]; then
+        tnotify "WiFi" "Connected to $SSID"
+    else
+        # nmcli says why (wrong password, out of range, ...)
+        tnotify "WiFi" "Could not connect to $SSID: ${err#Error: }"
+    fi
 }
 
 bluetooth_menu() {
@@ -147,8 +178,17 @@ bluetooth_menu() {
     fi
 
     while true; do
+        # bluetoothctl waits for bluetoothd and froze Settings when the
+        # service wasn't running; ask systemd first, and cap every query
+        if ! systemctl is-active --quiet bluetooth; then
+            B_CHOICE=$(printf '%s\n' "󰂲 Bluetooth service is stopped — start it" "󰌍 Back" | tfuzzel -d -p " 󰂯 Bluetooth | ")
+            if is_back "$B_CHOICE"; then return; fi
+            $TERM_CMD bash -c "sudo systemctl enable --now bluetooth || read -p 'Press Enter...'"
+            systemctl is-active --quiet bluetooth || return
+        fi
+
         # Get current power state
-        BT_POWER=$(bluetoothctl show 2>/dev/null | grep -o "Powered: yes\|Powered: no" | head -1)
+        BT_POWER=$(timeout 5 bluetoothctl show 2>/dev/null | grep -o "Powered: yes\|Powered: no" | head -1)
 
         if [[ "$BT_POWER" == "Powered: no" ]] || [ -z "$BT_POWER" ]; then
             # Bluetooth is OFF
@@ -160,8 +200,19 @@ bluetooth_menu() {
             if is_back "$B_CHOICE"; then return; fi
 
             if [[ "$B_CHOICE" =~ "Bluetooth: OFF" ]]; then
-                bluetoothctl power on
-                tnotify "Bluetooth" "Enabled"
+                # A radio switched off by rfkill (airplane mode, a laptop
+                # key) refuses power on until it is unblocked; the session
+                # user may do that without root
+                if ! timeout 5 bluetoothctl power on >/dev/null 2>&1; then
+                    rfkill unblock bluetooth 2>/dev/null
+                    sleep 1
+                    timeout 5 bluetoothctl power on >/dev/null 2>&1
+                fi
+                if timeout 5 bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+                    tnotify "Bluetooth" "Enabled"
+                else
+                    tnotify "Bluetooth" "Could not turn Bluetooth on (blocked by a hardware switch?)"
+                fi
                 pkill -f '\.local/bin/status\.sh' 2>/dev/null; swaymsg reload 2>/dev/null &
                 sleep 1
             fi
@@ -191,7 +242,9 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
 󰀱 Open Blueman (full manager)
 󰌍 Back"
 
-            B_CHOICE=$(echo -e "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
+            # printf, not echo -e: device names are chosen by whoever owns
+            # the device, and escapes in them rewrote the menu
+            B_CHOICE=$(printf '%s\n' "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
             if is_back "$B_CHOICE"; then return; fi
 
@@ -249,9 +302,9 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
 
 # Dedicated scan + pair flow
 bt_scan_and_pair() {
-    # Enable pairing and discovery
+    # Pairable only: pairing with a device we found doesn't need this
+    # computer to be visible to everyone nearby (discoverable)
     bluetoothctl pairable on 2>/dev/null
-    bluetoothctl discoverable on 2>/dev/null
 
     notify-send -t 5000 "Bluetooth" "Scanning... put your device in pairing mode" 2>/dev/null
 
@@ -285,10 +338,7 @@ bt_scan_and_pair() {
 󰌍 Back"
 
     local DEV_CHOICE
-    DEV_CHOICE=$(echo -e "$DEV_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂰 New devices | ")
-
-    # Disable discoverable after scan
-    bluetoothctl discoverable off 2>/dev/null
+    DEV_CHOICE=$(printf '%s\n' "$DEV_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂰 New devices | ")
 
     if is_back "$DEV_CHOICE"; then
         bluetoothctl pairable off 2>/dev/null

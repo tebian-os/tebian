@@ -13,6 +13,13 @@ export TEBIAN_COMMON
 [ -n "$TEBIAN_COMMON" ] && source "$TEBIAN_COMMON"
 
 get_term() {
+    # The terminal chosen in Settings > Software wins (it lives in config.user
+    # as "set $term NAME"); otherwise the first one installed
+    local t
+    t=$(tebian_block_get terminal 2>/dev/null | awk '$1=="set" && $2=="$term" {print $3; exit}')
+    case "$t" in
+        kitty|foot|alacritty) command -v "$t" &>/dev/null && { echo "$t -e"; return; } ;;
+    esac
     if command -v kitty &>/dev/null; then echo "kitty -e"
     elif command -v foot &>/dev/null; then echo "foot -e"
     elif command -v alacritty &>/dev/null; then echo "alacritty -e"
@@ -72,6 +79,7 @@ show_main_menu() {
 󰔡 Audio
 󰌢 Screen (Print: screenshot)
 󰏘 Themes
+󰏗 Software
 󰚰 System Update
 󰐥 Power
 󰇄 More
@@ -94,6 +102,9 @@ show_main_menu() {
             screen_all_menu
         elif [[ "$CHOICE" =~ "Themes" ]]; then
             theme_menu
+        elif [[ "$CHOICE" =~ "Software" ]]; then
+            # Also under More, where it used to be the only way in
+            software_hub
         elif [[ "$CHOICE" =~ "System Update" ]]; then
             $TERM_CMD update-all
         elif [[ "$CHOICE" =~ "Power" ]]; then
@@ -114,6 +125,8 @@ elif [[ "$1" == "--lock" ]]; then
     lock_menu
 elif [[ "$1" == "--feel" ]]; then
     feel_menu
+elif [[ "$1" == "--software" ]]; then
+    software_hub
 elif [[ "$1" == "--packages" ]]; then
     package_browser
 elif [[ "$1" == "--browser" ]]; then

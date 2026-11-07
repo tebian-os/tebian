@@ -94,10 +94,16 @@ output)
 nightlight)
     v="${2:?off|kelvin}"
     pkill -x wlsunset 2>/dev/null
-    [ "$v" = off ] && exit 0
+    # Same config.user block Settings > Screen writes, so the panel's choice
+    # also comes back at the next login
+    if [ "$v" = off ]; then
+        common && tebian_block_remove nightlight
+        exit 0
+    fi
     [[ "$v" =~ ^[0-9]{4}$ ]] || exit 2
     command -v wlsunset >/dev/null || exit 1
     mkdir -p "${NL_CONF%/*}"; echo "$v" > "$NL_CONF"
+    common && tebian_block_set nightlight "exec wlsunset -t $v -T $((v + 100))"
     # Near-constant warmth, as Settings > Screen does: with the default
     # sun-based schedule (lat/long 0) daytime would stay at 6500K
     setsid wlsunset -t "$v" -T $((v + 100)) >/dev/null 2>&1 &

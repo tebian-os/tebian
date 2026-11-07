@@ -1,5 +1,23 @@
 #!/bin/bash
 # Tebian Fuzzel Wrapper - handles icon toggling and separator filtering
+#
+# For callers that can't source tebian-common (sway bindings, other
+# programs). The real wrapper is tfuzzel() in tebian-common; this copy used
+# to reimplement it and fell behind (no drop-down anchoring from the bar),
+# so it runs that one whenever it can be found.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _common in "$SCRIPT_DIR/tebian-common" "$HOME/.local/bin/tebian-common"; do
+    if [ -f "$_common" ]; then
+        # shellcheck source=/dev/null
+        source "$_common"
+        if declare -F tfuzzel >/dev/null; then
+            tfuzzel "$@"
+            exit
+        fi
+    fi
+done
+
+# Fallback without tebian-common
 run_fuzzel() {
     if [ -f "$HOME/.config/tebian/no_icons" ]; then
         perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "$@"

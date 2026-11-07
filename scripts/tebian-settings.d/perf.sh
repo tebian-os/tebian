@@ -2,6 +2,24 @@
 # tebian-settings module: perf.sh
 # Sourced by tebian-settings — do not run directly
 
+# The terminals below don't report whether their commands worked, so the
+# outcome itself is checked before a notification claims it happened.
+# Args: title ok-message fail-message test-command...
+perf_notify() {
+    local title="$1" ok="$2" bad="$3"; shift 3
+    if "$@" >/dev/null 2>&1; then
+        tnotify "$title" "$ok"
+    else
+        tnotify "$title" "$bad"
+    fi
+}
+
+perf_pkg_installed() {
+    local status
+    status=$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)
+    [[ "$status" == *"ok installed" ]]
+}
+
 perf_menu() {
     while true; do
     # === State detection ===
@@ -48,8 +66,8 @@ perf_menu() {
         UC_LABEL="🔲 Install CPU Microcode"
     fi
 
-    # HiDPI
-    if grep -qxF "output * scale 2" "$HOME/.config/sway/config.user" 2>/dev/null; then
+    # HiDPI (the bare line is how older versions wrote it)
+    if tebian_block_has hidpi || grep -qxF "output * scale 2" "$TEBIAN_SWAY_USER" 2>/dev/null; then
         HIDPI_LABEL="󰍺 HiDPI Scaling (2x Active)"
     else
         HIDPI_LABEL="󰍺 Set HiDPI Scaling (2x)"
@@ -104,23 +122,33 @@ perf_menu() {
     # === Handle choices ===
 
     # --- RAM Boost ---
+    # Swappiness is raised, not lowered: swapping to zram is compression in
+    # RAM, far cheaper than dropping file cache, so the kernel should use
+    # it readily (the kernel docs suggest above 100 for in-memory swap).
+    # The old vm.swappiness=10 left most of the zram device unused.
     if [[ "$P_CHOICE" =~ "Install RAM Boost" ]]; then
         $TERM_CMD bash -c "echo 'Installing Tebian RAM Boost...';
-        sudo apt update && sudo apt install -y zram-tools;
-        echo -e 'ALGO=zstd\nPERCENT=60' | sudo tee /etc/default/zramswap;
-        echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-tebian-mem.conf;
+        if ! { sudo apt update && sudo apt install -y zram-tools; }; then
+            echo ''; echo '❌ zram-tools did not install — nothing was changed.';
+            read -p 'Press Enter to close...'; exit 1;
+        fi;
+        printf 'ALGO=zstd\nPERCENT=60\n' | sudo tee /etc/default/zramswap >/dev/null;
+        echo 'vm.swappiness=150' | sudo tee /etc/sysctl.d/99-tebian-mem.conf >/dev/null;
         sudo sysctl -p /etc/sysctl.d/99-tebian-mem.conf;
         sudo systemctl enable --now zramswap;
         echo '';
-        echo 'Done! RAM Boost installed and active.';
+        systemctl is-active --quiet zramswap && echo 'Done! RAM Boost installed and active.' || echo '❌ zramswap did not start — see: systemctl status zramswap';
         read -p 'Press Enter to close...'"
-        tnotify "RAM Boost" "Installed and enabled"
+        perf_notify "RAM Boost" "Installed and enabled" "Not active — see the terminal output" \
+            systemctl is-active --quiet zramswap
     elif [[ "$P_CHOICE" == *"RAM Boost (Active)"* ]]; then
         $TERM_CMD bash -c "sudo systemctl disable --now zramswap && echo 'RAM Boost disabled.' || echo 'Failed to stop.'; read -p 'Press Enter...'"
-        tnotify "RAM Boost" "Disabled"
+        perf_notify "RAM Boost" "Disabled" "Still running" \
+            bash -c '! systemctl is-active --quiet zramswap'
     elif [[ "$P_CHOICE" == *"RAM Boost (Inactive)"* ]]; then
         $TERM_CMD bash -c "sudo systemctl enable --now zramswap && echo 'RAM Boost enabled.' || echo 'Failed to start.'; read -p 'Press Enter...'"
-        tnotify "RAM Boost" "Enabled"
+        perf_notify "RAM Boost" "Enabled" "Did not start" \
+            systemctl is-active --quiet zramswap
     elif [[ "$P_CHOICE" =~ "Uninstall RAM Boost" ]]; then
         $TERM_CMD bash -c "echo 'Uninstalling RAM Boost...';
         sudo systemctl disable --now zramswap 2>/dev/null;
@@ -130,7 +158,8 @@ perf_menu() {
         echo '';
         echo 'RAM Boost removed.';
         read -p 'Press Enter to close...'"
-        tnotify "RAM Boost" "Uninstalled"
+        perf_notify "RAM Boost" "Uninstalled" "Not removed — see the terminal output" \
+            bash -c '! dpkg-query -W -f="\${Status}" zram-tools 2>/dev/null | grep -q "ok installed"'
 
     # --- App Preload ---
     elif [[ "$P_CHOICE" =~ "Install App Preload" ]]; then
@@ -145,7 +174,8 @@ perf_menu() {
         echo 'Preload installed and running!';
         echo '   It will learn your usage patterns over the next few days.';
         read -p 'Press Enter to close...'"
-        tnotify "App Preload" "Installed and enabled"
+        perf_notify "App Preload" "Installed and enabled" "Not running — see the terminal output" \
+            systemctl is-active --quiet preload
     elif [[ "$P_CHOICE" == *"App Preload (Active)"* ]]; then
         $TERM_CMD bash -c "echo 'Disabling App Preload...';
         sudo systemctl stop preload;
@@ -195,7 +225,7 @@ perf_menu() {
             echo "   Battery life should improve."
             read -p "Press Enter to close..."
         '
-        tnotify "Laptop Power" "TLP installed"
+        perf_notify "Laptop Power" "TLP installed" "TLP was not installed" perf_pkg_installed tlp
     elif [[ "$P_CHOICE" =~ "Uninstall Laptop Power" ]]; then
         $TERM_CMD bash -c "echo 'Uninstalling Laptop Power Management...';
         sudo systemctl disable --now tlp 2>/dev/null;
@@ -251,7 +281,8 @@ perf_menu() {
         echo '   gamemoderun mangohud %command%  (with FPS overlay)';
         echo '';
         read -p 'Press Enter to close...'"
-        tnotify "Gaming" "Optimization installed"
+        perf_notify "Gaming" "Optimization installed" "Not installed — see the terminal output" \
+            perf_pkg_installed gamemode
 
     # --- Nvidia Drivers ---
     elif [[ "$P_CHOICE" =~ "Uninstall Nvidia" ]]; then
@@ -323,13 +354,52 @@ perf_menu() {
             source "$TEBIAN_COMMON"
             tebian_apt_add_components "contrib non-free non-free-firmware"
 
+            # Secure Boot only loads signed kernel modules. DKMS signs the
+            # driver with its own key, but the firmware must be told to
+            # trust that key (MOK enrollment) or the driver is refused at
+            # every boot. The EFI variable is readable without root.
+            SB=off
+            sbvar=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
+            if [ -r "$sbvar" ] && [ "$(od -An -tu1 "$sbvar" 2>/dev/null | awk "{print \$NF}")" = 1 ]; then
+                SB=on
+                echo ""
+                echo "🔒 Secure Boot is on. After the install you choose a one-time"
+                echo "   password; at the next boot a blue \"MOK management\" screen"
+                echo "   asks for it: Enroll MOK → Continue → Yes → password → Reboot."
+                echo "   Skip that screen and the NVIDIA driver will not load."
+                read -p "   Continue? [y/N] " confirm
+                [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
+            fi
+
             echo "Installing NVIDIA drivers..."
             sudo apt update
-            if ! sudo apt install -y nvidia-driver firmware-misc-nonfree; then
+            if ! sudo apt install -y nvidia-driver firmware-misc-nonfree mokutil; then
                 echo ""
                 echo "❌ Driver install failed — nothing else was changed."
                 read -p "Press Enter to close..."
                 exit 1
+            fi
+
+            mok_ok=yes
+            if [ "$SB" = on ]; then
+                key=/var/lib/dkms/mok.pub
+                echo ""
+                if [ ! -f "$key" ]; then
+                    mok_ok=no
+                    echo "⚠️  No DKMS signing key at $key, so the driver is unsigned and"
+                    echo "   Secure Boot will refuse it. Turn Secure Boot off in the firmware"
+                    echo "   setup, or see wiki.debian.org/SecureBoot."
+                elif sudo mokutil --test-key "$key" 2>&1 | grep -qi "already enrolled"; then
+                    echo "Secure Boot: the DKMS signing key is already trusted."
+                else
+                    echo "Secure Boot: enrolling the DKMS signing key."
+                    echo "Pick a one-time password (you type it once more at the next boot):"
+                    if ! sudo mokutil --import "$key"; then
+                        mok_ok=no
+                        echo "⚠️  The key was not queued for enrollment, so the driver will not"
+                        echo "   load yet. Retry with: sudo mokutil --import $key"
+                    fi
+                fi
             fi
 
             echo ""
@@ -342,30 +412,41 @@ perf_menu() {
             sudo update-initramfs -u
 
             echo ""
-            # tebian-session exports these into sway at login, and adds
-            # --unsupported-gpu when the nvidia module is loaded
-            echo "Configuring Wayland environment..."
-            mkdir -p "$HOME/.config/environment.d"
-            cat > "$HOME/.config/environment.d/tebian-nvidia.conf" <<NVEOF
+            # Any display controller that is not NVIDIA means a hybrid
+            # laptop: the screen runs on the integrated GPU, and pointing
+            # GBM, GLX and VA-API at nvidia for everything breaks it. There
+            # the NVIDIA GPU is used per app (PRIME offload) instead.
+            rm -f "$HOME/.config/environment.d/tebian-nvidia.conf"
+            if lspci | grep -E "VGA|3D|Display" | grep -vqi nvidia; then
+                echo "⚡ Hybrid graphics (integrated + NVIDIA): the desktop stays on the"
+                echo "   integrated GPU. Run a game or app on the NVIDIA GPU with:"
+                echo "   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <app>"
+                echo "   (Steam: put that before %command% in the launch options)"
+            else
+                # tebian-session exports these into sway at login once the
+                # nvidia module is loaded, and adds --unsupported-gpu
+                echo "Configuring Wayland environment..."
+                mkdir -p "$HOME/.config/environment.d"
+                cat > "$HOME/.config/environment.d/tebian-nvidia.conf" <<NVEOF
 WLR_NO_HARDWARE_CURSORS=1
 LIBVA_DRIVER_NAME=nvidia
 GBM_BACKEND=nvidia-drm
 __GLX_VENDOR_LIBRARY_NAME=nvidia
 NVEOF
-
-            if lspci | grep -qi "VGA.*Intel" && lspci | grep -qi "3D.*NVIDIA\|VGA.*NVIDIA"; then
-                echo ""
-                echo "⚡ Hybrid GPU detected (Intel + NVIDIA)"
-                echo "   PRIME render offload configured."
-                echo "   Use: __NV_PRIME_RENDER_OFFLOAD=1 <app> for GPU apps"
             fi
 
             echo ""
-            echo "✅ NVIDIA drivers installed!"
+            if [ "$mok_ok" = yes ]; then
+                echo "✅ NVIDIA drivers installed!"
+            else
+                echo "⚠️  NVIDIA drivers installed, but they will not load until the"
+                echo "   Secure Boot step above is done. The desktop still starts without them."
+            fi
             echo "   REBOOT REQUIRED."
             read -p "Press Enter to close..."
         '
-        tnotify "Nvidia" "Drivers installed — reboot required"
+        perf_notify "Nvidia" "Drivers installed — reboot required" "Drivers were not installed" \
+            perf_pkg_installed nvidia-driver
 
     # --- CPU Microcode (no uninstall — critical for CPU security) ---
     elif [[ "$P_CHOICE" =~ "Install CPU Microcode" ]]; then
@@ -399,7 +480,8 @@ NVEOF
             echo ""
             read -p "Press Enter to close..."
         '
-        tnotify "CPU Microcode" "Installed"
+        perf_notify "CPU Microcode" "Installed" "Not installed" \
+            bash -c 'dpkg-query -W -f="\${Status}\n" intel-microcode amd64-microcode 2>/dev/null | grep -q "ok installed"'
     elif [[ "$P_CHOICE" =~ "CPU Microcode (Installed)" ]]; then
         $TERM_CMD bash -c '
             echo "========================================="
@@ -420,39 +502,21 @@ NVEOF
         '
 
     # --- HiDPI Scaling (toggle) ---
+    # A config.user block like every other Settings toggle, so it can be
+    # found and undone exactly. No GDK_SCALE any more: Wayland apps take
+    # the scale from sway, and on top of it GDK_SCALE=2 made XWayland GTK
+    # apps 4x. The lines older versions wrote are cleaned up on reset.
     elif [[ "$P_CHOICE" == *"HiDPI Scaling (2x Active)"* ]]; then
-        $TERM_CMD bash -c '
-            echo "Resetting HiDPI scaling to 1x..."
-            echo ""
-            sed -i "/^# HiDPI scaling$/d" "$HOME/.config/sway/config.user" 2>/dev/null
-            sed -i "/^output \* scale 2$/d" "$HOME/.config/sway/config.user" 2>/dev/null
-            sed -i "/^export GDK_SCALE=2$/d; /^GDK_SCALE=2$/d" "$HOME/.profile" 2>/dev/null
-            echo "✅ HiDPI scaling removed (reset to 1x)."
-            echo "   Reload Sway (Mod+Shift+e) to apply."
-            echo ""
-            read -p "Press Enter to close..."
-        '
+        tebian_block_remove hidpi
+        sed -i '/^# HiDPI scaling$/d; /^output \* scale 2$/d' "$TEBIAN_SWAY_USER" 2>/dev/null
+        sed -i '/^export GDK_SCALE=2$/d; /^GDK_SCALE=2$/d' "$HOME/.profile" 2>/dev/null
+        swaymsg 'output * scale 1' >/dev/null 2>&1
+        swaymsg reload >/dev/null 2>&1 &
         tnotify "HiDPI" "Reset to 1x"
     elif [[ "$P_CHOICE" =~ "Set HiDPI" ]]; then
-        $TERM_CMD bash -c '
-            echo "========================================="
-            echo "  HiDPI Scaling Setup"
-            echo "========================================="
-            echo ""
-            echo "This enables 2x scaling for 4K displays."
-            echo ""
-
-            mkdir -p "$HOME/.config/sway"
-            grep -qxF "# HiDPI scaling" "$HOME/.config/sway/config.user" 2>/dev/null || echo "# HiDPI scaling" >> "$HOME/.config/sway/config.user"
-            grep -qxF "output * scale 2" "$HOME/.config/sway/config.user" 2>/dev/null || echo "output * scale 2" >> "$HOME/.config/sway/config.user"
-            grep -qxF "export GDK_SCALE=2" "$HOME/.profile" 2>/dev/null || echo "export GDK_SCALE=2" >> "$HOME/.profile"
-
-            echo "✅ HiDPI scaling enabled!"
-            echo "   Reload Sway (Mod+Shift+e) to apply."
-            echo ""
-            read -p "Press Enter to close..."
-        '
-        tnotify "HiDPI" "Scaling set to 2x"
+        tebian_block_set hidpi 'output * scale 2'
+        swaymsg 'output * scale 2' >/dev/null 2>&1
+        tnotify "HiDPI" "Scaling set to 2x on every screen (one screen: Screen > Displays)"
 
     # --- Clean System Junk ---
     elif [[ "$P_CHOICE" =~ "Clean System Junk" ]]; then
