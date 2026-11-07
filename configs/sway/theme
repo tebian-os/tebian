@@ -1,19 +1,19 @@
-# Nord Theme - Sway Colors (Arctic, Professional)
+# Glass Theme - Sway Colors (Catppuccin Mocha)
 # Included by main config
 
-set $base      #2E3440
-set $text      #ECEFF4
-set $surface0  #3B4252
-set $surface1  #434C5E
-set $overlay0  #4C566A
-set $accent    #88C0D0
-set $frost     #88C0D0
-set $blue      #5E81AC
-set $aurora    #A3BE8C
-set $red       #BF616A
-set $green     #A3BE8C
+# Colors
+set $base      #1e1e2e
+set $text      #cdd6f4
+set $surface0  #313244
+set $surface1  #45475a
+set $overlay0  #6c7086
+set $accent    #b4befe
+set $lavender  #b4befe
+set $mauve     #cba6f7
+set $red       #f38ba8
+set $green     #a6e3a1
 
 # Gaps & Visuals
-gaps inner 12
-gaps outer 4
-default_border pixel 2
+gaps inner 15
+gaps outer 0
+default_border pixel 3

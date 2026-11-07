@@ -317,11 +317,18 @@ function canForgetNetwork(network) {
 // `connection edit` editor -- argv is world-readable in /proc, so the secret
 // must never be an argument (printf is a bash builtin, so no process spawns
 // with it either).
+// The server is checked when the identity names a realm (user@example.edu):
+// its certificate must chain to a system CA and be issued for that domain.
+// Without a check, any access point using the same SSID collects the
+// MSCHAPv2 exchange, which cracks offline to the user's password. A network
+// whose server uses a private CA then fails to connect here, and needs its
+// CA set with nmcli or nm-connection-editor.
 var enterpriseConnectScript =
-  "u=$(cat /proc/sys/kernel/random/uuid); IFS= read -r pw;" +
+  "u=$(cat /proc/sys/kernel/random/uuid); IFS= read -r pw; v=();" +
+  " case \"$2\" in *@?*.?*) v=(802-1x.system-ca-certs yes 802-1x.domain-suffix-match \"${2##*@}\") ;; esac;" +
   " nmcli connection add type wifi con-name \"$1\" ssid \"$1\" connection.uuid \"$u\"" +
   " wifi-sec.key-mgmt wpa-eap 802-1x.eap peap 802-1x.phase2-auth mschapv2" +
-  " 802-1x.identity \"$2\" 802-1x.auth-timeout 8 >/dev/null" +
+  " 802-1x.identity \"$2\" \"${v[@]}\" 802-1x.auth-timeout 8 >/dev/null" +
   " && printf 'set 802-1x.password %s\\nsave\\nquit\\n' \"$pw\" | nmcli connection edit uuid \"$u\" >/dev/null" +
   " && nmcli connection up uuid \"$u\"" +
   " || { nmcli connection delete uuid \"$u\" >/dev/null 2>&1; false; }"

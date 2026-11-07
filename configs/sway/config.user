@@ -1,6 +1,3 @@
-# Power button opens Tebian power menu
-bindsym XF86PowerOff exec tebian-settings --power
-
 # Workspace manager (Mod+W)
 bindsym $mod+w exec tebian-workspace
 

@@ -6,17 +6,22 @@
 # omarchy-network-band (MIT, (c) David Heinemeier Hansson).
 #
 #   tebian-net-status --verbose        active route: iface, ip, gateway, byte
-#                                      counters, Wi-Fi link, ping samples
+#                                      counters, Wi-Fi link, ping to the router
 #   tebian-net-status band             current / available / pinned Wi-Fi band
 #   tebian-net-status band auto|2.4|5|6  pin the active connection's band
 #
 # Differences from Omarchy's: no jq (parses `ip` text output), and `iw` is
 # optional — Tebian installs don't always have it, so NetworkManager answers
-# for the Wi-Fi link when it's missing.
+# for the Wi-Fi link when it's missing. And no pinging a third party:
+# Omarchy's pings Cloudflare (1.1.1.1) every poll while the panel is open,
+# a service nobody chose. The panel's Ping and Packet Loss are to the
+# router, which is where Wi-Fi trouble shows anyway.
 # ==============================================================================
 set -uo pipefail
 
-internet_probe=1.1.1.1
+# Only asked of the routing table ("which way would this go?"); nothing is
+# sent to it
+route_probe=1.1.1.1
 
 # Values read back from nmcli: C locale so state words match, `-e no` so an
 # SSID containing ':' or '\' isn't escaped
@@ -49,7 +54,7 @@ ping_ms() {
 verbose() {
     local route iface gw src prefix rf if_file
     # e.g. "1.1.1.1 via 192.168.1.1 dev wlp0s20f3 src 192.168.1.50 uid 1000"
-    route=$(ip route get "$internet_probe" 2>/dev/null | head -1)
+    route=$(ip route get "$route_probe" 2>/dev/null | head -1)
     [ -n "$route" ] || return 0
     iface=$(awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$route")
     gw=$(awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }' <<<"$route")
@@ -76,15 +81,13 @@ verbose() {
         [ -r "/sys/class/net/$iface/duplex" ] && printf 'duplex\t%s\n' "$(cat "/sys/class/net/$iface/duplex" 2>/dev/null)"
     fi
 
-    # Router and internet pinged in parallel so a slow one doesn't double
-    # the poll time
-    local tmp; tmp=$(mktemp -d) || return 0
-    [ -n "$gw" ] && { ping_ms "$gw" > "$tmp/router" & }
-    ping_ms "$internet_probe" > "$tmp/internet" &
-    wait
-    [ -n "$gw" ] && printf 'router_ping_ms\t%s\n' "$(cat "$tmp/router")"
-    printf 'internet_ping_ms\t%s\n' "$(cat "$tmp/internet")"
-    rm -rf "$tmp"
+    # The panel's Ping and Packet Loss read internet_ping_ms; it carries the
+    # router's sample too (see the header). No gateway (a point-to-point
+    # link): no sample, and the panel shows "--".
+    if [ -n "$gw" ]; then
+        local ms; ms=$(ping_ms "$gw")
+        printf 'router_ping_ms\t%s\ninternet_ping_ms\t%s\n' "$ms" "$ms"
+    fi
 }
 
 # ---- band ----------------------------------------------------------------------

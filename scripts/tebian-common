@@ -76,25 +76,6 @@ check_tebian() {
     export TEBIAN_DIR="$tebian_dir"
 }
 
-# Safe copy with backup
-safe_copy() {
-    local src="$1"
-    local dst="$2"
-    
-    if [ ! -f "$src" ]; then
-        log_error "Source file not found: $src"
-        return 1
-    fi
-    
-    if [ -f "$dst" ]; then
-        cp "$dst" "$dst.bak.$(date +%s)"
-        log_debug "Backed up: $dst"
-    fi
-    
-    cp "$src" "$dst"
-    log_debug "Copied: $src -> $dst"
-}
-
 # Confirm action
 confirm() {
     local prompt="${1:-Continue?}"
@@ -571,19 +552,30 @@ tebian_idle_start() {
     [[ "$LOCK_MINUTES" =~ ^[0-9]+$ ]] && [ "$LOCK_MINUTES" -gt 0 ] || LOCK_MINUTES=5
 
     pkill -x swayidle 2>/dev/null
-    [ "$AUTOLOCK" = on ] || return 0
-    # Keep awake is on (tebian-awake idle): stay paused until it's turned off
-    [ -f "${XDG_RUNTIME_DIR:-/tmp}/tebian/awake-idle" ] && return 0
     command -v swayidle >/dev/null || return 1
 
-    local secs=$((LOCK_MINUTES * 60))
-    # swayidle runs each command through sh -c: "output * power off" must
-    # stay quoted, or the * expands to the file names in $HOME
-    setsid swayidle -w \
-        timeout "$secs" 'gtklock -d' \
-        timeout "$((secs * 2))" 'swaymsg "output * power off"' \
-        resume 'swaymsg "output * power on"' \
-        before-sleep 'gtklock -d' >/dev/null 2>&1 &
+    # Locking on suspend is not part of auto-lock: a laptop shut into a bag
+    # with auto-lock off or Keep awake on must still wake up locked. So
+    # swayidle always runs for before-sleep (and logind's lock signal, e.g.
+    # `loginctl lock-session`); those two switches only drop the timeouts.
+    # Keep awake's flag lives in the runtime dir, so it ends at logout.
+    local -a timeouts=()
+    if [ "$AUTOLOCK" = on ] && [ ! -f "${XDG_RUNTIME_DIR:-/tmp}/tebian/awake-idle" ]; then
+        local secs=$((LOCK_MINUTES * 60))
+        # swayidle runs each command through sh -c: "output * power off" must
+        # stay quoted, or the * expands to the file names in $HOME
+        timeouts=(
+            timeout "$secs" 'gtklock -d'
+            timeout "$((secs * 2))" 'swaymsg "output * power off"'
+            resume 'swaymsg "output * power on"'
+        )
+    fi
+    # -w: suspend waits (up to logind's InhibitDelayMaxSec) for gtklock -d,
+    # which returns once the screen is locked, so no frame of the desktop
+    # shows on resume
+    setsid swayidle -w "${timeouts[@]}" \
+        before-sleep 'gtklock -d' \
+        lock 'gtklock -d' >/dev/null 2>&1 &
 }
 
 # Persist idle settings and apply them now
@@ -647,7 +639,7 @@ tebian_conf_set() {
 }
 
 # ==============================================================================
-# SAFE SED HELPERS
+# CONFIG LINE HELPERS
 # ==============================================================================
 
 # Append a line to a file only if it doesn't already exist.
@@ -661,30 +653,6 @@ idempotent_append() {
         return
     fi
     grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
-}
-
-# Sed replace scoped to within a block (e.g. only within bar { ... })
-# Usage: safe_sed_replace "bar {" "}" "s/old/new/" file
-safe_sed_replace() {
-    local block_start="$1"
-    local block_end="$2"
-    local sed_expr="$3"
-    local file="$4"
-
-    awk -v start="$block_start" -v end_pat="$block_end" -v expr="$sed_expr" '
-    BEGIN { in_block=0 }
-    $0 ~ start { in_block=1 }
-    in_block && $0 ~ end_pat { in_block=0 }
-    in_block {
-        cmd = "echo " sq($0) " | sed -E " sq(expr)
-        cmd | getline result
-        close(cmd)
-        print result
-        next
-    }
-    { print }
-    function sq(s) { gsub(/'\''/, "'\''\\'\'''\''", s); return "'\''" s "'\''" }
-    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
 # ==============================================================================
@@ -879,22 +847,31 @@ tebian_apt_switch_suite() {
 }
 
 # Current Debian release codename of the configured sources (trixie,
-# testing, ...), or empty
+# testing, ...), or empty. Only a bare suite counts: the files are read in
+# name order, and debian-backports.sources (the name Debian's backports
+# instructions use) sorts before debian.sources, so taking the first suite
+# seen answered "trixie-backports" and Join Rolling switched only that
+# stanza. awk at the end, not head: it reads everything, so no SIGPIPE
+# under pipefail.
 tebian_apt_suite() {
     local f
     while read -r f; do
         if [[ "$f" == *.sources ]]; then
             awk "$_TEBIAN_AWK_DEBIAN"'
-                /^[ \t]*$/ { if (deb && suite) { print suite; exit } deb = 0; suite = "" }
+                function flush(   i) {
+                    if (deb) for (i = 1; i <= ns; i++) if (s[i] !~ /-/) print s[i]
+                    deb = 0; ns = 0
+                }
+                /^[ \t]*$/ { flush(); next }
                 $1 == "URIs:" { for (i = 2; i <= NF; i++) if (is_debian($i)) deb = 1 }
-                $1 == "Suites:" { suite = $2 }
-                END { if (deb && suite) print suite }' "$f"
+                $1 == "Suites:" { ns = 0; for (i = 2; i <= NF; i++) s[++ns] = $i }
+                END { flush() }' "$f"
         else
             awk "$_TEBIAN_AWK_DEBIAN"'
                 /^[ \t]*deb[ \t]/ {
                     u = 2; if ($2 ~ /^\[/) { while (u <= NF && $u !~ /\]$/) u++; u++ }
-                    if (is_debian($u) && $(u+1) !~ /-/) { print $(u+1); exit }
+                    if (is_debian($u) && $(u+1) !~ /-/) print $(u+1)
                 }' "$f"
         fi
-    done < <(_tebian_apt_files) | head -1
+    done < <(_tebian_apt_files) | awk 'NR == 1'
 }

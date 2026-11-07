@@ -41,16 +41,24 @@ tlink_menu() {
         MENU+="
   No servers - Add one below"
     else
+        # All pinged at once: one after another, each unreachable server
+        # held the menu back a second before it appeared
+        local up i=0
+        up=$(mktemp -d)
         for server in $SERVERS; do
             IP=$(grep "^$server=" "$SERVERS_FILE" | cut -d= -f2)
-            if ping -c 1 -W 1 "$IP" &>/dev/null; then
-                STATUS="●"
-            else
-                STATUS="○"
-            fi
+            { ping -c 1 -W 1 "$IP" &>/dev/null && touch "$up/$i"; } &
+            i=$((i + 1))
+        done
+        wait
+        i=0
+        for server in $SERVERS; do
+            if [ -e "$up/$i" ]; then STATUS="●"; else STATUS="○"; fi
             MENU+="
   $STATUS $server"
+            i=$((i + 1))
         done
+        rm -rf "$up"
     fi
 
     MENU+="
@@ -59,7 +67,7 @@ tlink_menu() {
 󰚰 Setup Fresh Server
 ─────────────────────────────────
 󰆲 Deploy App
-󰆲 Zero-Downtime Deploy
+󰆲 Redeploy (Tested First)
 󰆲 One-Click Apps
 ─────────────────────────────────
 󰋜 Quick Actions
@@ -79,9 +87,9 @@ tlink_menu() {
         add_server
     elif [[ "$CHOICE" =~ "Setup Fresh" ]]; then
         setup_server
-    elif [[ "$CHOICE" =~ "Deploy App" ]] && ! [[ "$CHOICE" =~ "Zero" ]] && ! [[ "$CHOICE" =~ "One-Click" ]]; then
+    elif [[ "$CHOICE" =~ "Deploy App" ]]; then
         deploy_menu
-    elif [[ "$CHOICE" =~ "Zero-Downtime" ]]; then
+    elif [[ "$CHOICE" =~ "Redeploy" ]]; then
         zero_downtime_deploy
     elif [[ "$CHOICE" =~ "One-Click" ]]; then
         one_click_apps
@@ -160,7 +168,10 @@ setup_debian() {
             echo ''
             echo 'Cannot connect. Make sure:'
             echo '  1. Server is reachable'
-            echo '  2. SSH key is authorized'
+            echo '  2. Its host key is known: connect once with'
+            echo '     ssh root@$IP and check the fingerprint it shows'
+            echo '     against your provider'\''s console before saying yes'
+            echo '  3. Your SSH key is authorized'
             echo '     Run: ssh-copy-id root@$IP'
             echo ''
             read -p 'Press Enter...'
@@ -169,28 +180,38 @@ setup_debian() {
         echo '✓ SSH connected'
         echo ''
         
+        # Every step must work: a firewall that silently failed to come up
+        # used to end in SERVER READY all the same
+        fail() { echo \"✗ \$1 failed — server not ready\"; read -p 'Press Enter...'; exit 1; }
+
         echo '[1/6] Installing Docker...'
-        ssh root@$IP 'apt update && apt install -y docker.io docker-compose' && echo '✓ Docker installed'
+        ssh root@$IP 'apt update && apt install -y docker.io docker-compose' || fail Docker
+        echo '✓ Docker installed'
         echo ''
         
         echo '[2/6] Setting up firewall (UFW)...'
-        ssh root@$IP 'ufw allow ssh && ufw allow http && ufw allow https && echo y | ufw enable' && echo '✓ UFW configured'
+        ssh root@$IP 'apt install -y ufw && ufw allow ssh && ufw allow http && ufw allow https && ufw --force enable' || fail Firewall
+        echo '✓ UFW configured'
         echo ''
         
         echo '[3/6] Installing fail2ban...'
-        ssh root@$IP 'apt install -y fail2ban && systemctl enable --now fail2ban' && echo '✓ fail2ban running'
+        ssh root@$IP 'apt install -y fail2ban && systemctl enable --now fail2ban' || fail fail2ban
+        echo '✓ fail2ban running'
         echo ''
         
         echo '[4/6] Creating folder structure...'
-        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' && echo '✓ Folders created'
+        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' || fail Folders
+        echo '✓ Folders created'
         echo ''
         
         echo '[5/6] Enabling auto-updates...'
-        ssh root@$IP 'apt install -y unattended-upgrades && dpkg-reconfigure -f noninteractive unattended-upgrades' && echo '✓ Auto-updates enabled'
+        ssh root@$IP 'apt install -y unattended-upgrades && dpkg-reconfigure -f noninteractive unattended-upgrades' || fail Auto-updates
+        echo '✓ Auto-updates enabled'
         echo ''
         
         echo '[6/6] Installing helpful tools...'
-        ssh root@$IP 'apt install -y htop iotop ncdu' && echo '✓ Tools installed'
+        ssh root@$IP 'apt install -y htop iotop ncdu' || fail Tools
+        echo '✓ Tools installed'
         echo ''
         
         echo '════════════════════════════════════════'
@@ -219,7 +240,10 @@ setup_alpine() {
             echo ''
             echo 'Cannot connect. Make sure:'
             echo '  1. Server is reachable'
-            echo '  2. SSH key is authorized'
+            echo '  2. Its host key is known: connect once with'
+            echo '     ssh root@$IP and check the fingerprint it shows'
+            echo '     against your provider'\''s console before saying yes'
+            echo '  3. Your SSH key is authorized'
             echo '     Run: ssh-copy-id root@$IP'
             echo ''
             read -p 'Press Enter...'
@@ -228,24 +252,31 @@ setup_alpine() {
         echo '✓ SSH connected'
         echo ''
         
+        fail() { echo \"✗ \$1 failed — server not ready\"; read -p 'Press Enter...'; exit 1; }
+
         echo '[1/5] Installing Docker...'
-        ssh root@$IP 'apk add docker docker-cli-compose && rc-update add docker boot && service docker start' && echo '✓ Docker installed'
+        ssh root@$IP 'apk add docker docker-cli-compose && rc-update add docker boot && service docker start' || fail Docker
+        echo '✓ Docker installed'
         echo ''
         
         echo '[2/5] Setting up firewall...'
-        ssh root@$IP 'apk add iptables iptables-openrc && rc-update add iptables boot && service iptables start && iptables -P INPUT DROP && iptables -A INPUT -i lo -j ACCEPT && iptables -A INPUT -p tcp --dport 22 -j ACCEPT && iptables -A INPUT -p tcp --dport 80 -j ACCEPT && iptables -A INPUT -p tcp --dport 443 -j ACCEPT && iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT && /etc/init.d/iptables save' && echo '✓ Firewall configured'
+        ssh root@$IP 'apk add iptables iptables-openrc && rc-update add iptables boot && service iptables start && iptables -P INPUT DROP && iptables -A INPUT -i lo -j ACCEPT && iptables -A INPUT -p tcp --dport 22 -j ACCEPT && iptables -A INPUT -p tcp --dport 80 -j ACCEPT && iptables -A INPUT -p tcp --dport 443 -j ACCEPT && iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT && /etc/init.d/iptables save' || fail Firewall
+        echo '✓ Firewall configured'
         echo ''
         
         echo '[3/5] Creating folder structure...'
-        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' && echo '✓ Folders created'
+        ssh root@$IP 'mkdir -p /opt/apps /opt/data /opt/config /opt/backups' || fail Folders
+        echo '✓ Folders created'
         echo ''
         
         echo '[4/5] Installing helpful tools...'
-        ssh root@$IP 'apk add htop ncdu bash' && echo '✓ Tools installed'
+        ssh root@$IP 'apk add htop ncdu bash' || fail Tools
+        echo '✓ Tools installed'
         echo ''
         
         echo '[5/5] Enabling auto-updates...'
-        ssh root@$IP 'apk add apk-autoupdate && rc-update add apk-autoupdate boot' && echo '✓ Auto-updates enabled'
+        ssh root@$IP 'apk add apk-autoupdate && rc-update add apk-autoupdate boot' || fail Auto-updates
+        echo '✓ Auto-updates enabled'
         echo ''
         
         echo '════════════════════════════════════════'
@@ -425,7 +456,10 @@ deploy_to_server() {
         
         echo '[4/4] Starting container...'
         ssh root@$IP 'docker stop $APP_NAME 2>/dev/null; docker rm $APP_NAME 2>/dev/null'
-        ssh root@$IP 'docker run -d --name $APP_NAME --restart unless-stopped -p $PORT:$PORT $APP_NAME:latest'
+        # Published on the server's loopback only: Docker's own iptables
+        # rules go around UFW, so -p $PORT:$PORT put every app on the
+        # internet unencrypted, firewall or not. Caddy proxies to it.
+        ssh root@$IP 'docker run -d --name $APP_NAME --restart unless-stopped -p 127.0.0.1:$PORT:$PORT $APP_NAME:latest' || { echo '✗ Start failed'; read -p 'Press Enter...'; exit 1; }
         echo '✓ Running'
         echo ''
         
@@ -433,7 +467,9 @@ deploy_to_server() {
         echo '  ✓ DEPLOYED'
         echo '════════════════════════════════════════'
         echo ''
-        echo 'App running at: http://$IP:$PORT'
+        echo 'Running on the server at localhost:$PORT (not exposed).'
+        echo 'Publish it with HTTPS: server > Setup SSL (Caddy), port $PORT.'
+        echo 'Or look now through a tunnel: ssh -L $PORT:localhost:$PORT root@$IP'
         echo ''
         read -p 'Press Enter...'
     "
@@ -490,7 +526,7 @@ zero_downtime_deploy() {
     
     $TERM_CMD bash -c "
         echo '════════════════════════════════════════'
-        echo '  ZERO-DOWNTIME DEPLOY: $APP'
+        echo '  REDEPLOY (TESTED FIRST): $APP'
         echo '════════════════════════════════════════'
         echo ''
         
@@ -524,7 +560,7 @@ zero_downtime_deploy() {
         echo ''
         
         echo '[3/5] Starting new version...'
-        ssh root@$IP \"docker run -d --name $APP-v2 --restart unless-stopped -p \$NEW_PORT:\$CONTAINER_PORT $APP:latest\"
+        ssh root@$IP \"docker run -d --name $APP-v2 --restart unless-stopped -p 127.0.0.1:\$NEW_PORT:\$CONTAINER_PORT $APP:latest\"
         echo '✓ New version running'
         echo ''
         
@@ -542,14 +578,15 @@ zero_downtime_deploy() {
         
         echo '[5/5] Cutting over to new version on port '\$CURRENT_PORT'...'
         # The v2 container validated the image on the staging port; the real
-        # cutover re-runs it on the original port (brief stop/start gap —
-        # a rename alone would leave the app listening on the wrong port)
-        ssh root@$IP \"docker rm -f $APP-v2 && docker stop $APP && docker rm $APP && docker run -d --name $APP --restart unless-stopped -p \$CURRENT_PORT:\$CONTAINER_PORT $APP:latest\"
+        # cutover re-runs it on the original port. Not zero-downtime: there
+        # is a stop/start gap of a few seconds (a rename alone would leave
+        # the app listening on the wrong port)
+        ssh root@$IP \"docker rm -f $APP-v2 && docker stop $APP && docker rm $APP && docker run -d --name $APP --restart unless-stopped -p 127.0.0.1:\$CURRENT_PORT:\$CONTAINER_PORT $APP:latest\"
         echo '✓ Swapped'
         echo ''
         
         echo '════════════════════════════════════════'
-        echo '  ✓ ZERO-DOWNTIME DEPLOY COMPLETE'
+        echo '  ✓ REDEPLOY COMPLETE'
         echo '════════════════════════════════════════'
         echo ''
         read -p 'Press Enter...'
@@ -582,7 +619,8 @@ one_click_to_server() {
     TEMPLATES=$(ls "$TEMPLATES_DIR"/*.json 2>/dev/null | xargs -I{} basename {} .json)
     
     if [ -z "$TEMPLATES" ]; then
-        notify-send "T-Link" "No templates found"
+        # None ship with Tebian: say how to add one rather than a dead end
+        notify-send "T-Link" "No app templates yet. Add one JSON file per app to ~/.config/tebian/templates with \"image\", \"ports\", \"volumes\" and \"description\"."
         return
     fi
     
@@ -617,8 +655,10 @@ Available Apps:"
     
     # Build docker run command
     PORT_ARGS=""
+    # Loopback only, as for Deploy App (Docker bypasses the firewall)
     for p in $PORTS; do
-        PORT_ARGS="$PORT_ARGS -p $p"
+        [[ "$p" == *:* ]] || p="$p:$p"
+        PORT_ARGS="$PORT_ARGS -p 127.0.0.1:$p"
     done
     
     VOL_ARGS=""
@@ -649,7 +689,8 @@ Available Apps:"
             echo ''
             echo '$APP is running!'
             echo ''
-            echo 'Access: http://$IP:${PORTS%%:*}'
+            echo 'Running on the server at localhost:${PORTS%%:*} (not exposed).'
+            echo 'Publish it with HTTPS: server > Setup SSL (Caddy).'
         else
             echo '✗ Failed to start'
             echo 'Check logs: ssh root@$IP docker logs $APP'
@@ -690,8 +731,11 @@ EOF'
         
         echo 'Starting Caddy...'
         ssh root@$IP 'docker stop caddy 2>/dev/null; docker rm caddy 2>/dev/null'
+        # Host network: in its own network namespace, localhost inside Caddy is
+        # Caddy itself and every request got a 502. It listens on 80/443
+        # directly, which the firewall allows.
         ssh root@$IP 'docker run -d --name caddy --restart unless-stopped \
-            -p 80:80 -p 443:443 \
+            --network host \
             -v /opt/config/caddy:/etc/caddy \
             -v /opt/data/caddy:/data \
             caddy:2'

@@ -4,6 +4,25 @@
 
 mkdir -p "$HOME/.config/gtklock"
 
+# Colours from the theme in use (the header line tebian-theme copies into
+# ~/.config/sway/theme names it, e.g. "# Rose Pine Theme"), so running this
+# again doesn't reset the lock screen to one fixed palette. Glass, the
+# default theme, when it can't be found. The accent is picked as
+# tebian-theme picks it, so a later theme switch lands on the same result.
+TEXT=#cdd6f4 ACCENT=#89b4fa RED=#f38ba8 YELLOW=#f9e2af
+theme=$(sed -n '1s/^# \(.*\) Theme.*/\1/p' "$HOME/.config/sway/theme" 2>/dev/null |
+    tr '[:upper:] ' '[:lower:]-')
+theme_conf="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/${theme:-glass}/theme.conf"
+if [ -f "$theme_conf" ]; then
+    pick() { grep -m1 -E "^($1)=#[0-9A-Fa-f]{6}\$" "$theme_conf" | cut -d= -f2; }
+    TEXT=$(pick TEXT || true); TEXT=${TEXT:-#cdd6f4}
+    ACCENT=$(pick 'FROST|PURPLE|CYAN|BLUE' || true); ACCENT=${ACCENT:-$TEXT}
+    RED=$(pick RED || true); RED=${RED:-#f38ba8}
+    YELLOW=$(pick YELLOW || true); YELLOW=${YELLOW:-#f9e2af}
+fi
+# The input border is the accent, see-through: CSS wants it as r, g, b
+ACCENT_RGB=$(printf '%d, %d, %d' "0x${ACCENT:1:2}" "0x${ACCENT:3:2}" "0x${ACCENT:5:2}")
+
 # The userinfo module (avatar + name under the clock) ships as a separate
 # package and gtklock's modules= wants the .so PATH, not the package name.
 # Locate it, installing the package if it isn't present.
@@ -28,7 +47,7 @@ image-size=128
 round-image=true
 vertical-layout=true
 font-size=24
-text-color=#eceff4
+text-color=$TEXT
 EOF
 
 # CSS Style
@@ -44,7 +63,7 @@ window {
     font-family: "JetBrainsMono Nerd Font";
     font-size: 120px;
     font-weight: bold;
-    color: #eceff4;
+    color: $TEXT;
     margin-bottom: 20px;
 }
 
@@ -52,7 +71,7 @@ window {
     font-family: "JetBrainsMono Nerd Font";
     font-size: 32px;
     font-weight: bold;
-    color: #d8dee9;
+    color: $TEXT;
     margin-bottom: 40px;
 }
 
@@ -69,11 +88,11 @@ window {
 /* Transparent rounded password input field */
 #input-field {
     background-color: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(136, 192, 208, 0.3);
+    border: 1px solid rgba($ACCENT_RGB, 0.3);
     border-radius: 24px;
     padding: 12px 20px;
-    color: #eceff4;
-    caret-color: #88c0d0;
+    color: $TEXT;
+    caret-color: $ACCENT;
     font-family: "JetBrainsMono Nerd Font";
     font-size: 18px;
     box-shadow: none;
@@ -81,7 +100,7 @@ window {
 
 #input-field:focus {
     background-color: rgba(255, 255, 255, 0.12);
-    border-color: rgba(136, 192, 208, 0.6);
+    border-color: rgba($ACCENT_RGB, 0.6);
     box-shadow: none;
 }
 
@@ -101,12 +120,12 @@ window {
 
 /* Error/warning messages */
 #error-label {
-    color: #bf616a;
+    color: $RED;
     font-size: 14px;
 }
 
 #warning-label {
-    color: #ebcb8b;
+    color: $YELLOW;
     font-size: 14px;
 }
 
@@ -120,7 +139,7 @@ window {
     font-family: "JetBrainsMono Nerd Font";
     font-size: 24px;
     font-weight: bold;
-    color: #eceff4;
+    color: $TEXT;
     margin-bottom: 20px;
 }
 EOF

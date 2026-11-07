@@ -94,11 +94,19 @@ mkdir -p "$HOME/.config/environment.d"
 mkdir -p "$HOME/.config/tebian"
 chmod 700 "$HOME/.config/tebian"
 
-# Resume detection: if previous run crashed mid-install
+# Resume detection: a previous Desktop setup didn't finish. Asked, not
+# assumed: resuming blindly at every login trapped anyone whose setup can't
+# finish (no network, wrong password, window closed) with no way back to
+# Base. Escape counts towards the same three dismissals as the first menu.
 if [ -f "$PROGRESS_FILE" ]; then
-    PREV_CHOICE=$(cat "$PROGRESS_FILE" 2>/dev/null)
-    log "Resuming interrupted onboarding (was: $PREV_CHOICE)"
-    CHOICE="$PREV_CHOICE"
+    log "Desktop setup was interrupted, asking whether to resume"
+    RESUME=$(printf '%s\n' "Resume Desktop setup" "Switch to Base (Minimal)" |
+        tfuzzel -d -p "  Setup was interrupted | " --lines=2 --width 45)
+    case "$RESUME" in
+        *Resume*) CHOICE="Desktop (Familiar)" ;;
+        *Base*)   CHOICE="Base (Minimal)" ;;
+        *)        CHOICE="" ;;
+    esac
 else
     log "Starting onboarding"
     CHOICE=$(echo -e "Base (Minimal)\nDesktop (Familiar)" | tfuzzel -d -p "  Welcome to Tebian | " --lines=2)
@@ -127,6 +135,11 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
     fi
 
     $TERM_CMD bash -c '
+        # This script runs under umask 077, and sudo keeps the stricter of
+        # its own and ours: files it writes under /etc (the backports list)
+        # would be root-only, and apt run as the user then fails on them
+        umask 022
+
         # Source shared functions
         source "$HOME/.local/bin/tebian-common" 2>/dev/null
 
@@ -141,8 +154,18 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         sudo -v || { echo "Authentication failed. Exiting."; read -p "Press Enter..."; exit 1; }
         echo ""
 
-        # Check network connectivity
-        if ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+        # Check network connectivity without contacting a third party:
+        # NetworkManager already knows. Its probe (if the user enabled one)
+        # decides "limited" or "portal"; without one, "full" means a default
+        # route. If it has no answer, a default route is the best guess, and
+        # apt reports anything else below.
+        NET_STATE=$(LC_ALL=C nmcli -t networking connectivity 2>/dev/null || true)
+        case "$NET_STATE" in
+            full) NET_OK=1 ;;
+            none|limited|portal) NET_OK="" ;;
+            *) NET_OK=$(ip route show default 2>/dev/null; ip -6 route show default 2>/dev/null) ;;
+        esac
+        if [ -z "$NET_OK" ]; then
             echo "⚠️  No network connection detected."
             echo "   Connect to WiFi first (Super+D > WiFi)."
             read -p "Press Enter to exit..."
@@ -189,6 +212,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             thunar thunar-archive-plugin file-roller
             papirus-icon-theme
             btop
+            jq
             zram-tools
             waybar upower
             qt5-gtk-platformtheme qt6-gtk-platformtheme
@@ -335,8 +359,6 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         setup_floating_mode
         idempotent_append "default_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
         idempotent_append "default_floating_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
-        idempotent_append "# tebian-floating-mode" "$HOME/.config/sway/config.user"
-        idempotent_append "focus_follows_mouse yes" "$HOME/.config/sway/config.user"
         echo "  Floating mode with title bars enabled"
 
         # Modern bar (Waybar: hover buttons, drop-down menus). Base mode
@@ -356,11 +378,12 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             fi
         fi
         
-        # Apply default theme (Nord) so kitty/fuzzel/mako have sane configs
+        # Apply the default theme (Glass, as the ISO installer does) so
+        # kitty/fuzzel/mako have sane configs
         if command -v tebian-theme &>/dev/null; then
             echo "  Applying default theme..."
-            tebian-theme nord
-            echo "  Default theme (Nord) applied"
+            tebian-theme glass
+            echo "  Default theme (Glass) applied"
         else
             # Fallback: copy base kitty.conf from repo
             mkdir -p "$HOME/.config/kitty"
@@ -478,6 +501,7 @@ elif [ -z "$CHOICE" ]; then
     if [ "$DISMISS_COUNT" -ge 3 ]; then
         log "User dismissed 3 times, marking as base mode"
         echo "base" > "$ONBOARD_FILE"
+        rm -f "$PROGRESS_FILE"
     else
         log "User dismissed ($DISMISS_COUNT/3), will ask again next boot"
     fi

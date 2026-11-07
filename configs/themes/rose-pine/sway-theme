@@ -6,7 +6,7 @@ set $text      #E0DEF4
 set $surface0  #1F1D2E
 set $surface1  #26233A
 set $overlay0  #403D52
-set $accent    #EB6F92
+set $accent    #EBBCBA
 set $pink      #EB6F92
 set $muted     #908CAA
 set $purple    #C4A7E7

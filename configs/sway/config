@@ -64,6 +64,15 @@ exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null && tebian_bt_agent_s
 bindswitch --locked lid:on exec tebian-awake lid-closed
 bindswitch --locked lid:off exec tebian-awake lid-opened
 
+# Power key: opens the power menu. logind's default is to power off at
+# once, which would run alongside the menu and lose unsaved work, so this
+# session holds an inhibitor for it. The inhibitor lives exactly as long as
+# sway (swaymsg waits for sway's shutdown event, or for its socket to
+# close), so the login screen and a text console keep the normal key.
+# Holding the key down still forces power-off in firmware.
+exec systemd-inhibit --what=handle-power-key --who=Tebian --why="The power key opens the power menu" --mode=block swaymsg -t subscribe '["shutdown"]'
+bindsym XF86PowerOff exec tebian-settings --power
+
 # Keybindings
 bindsym $mod+Return exec $term
 bindsym $mod+Shift+q kill

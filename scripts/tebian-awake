@@ -5,9 +5,10 @@
 # Settings > Power:
 #
 #   tebian-awake idle on|off|toggle   keep the screen on: no auto-lock, no
-#                                     screen-off (pauses swayidle)
+#                                     screen-off (suspend still locks)
 #   tebian-awake lid on|off|toggle    keep running with the lid closed
-#                                     (laptops; the screen still goes off)
+#                                     (laptops; the screen still goes off
+#                                     and locks)
 #   tebian-awake off                  both off
 #   tebian-awake status               "idle<TAB>1|0", "lid<TAB>1|0",
 #                                     "laptop<TAB>1|0" lines
@@ -17,7 +18,8 @@
 # forgotten for days is how batteries get drained and screens left unlocked.
 #
 # idle: a flag in the runtime dir (gone at logout) that tebian_idle_start
-# honours, so Settings > Lock changes don't restart swayidle behind it.
+# honours, so Settings > Lock changes don't bring the timeouts back behind
+# it. swayidle itself keeps running: it is what locks before suspend.
 # lid: a logind inhibitor lock on the lid switch, held by the user service
 # tebian-awake-lid (`systemctl --user status tebian-awake-lid` shows it).
 # Taking it needs no password for the active session.
@@ -47,12 +49,12 @@ lid_on() { systemctl --user -q is-active "$LID_UNIT" 2>/dev/null; }
 set_idle() {
     if [ "$1" = on ]; then
         mkdir -p "$FLAG_DIR" && touch "$IDLE_FLAG"
-        pkill -x swayidle 2>/dev/null
     else
         rm -f "$IDLE_FLAG"
-        # Back to whatever Settings > Lock says (which may be "off")
-        common && tebian_idle_start
     fi
+    # Restarted either way: with the flag, swayidle drops only its timeouts
+    # (lock-before-suspend stays); without, back to what Settings > Lock says
+    common && tebian_idle_start
     refresh_bar
 }
 
@@ -76,6 +78,15 @@ set_lid() {
 internal_outputs() {
     swaymsg -t get_outputs 2>/dev/null | grep -o '"name": *"\(eDP\|LVDS\|DSI\)[^"]*"' |
         sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+# Every other screen that is switched on
+external_outputs() {
+    swaymsg -t get_outputs 2>/dev/null | python3 -c '
+import json, re, sys
+for o in json.load(sys.stdin):
+    if o.get("active") and not re.match(r"(eDP|LVDS|DSI)", o["name"]):
+        print(o["name"])' 2>/dev/null
 }
 
 toggle_of() { if "$1"; then echo off; else echo on; fi; }
@@ -102,9 +113,15 @@ case "${1:-status}" in
         printf 'lid\t%d\n' "$(lid_on && echo 1 || echo 0)"
         printf 'laptop\t%d\n' "$(is_laptop && echo 1 || echo 0)" ;;
     # With the lid shut and the machine kept running, the panel would stay lit
-    # inside it; only the internal one goes off, external screens stay
+    # inside it; only the internal one goes off, external screens stay.
+    # With no external screen it locks too: nothing suspends, so swayidle's
+    # before-sleep never fires, and whoever opens the lid next must not get
+    # the desktop. Docked (lid shut, working on a monitor) it doesn't.
     lid-closed)
         lid_on || exit 0
+        if [ -z "$(external_outputs)" ] && ! pgrep -x gtklock >/dev/null; then
+            gtklock -d
+        fi
         for o in $(internal_outputs); do swaymsg "output $o power off" >/dev/null; done ;;
     lid-opened)
         for o in $(internal_outputs); do swaymsg "output $o power on" >/dev/null; done ;;

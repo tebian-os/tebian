@@ -17,8 +17,8 @@ What it answers, and how:
   a keyboard shows nothing, needs a code     notification: type this code
   both sides show a code                     fuzzel: do the codes match?
   an old device wants a PIN                  fuzzel: type the PIN
-  a device you didn't pick wants to pair,    fuzzel: allow?
-  or an unpaired one wants to connect
+  a device you didn't pick wants to pair,    fuzzel: allow? ("Don't allow"
+  or an unpaired one wants to connect          is preselected)
 Escape, closing the prompt, or no answer counts as no: nothing pairs
 without someone at the keyboard saying yes.
 """
@@ -135,11 +135,15 @@ def ask(args, stdin_text, answer, reply, error):
     threading.Thread(target=worker, daemon=True).start()
 
 
-def ask_yes_no(question, yes, no, reply, error):
+def ask_yes_no(question, yes, no, reply, error, unasked=False):
+    """unasked: a request nobody here started. fuzzel takes the keyboard and
+    preselects the first line, so a stranger's request arriving mid-typing
+    must not be one Enter away from yes: "no" goes first then."""
     def answer(text):
         if text != yes:
             raise Rejected("Declined")
-    ask(["--prompt", question + "  ", "--lines", "2"], f"{yes}\n{no}\n",
+    lines = f"{no}\n{yes}\n" if unasked else f"{yes}\n{no}\n"
+    ask(["--prompt", question + "  ", "--lines", "2"], lines,
         answer, reply, error)
 
 
@@ -168,7 +172,7 @@ class Agent(dbus.service.Object):
         name = device_name(device)
         log(f"{name} asks to pair")
         ask_yes_no(f"{name} wants to pair with this computer.",
-                   f"Allow {name}", "Don't allow", reply, error)
+                   f"Allow {name}", "Don't allow", reply, error, unasked=True)
 
     @dbus.service.method("org.bluez.Agent1", in_signature="os",
                          out_signature="", async_callbacks=("reply", "error"))
@@ -182,7 +186,7 @@ class Agent(dbus.service.Object):
             return
         log(f"{name} asks to use service {uuid}")
         ask_yes_no(f"{name} wants to connect.", f"Allow {name}",
-                   "Don't allow", reply, error)
+                   "Don't allow", reply, error, unasked=True)
 
     @dbus.service.method("org.bluez.Agent1", in_signature="o",
                          out_signature="s", async_callbacks=("reply", "error"))

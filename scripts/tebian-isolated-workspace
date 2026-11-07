@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+# The system libvirt, where the 'default' NAT network lives and bridges can
+# be made. Run as a user, virsh otherwise talks to qemu:///session, which has
+# neither, and setup died halfway at net-define.
+export LIBVIRT_DEFAULT_URI=qemu:///system
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -37,6 +42,26 @@ ensure_kvm() {
     if ! command -v virt-install &>/dev/null; then
         sudo apt install -y virtinst
     fi
+    # A new group only reaches processes started after the next login; until
+    # then every virsh call is refused. id -Gn (no user) is this process.
+    local groups; groups=" $(id -Gn) "
+    if [ "$(id -u)" -ne 0 ] && [[ "$groups" != *" libvirt "* ]]; then
+        log_warn "You were just added to the 'libvirt' group."
+        log_warn "Log out and back in, then run this again."
+        exit 1
+    fi
+}
+
+# The VMs run as libvirt-qemu, which can't reach images under a 0700 home.
+# Grant it search (x, not read) on each of our own directories down to the
+# images, as virt-manager offers to. Needs setfacl (package acl).
+grant_qemu_search() {
+    local d="$1"
+    command -v setfacl >/dev/null || sudo apt install -y acl
+    while [ "$d" != / ] && [ -O "$d" ]; do
+        setfacl -m u:libvirt-qemu:x "$d"
+        d=$(dirname "$d")
+    done
 }
 
 # The gateway's external NIC rides libvirt's built-in 'default' NAT network for
@@ -225,6 +250,8 @@ setup_workspace() {
             return 1
         }
     fi
+
+    grant_qemu_search "$WORKSPACE_DIR"
 
     # Create network and disk images
     ensure_default_network

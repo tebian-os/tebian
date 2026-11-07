@@ -61,6 +61,8 @@ edit_pins() {
         local PICK
         PICK=$(echo -e "󰌍 Back\n$SORTED" | tfuzzel -d -p " 📌 Edit Menu | " --width 40)
 
+        # Escape closes; only Back returns to the drawer
+        [ -z "$PICK" ] && exit 0
         if is_back "$PICK"; then
             # Re-launch the drawer when leaving edit mode
             exec tebian-drawer
@@ -128,6 +130,8 @@ MENU+="󰌍 Back"
 
 CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 📂 Apps | " --width 40)
 
+# Escape closes the drawer; is_back counts it as Back, which opened Mod+D
+[ -z "$CHOICE" ] && exit 0
 # Exact Back match only — apps whose names contain "Back" (e.g. "Backups") must still launch
 if is_back "$CHOICE"; then
     tebian-menu &
