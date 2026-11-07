@@ -4,7 +4,9 @@
 
 software_hub() {
     while true; do
-    SH_OPTS="📦 Package Browser
+    SH_OPTS="󰖟 Web Browser
+📦 Package Browser
+󰚩 AI Tools
 󰊴 Software & Gaming
 󰆍 Terminal
 󰑓 Install Essentials
@@ -15,8 +17,12 @@ software_hub() {
 
     if is_back "$SH_CHOICE"; then return; fi
 
-    if [[ "$SH_CHOICE" =~ "Package Browser" ]]; then
+    if [[ "$SH_CHOICE" =~ "Web Browser" ]]; then
+        browser_menu
+    elif [[ "$SH_CHOICE" =~ "Package Browser" ]]; then
         package_browser
+    elif [[ "$SH_CHOICE" =~ "AI Tools" ]]; then
+        ai_tools_menu
     elif [[ "$SH_CHOICE" =~ "Software & Gaming" ]]; then
         software_menu
     elif [[ "$SH_CHOICE" =~ "Terminal" ]]; then
@@ -25,6 +31,112 @@ software_hub() {
         essentials_menu
     elif [[ "$SH_CHOICE" =~ "Desktop Environments" ]]; then
         de_menu
+    fi
+    done
+}
+
+# The install logic lives in tebian-browser, shared with onboarding
+browser_menu() {
+    while true; do
+    local BR_OPTS="" BR_ID BR_CHOICE BR_ACT BR_NAME
+    for BR_ID in $(tebian-browser list); do
+        if tebian-browser installed "$BR_ID"; then
+            BR_OPTS+="🟢 $(tebian-browser label "$BR_ID") (Installed)\n"
+        else
+            BR_OPTS+="⚪ $(tebian-browser label "$BR_ID")\n"
+        fi
+    done
+
+    BR_CHOICE=$(echo -e "${BR_OPTS}󰌍 Back" | tfuzzel -d -p " 󰖟 Web Browser | " --width 78)
+
+    if is_back "$BR_CHOICE"; then return; fi
+
+    BR_ID=$(tebian-browser id-of "$BR_CHOICE") || continue
+    BR_NAME=$(tebian-browser name "$BR_ID")
+
+    if tebian-browser installed "$BR_ID"; then
+        BR_ACT=$(echo -e "󰖟 Launch $BR_NAME\n󰆴 Remove $BR_NAME\n󰌍 Back" | tfuzzel -d -p " $BR_NAME | ")
+        if is_back "$BR_ACT"; then continue; fi
+        if [[ "$BR_ACT" =~ "Launch" ]]; then
+            tebian-browser launch "$BR_ID"
+            return
+        elif [[ "$BR_ACT" =~ "Remove" ]]; then
+            $TERM_CMD bash -c "tebian-browser remove '$BR_ID'; read -p 'Press Enter to close...'"
+            tnotify "Web Browser" "$BR_NAME removed"
+        fi
+    else
+        $TERM_CMD bash -c "tebian-browser install '$BR_ID'; read -p 'Press Enter to close...'"
+        if tebian-browser installed "$BR_ID"; then
+            tnotify "Web Browser" "$BR_NAME installed"
+        fi
+    fi
+    done
+}
+
+# Sources and install logic live in tebian-ai-tools. Not on Mod+D or in
+# onboarding, unlike a browser: not everyone wants these.
+ai_tools_menu() {
+    local AI_IDS
+    AI_IDS=$(tebian-ai-tools list)
+    if [ -z "$AI_IDS" ]; then
+        tnotify "AI Tools" "These tools only publish 64-bit builds"
+        return
+    fi
+
+    while true; do
+    local AI_OPTS="" AI_ID AI_CHOICE AI_ACT AI_NAME AI_GROUP AI_LAST="" AI_ACTIONS
+    for AI_ID in $AI_IDS; do
+        AI_GROUP=$(tebian-ai-tools group "$AI_ID")
+        if [ "$AI_GROUP" != "$AI_LAST" ]; then
+            if [ "$AI_GROUP" = app ]; then
+                AI_OPTS+="── Desktop Apps\n"
+            else
+                AI_OPTS+="── Terminal Tools\n"
+            fi
+            AI_LAST=$AI_GROUP
+        fi
+        if tebian-ai-tools installed "$AI_ID"; then
+            AI_OPTS+="🟢 $(tebian-ai-tools label "$AI_ID") (Installed)\n"
+        else
+            AI_OPTS+="⚪ $(tebian-ai-tools label "$AI_ID")\n"
+        fi
+    done
+
+    AI_CHOICE=$(echo -e "${AI_OPTS}󰌍 Back" | tfuzzel -d -p " 󰚩 AI Tools | " --width 70)
+
+    if is_back "$AI_CHOICE"; then return; fi
+
+    # The group headers match no tool, so picking one just redraws
+    AI_ID=$(tebian-ai-tools id-of "$AI_CHOICE") || continue
+    AI_NAME=$(tebian-ai-tools name "$AI_ID")
+
+    if ! tebian-ai-tools installed "$AI_ID"; then
+        # In a terminal because it stops to show the source and ask first
+        $TERM_CMD bash -c "tebian-ai-tools install '$AI_ID'; read -p 'Press Enter to close...'"
+        if tebian-ai-tools installed "$AI_ID"; then
+            tnotify "AI Tools" "$AI_NAME installed"
+        fi
+        continue
+    fi
+
+    AI_ACTIONS="󰐊 Open $AI_NAME\n󰚰 Update $AI_NAME"
+    if tebian-ai-tools can-remove "$AI_ID"; then
+        AI_ACTIONS+="\n󰆴 Remove $AI_NAME"
+    fi
+    AI_ACT=$(echo -e "$AI_ACTIONS\n󰌍 Back" | tfuzzel -d -p " $AI_NAME | ")
+    if is_back "$AI_ACT"; then continue; fi
+
+    if [[ "$AI_ACT" =~ "Open" ]]; then
+        if [ "$(tebian-ai-tools group "$AI_ID")" = app ]; then
+            tebian-ai-tools run "$AI_ID"
+        else
+            $TERM_CMD tebian-ai-tools run "$AI_ID" &
+        fi
+        return
+    elif [[ "$AI_ACT" =~ "Update" ]]; then
+        $TERM_CMD bash -c "tebian-ai-tools update '$AI_ID'; read -p 'Press Enter to close...'"
+    elif [[ "$AI_ACT" =~ "Remove" ]]; then
+        $TERM_CMD bash -c "tebian-ai-tools remove '$AI_ID'; read -p 'Press Enter to close...'"
     fi
     done
 }

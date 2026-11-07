@@ -1,0 +1,389 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN BROWSER
+# One install path for the browsers Tebian offers, shared by onboarding and
+# Settings > More > Software > Web Browser, so the two cannot drift apart.
+#
+#   tebian-browser list             ids offered on this architecture
+#   tebian-browser name <id>        short name
+#   tebian-browser label <id>       menu text
+#   tebian-browser id-of <text>     id from a menu selection
+#   tebian-browser pick             ask; prints the id (empty when skipped)
+#   tebian-browser installed <id>   exit 0 if installed
+#   tebian-browser any-installed    exit 0 if any web browser at all is present
+#   tebian-browser install <id>     run in a terminal: may ask for a password
+#   tebian-browser remove <id>      keeps the user's profile
+#   tebian-browser launch <id>
+# ==============================================================================
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+# Onboarding runs under umask 077 and sudo keeps the stricter of the two masks.
+# Root-owned files created that way are unreadable to anyone else: apt's sandbox
+# user could not read the repo key, and Flatpak's system repo would break too.
+umask 022
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+else
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+APPS_DIR="$HOME/.local/share/applications"
+FIREJAIL_MARK="X-Tebian-Firejail=true"
+
+ZEN_ID="app.zen_browser.zen"
+FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
+
+HELIUM_LIST="/etc/apt/sources.list.d/helium.list"
+HELIUM_KEYRING="/usr/share/keyrings/helium.gpg"
+HELIUM_KEY_URL="https://raw.githubusercontent.com/imputnet/helium-linux/main/pubkey.asc"
+# Published in Helium's README. See tebian_apt_repo_add for why it is pinned.
+HELIUM_KEY_FPR="BE677C1989D35EAB2C5F26C9351601AD01D6378E"
+
+arch() { dpkg --print-architecture 2>/dev/null || echo unknown; }
+
+browser_list() {
+    # Debian's Chromium is not offered: it never fetches Widevine, and Helium
+    # fills the same Chrome-based slot. Helium and Zen publish 64-bit builds
+    # only, so 32-bit Pi OS gets the one browser left that runs there.
+    case "$(arch)" in
+        amd64|arm64) echo "helium zen" ;;
+        *) echo "firefox-esr" ;;
+    esac
+}
+
+known_id() {
+    case "${1:-}" in
+        helium|zen|firefox-esr) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+require_id() {
+    if ! known_id "${1:-}"; then
+        log_error "Unknown browser: ${1:-<none>} (expected: helium, zen, firefox-esr)"
+        exit 2
+    fi
+}
+
+browser_name() {
+    case "$1" in
+        helium) echo "Helium" ;;
+        zen) echo "Zen" ;;
+        firefox-esr) echo "Firefox ESR" ;;
+    esac
+}
+
+label() {
+    # id_of matches on the name, so a description must never mention another
+    # browser's full name ("Firefox-based" is fine, "Firefox ESR" is not).
+    #
+    # The streaming notes come from running a real Widevine license exchange on
+    # amd64 (trixie, Nov 2026). Helium logs "Widevine enabled but no library
+    # found" and never fetches the module. Zen fetches it unprompted. Firefox
+    # ESR ships with DRM off and fetches it once enabled. Nothing has been
+    # tested on ARM, so nothing is promised there.
+    local zen_drm="streaming works" ff_drm="enable DRM to stream"
+    if [ "$(arch)" != amd64 ]; then
+        zen_drm="streaming not guaranteed"
+        ff_drm="streaming not guaranteed"
+    fi
+    case "$1" in
+        helium)      echo "Helium (Chrome-based) - private, fast; no streaming DRM" ;;
+        zen)         echo "Zen (Firefox-based) - Flatpak sandbox; $zen_drm" ;;
+        firefox-esr) echo "Firefox ESR - Debian-maintained; $ff_drm" ;;
+    esac
+}
+
+id_of() {
+    case "$1" in
+        *Helium*)      echo helium ;;
+        *Zen*)         echo zen ;;
+        *"Firefox ESR"*) echo firefox-esr ;;
+        *) return 1 ;;
+    esac
+}
+
+deb_installed() {
+    [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]
+}
+
+zen_scope() {
+    # Prints --system or --user; fails when Zen is not installed at all.
+    command -v flatpak &>/dev/null || return 1
+    local scope
+    for scope in --system --user; do
+        if flatpak info "$scope" "$ZEN_ID" &>/dev/null; then
+            echo "$scope"
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_installed() {
+    case "$1" in
+        helium) deb_installed helium-bin ;;
+        zen) zen_scope >/dev/null ;;
+        *) deb_installed "$1" ;;
+    esac
+}
+
+any_installed() {
+    # Asks the desktop database rather than a fixed list, so Chrome, Brave or a
+    # Flatpak the user added themselves count as "has a browser" too.
+    local dir
+    for dir in "$HOME/.local/share/applications" \
+               "$HOME/.local/share/flatpak/exports/share/applications" \
+               /usr/share/applications \
+               /var/lib/flatpak/exports/share/applications; do
+        [ -d "$dir" ] || continue
+        if grep -qsE '^Categories=.*WebBrowser' "$dir"/*.desktop; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+desktop_file() {
+    case "$1" in
+        zen) echo "$ZEN_ID.desktop" ;;
+        *) echo "$1.desktop" ;;
+    esac
+}
+
+launch_cmd() {
+    case "$1" in
+        zen) echo "flatpak run $ZEN_ID" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+pin() {
+    tebian_pin_app "$(desktop_file "$1")"
+}
+
+firejail_active() {
+    # Links are the same signal Settings > Security reports ON/OFF from.
+    local link
+    for link in /usr/local/bin/*; do
+        [ -L "$link" ] && readlink "$link" | grep -q firejail && return 0
+    done
+    return 1
+}
+
+# Firejail only links apps that exist when it is switched on, so without this a
+# browser installed later would silently run outside the sandbox the Security
+# menu says is on. The .desktop override is needed as well: launchers use the
+# absolute Exec= path, which bypasses the /usr/local/bin link.
+firejail_add() {
+    local bin="$1" system="/usr/share/applications/$1.desktop" override="$APPS_DIR/$1.desktop"
+    sudo ln -sf /usr/bin/firejail "/usr/local/bin/$bin" || return 1
+    if [ -f "$system" ]; then
+        # A user's own override wins; leave it alone
+        if [ ! -f "$override" ] || grep -qsxF "$FIREJAIL_MARK" "$override"; then
+            mkdir -p "$APPS_DIR"
+            sed -E -e 's|^Exec=|Exec=firejail |' \
+                   -e "0,/^\[Desktop Entry\]/s||[Desktop Entry]\n$FIREJAIL_MARK|" \
+                "$system" > "$override" || return 1
+        fi
+    fi
+    echo "  Firejail is on: $bin runs in the sandbox too."
+}
+
+# Left behind, the link makes the command fail and the override keeps a dead
+# entry in the app list. Only our own override goes, never the user's.
+firejail_remove() {
+    local bin="$1" override="$APPS_DIR/$1.desktop"
+    if [ -L "/usr/local/bin/$bin" ] && readlink "/usr/local/bin/$bin" | grep -q firejail; then
+        sudo rm -f "/usr/local/bin/$bin"
+    fi
+    if grep -qsxF "$FIREJAIL_MARK" "$override"; then
+        rm -f "$override"
+    fi
+    return 0
+}
+
+helium_repo_present() {
+    grep -rqs "pkg.helium.computer" /etc/apt/sources.list /etc/apt/sources.list.d/
+}
+
+helium_add_repo() {
+    tebian_apt_repo_add "$HELIUM_KEY_URL" "$HELIUM_KEY_FPR" "$HELIUM_KEYRING" "$HELIUM_LIST" \
+        "deb [arch=amd64,arm64 signed-by=$HELIUM_KEYRING] https://pkg.helium.computer/deb stable main"
+}
+
+helium_drop_repo() {
+    sudo rm -f "$HELIUM_LIST" "$HELIUM_KEYRING"
+}
+
+install_helium() {
+    local added_repo=false
+    # gnupg is not in a minimal Debian; ca-certificates is what apt needs to
+    # trust an https repo
+    sudo apt-get update || log_warn "Package lists could not all be refreshed; trying anyway."
+    sudo apt-get install -y gnupg curl ca-certificates || return 1
+    if ! helium_repo_present; then
+        helium_add_repo || return 1
+        added_repo=true
+    fi
+    if ! { sudo apt-get update && sudo apt-get install -y helium-bin; }; then
+        # A repo that does not deliver should not sit in apt forever, warning
+        # on every update. A repo the user added themselves stays.
+        if [ "$added_repo" = true ]; then
+            helium_drop_repo
+            sudo apt-get update >/dev/null 2>&1 || true
+        fi
+        return 1
+    fi
+}
+
+install_zen() {
+    sudo apt-get update || log_warn "Package lists could not all be refreshed; trying anyway."
+    # The portal backend gives a sandboxed app its open/save dialogs; the wlr
+    # portal Tebian ships for screen sharing does not provide those.
+    sudo apt-get install -y flatpak xdg-desktop-portal-gtk || return 1
+    sudo flatpak remote-add --if-not-exists flathub "$FLATHUB_URL" || return 1
+    sudo flatpak install -y --noninteractive flathub "$ZEN_ID" || return 1
+}
+
+install_deb() {
+    sudo apt-get update || log_warn "Package lists could not all be refreshed; trying anyway."
+    # Recommends stay on: Firefox gets its video codecs (libavcodec) that way
+    sudo apt-get install -y "$1" || return 1
+}
+
+do_install() {
+    local id="$1" name
+    name=$(browser_name "$id")
+
+    case "$id:$(arch)" in
+        helium:amd64|helium:arm64|zen:amd64|zen:arm64|firefox-esr:*) ;;
+        *)
+            log_error "$name has no build for this system ($(arch))."
+            return 1
+            ;;
+    esac
+
+    if is_installed "$id"; then
+        echo "$name is already installed."
+        pin "$id"
+        return 0
+    fi
+
+    echo "========================================="
+    echo "  Installing $name"
+    echo "========================================="
+    echo ""
+
+    local rc=0
+    case "$id" in
+        helium) install_helium || rc=$? ;;
+        zen) install_zen || rc=$? ;;
+        *) install_deb "$id" || rc=$? ;;
+    esac
+    if [ "$rc" -ne 0 ]; then
+        log_error "$name could not be installed."
+        # Helium and Zen depend on a source outside Debian being reachable.
+        # Nobody should be left with no browser, and so no way to look up why.
+        if [ "$id" != firefox-esr ]; then
+            echo "  To get online now, Debian's own browser: sudo apt install firefox-esr"
+        fi
+        return 1
+    fi
+
+    if ! is_installed "$id"; then
+        log_error "$name did not end up installed; see the output above."
+        return 1
+    fi
+
+    pin "$id"
+
+    echo ""
+    case "$id" in
+        firefox-esr)
+            if firejail_active; then
+                firejail_add "$id" || log_warn "Could not add $name to the Firejail sandbox."
+            fi
+            ;;
+        helium)
+            firejail_active && echo "  Note: Firejail does not cover Helium. It uses its own Chromium sandbox."
+            ;;
+    esac
+    echo "$name is installed. Find it in Mod+D."
+}
+
+do_remove() {
+    local id="$1" name scope
+    name=$(browser_name "$id")
+
+    if ! is_installed "$id"; then
+        echo "$name is not installed."
+        return 0
+    fi
+
+    case "$id" in
+        helium)
+            sudo apt-get remove -y --autoremove helium-bin || return 1
+            helium_drop_repo
+            ;;
+        zen)
+            scope=$(zen_scope)
+            if [ "$scope" = --user ]; then
+                flatpak uninstall -y --noninteractive --user "$ZEN_ID" || return 1
+                flatpak uninstall -y --noninteractive --user --unused || true
+            else
+                sudo flatpak uninstall -y --noninteractive "$ZEN_ID" || return 1
+                sudo flatpak uninstall -y --noninteractive --unused || true
+            fi
+            ;;
+        *)
+            firejail_remove "$id"
+            sudo apt-get remove -y --autoremove "$id" || return 1
+            ;;
+    esac
+    echo "$name removed. Your profile and bookmarks were kept."
+}
+
+do_launch() {
+    local cmd
+    cmd=$(launch_cmd "$1")
+    # Through the compositor, like tebian-menu, so the browser is not a child
+    # of this process. Other desktops have no swaymsg.
+    if ! swaymsg exec -- "$cmd" &>/dev/null; then
+        # shellcheck disable=SC2086  # the command is ours and word-splits on purpose
+        setsid -f $cmd &>/dev/null 9>&-
+    fi
+}
+
+do_pick() {
+    local id opts="" n=1 choice
+    for id in $(browser_list); do
+        opts+="$(label "$id")"$'\n'
+        n=$((n + 1))
+    done
+    opts+="Skip for now"
+    # Themes fix fuzzel at 35 columns, which would cut off the part that helps
+    # someone choose
+    choice=$(echo "$opts" | tfuzzel -d -p " Web browser | " --lines="$n" --width 78) || true
+    id_of "$choice" || true
+}
+
+case "${1:-}" in
+    list) browser_list ;;
+    name) require_id "${2:-}"; browser_name "$2" ;;
+    label) require_id "${2:-}"; label "$2" ;;
+    id-of) id_of "${2:-}" ;;
+    pick) do_pick ;;
+    installed) require_id "${2:-}"; is_installed "$2" ;;
+    any-installed) any_installed ;;
+    install) require_id "${2:-}"; do_install "$2" ;;
+    remove) require_id "${2:-}"; do_remove "$2" ;;
+    launch) require_id "${2:-}"; do_launch "$2" ;;
+    *)
+        sed -n '3,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        exit 2
+        ;;
+esac

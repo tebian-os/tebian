@@ -330,6 +330,9 @@ SYSEOF
         echo '  Email: thunderbird, evolution';
         echo '  Chat: signal, telegram, discord';
         echo '';
+        echo 'Not covered: Helium (uses its own Chromium sandbox)';
+        echo '             Zen (runs in the Flatpak sandbox)';
+        echo '';
         sudo apt update && sudo apt install -y firejail firejail-profiles;
         for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
             if command -v \$bin &>/dev/null; then

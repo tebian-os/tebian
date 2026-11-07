@@ -116,6 +116,10 @@ elif [[ "$1" == "--feel" ]]; then
     feel_menu
 elif [[ "$1" == "--packages" ]]; then
     package_browser
+elif [[ "$1" == "--browser" ]]; then
+    browser_menu
+elif [[ "$1" == "--ai-tools" ]]; then
+    ai_tools_menu
 elif [[ "$1" == "--menu" ]]; then
     # One menu, opened straight from a bar button (tebian-bar-menu)
     case "${2:-}" in

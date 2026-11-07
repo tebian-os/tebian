@@ -20,6 +20,10 @@ DESKTOP_DIRS="$HOME/.local/share/applications $HOME/.local/share/flatpak/exports
 if [ ! -f "$PIN_FILE" ]; then
     mkdir -p "$HOME/.config/tebian"
     cat > "$PIN_FILE" << 'EOF'
+helium.desktop
+app.zen_browser.zen.desktop
+t3code.desktop
+hermes.desktop
 firefox-esr.desktop
 firefox.desktop
 chromium.desktop
@@ -70,6 +74,12 @@ while IFS= read -r line; do
     fi
 done < "$PIN_FILE"
 
+# A base system has no browser, and the installer for one is otherwise four
+# menus deep. Offer it here until there is one, then get out of the way.
+if ! tebian-browser any-installed 2>/dev/null; then
+    APPS+="󰖟 Get a Web Browser\n"
+fi
+
 # System entries (always present — nerd font icons for consistent mono look)
 APPS+="󰀻 App Drawer\n"
 APPS+="󰒓 System Settings\n"
@@ -82,6 +92,10 @@ CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰀻 Tebian | " --width 30)
 
 # Handle system entries
 case "$CHOICE" in
+    *"Get a Web Browser"*)
+        tebian-settings --browser
+        exit 0
+        ;;
     *"App Drawer"*)
         tebian-drawer &
         exit 0

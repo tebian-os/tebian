@@ -118,6 +118,62 @@ is_back() {
     [[ -z "$c" || "$c" == *"󰌍 Back"* || "$c" == "Back" || "$c" == "Back "* ]]
 }
 
+# Add an apt repo whose key must match a pinned fingerprint. A repo key is
+# root-level trust in whoever holds it, so the download is held to a fingerprint
+# the publisher documents, not believed because it arrived over HTTPS. If a
+# publisher rotates its key this fails closed; update the pin after checking
+# their announcement. Needs gpg and curl. Args: key-url fingerprint keyring
+# list-file deb-line. A keyring named .asc stays armored, as its publisher's
+# docs show; anything else is dearmored.
+tebian_apt_repo_add() {
+    local key_url="$1" expected="$2" keyring="$3" list="$4" deb_line="$5" work rc=0
+    work=$(mktemp -d) || return 1
+    # Every step checks itself: bash ignores set -e inside "( ... ) || x"
+    (
+        umask 022
+        echo "Fetching the signing key..."
+        curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL "$key_url" -o "$work/key.asc" || exit 1
+        mkdir -m 700 "$work/gnupg" || exit 1
+        colons=$(gpg --homedir "$work/gnupg" --batch --show-keys --with-colons --with-fingerprint "$work/key.asc" 2>/dev/null) || exit 1
+        # Exactly one primary key: a second one in the file would be trusted by
+        # apt as well, even though the first matched the fingerprint
+        primaries=$(grep -c '^pub:' <<< "$colons" || true)
+        fpr=$(awk -F: '$1 == "pub" { p = 1; next } p && $1 == "fpr" { print $10; exit }' <<< "$colons")
+        if [ "$primaries" != 1 ] || [ "$fpr" != "$expected" ]; then
+            log_error "The signing key does not match the expected fingerprint."
+            log_error "  expected $expected"
+            log_error "  got      ${fpr:-none} ($primaries primary keys)"
+            log_error "Nothing was added to your system. This is worth checking before retrying."
+            exit 1
+        fi
+        echo "  Key verified: $fpr"
+        if [[ "$keyring" == *.asc ]]; then
+            cp "$work/key.asc" "$work/keyring" || exit 1
+        else
+            gpg --homedir "$work/gnupg" --batch --yes --dearmor -o "$work/keyring" "$work/key.asc" || exit 1
+        fi
+        echo "$deb_line" > "$work/repo.list" || exit 1
+        sudo install -d -m 755 "$(dirname "$keyring")" || exit 1
+        sudo install -m 644 -o root -g root "$work/keyring" "$keyring" || exit 1
+        sudo install -m 644 -o root -g root "$work/repo.list" "$list" || exit 1
+    ) || rc=$?
+    rm -rf "$work"
+    return "$rc"
+}
+
+# Add an app to the Mod+D pins. tebian-menu writes its defaults on first run and
+# never again, so anything installed later has to add itself or stays off the
+# menu. No file yet means first run has not happened: creating one here would
+# stop the defaults being written, so callers' apps belong in those defaults.
+tebian_pin_app() {
+    local desktop="$1" pins="$HOME/.config/tebian/pinned-apps.conf"
+    [ -f "$pins" ] || return 0
+    grep -qxF "$desktop" "$pins" && return 0
+    # An unterminated last line would otherwise merge with ours
+    [ -z "$(tail -c1 "$pins")" ] || echo >> "$pins"
+    echo "$desktop" >> "$pins"
+}
+
 # Fuzzel Wrapper (Handles Icon Toggling + Separator Filtering)
 tfuzzel() {
     local RESULT

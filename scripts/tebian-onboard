@@ -114,6 +114,18 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
     mkdir -p "$HOME/.config/tebian"
     rm -f "$HOME/.config/tebian/.desktop_setup_ok"
 
+    # Asked here, not in the terminal below: this is a menu like the one before
+    # it. Nothing is preselected, because Helium means trusting a third-party
+    # repo and that should be the user's call. Passed in a file because the
+    # terminal script is single-quoted. A resumed run asks again unless the
+    # earlier run already got a browser installed.
+    BROWSER_CHOICE_FILE="$HOME/.config/tebian/.onboard_browser"
+    if tebian-browser any-installed 2>/dev/null; then
+        rm -f "$BROWSER_CHOICE_FILE"
+    else
+        tebian-browser pick > "$BROWSER_CHOICE_FILE" 2>/dev/null || true
+    fi
+
     $TERM_CMD bash -c '
         # Source shared functions
         source "$HOME/.local/bin/tebian-common" 2>/dev/null
@@ -388,7 +400,22 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
             idempotent_append "export GDK_SCALE=2" "$HOME/.profile"
             echo "  HiDPI scaling enabled (2x)"
         fi
-        
+
+        # Last, because it is the largest download and a browser that fails to
+        # install must not cost the user the rest of their desktop setup
+        BROWSER_ID=$(cat "$HOME/.config/tebian/.onboard_browser" 2>/dev/null)
+        BROWSER_DONE=""
+        if [ -n "$BROWSER_ID" ]; then
+            echo ""
+            if tebian-browser install "$BROWSER_ID"; then
+                BROWSER_DONE=$(tebian-browser name "$BROWSER_ID")
+            else
+                echo "  ⚠ Browser not installed. Setup will continue."
+                echo "    Try again from Mod+D > Get a Web Browser."
+            fi
+        fi
+        rm -f "$HOME/.config/tebian/.onboard_browser"
+
         echo ""
         echo "========================================="
         echo "  Desktop Mode Ready!"
@@ -396,6 +423,9 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         echo ""
         echo "Installed:"
         echo "  - Desktop essentials"
+        if [ -n "$BROWSER_DONE" ]; then
+            echo "  - $BROWSER_DONE"
+        fi
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
             echo "  - NVIDIA drivers"
         fi
@@ -436,7 +466,7 @@ elif [[ "$CHOICE" =~ "Base" ]]; then
     log "User chose Base mode"
     echo "base" > "$ONBOARD_FILE"
     rm -f "$PROGRESS_FILE"
-    notify-send "Tebian" "Base mode selected. Install what you need via fuzzel." 2>/dev/null || true
+    notify-send "Tebian" "Base mode selected. No web browser yet: press Mod+D and choose Get a Web Browser." 2>/dev/null || true
     
 elif [ -z "$CHOICE" ]; then
     # Track dismissals - after 3, stop asking
