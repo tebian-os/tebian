@@ -53,8 +53,9 @@ apply_theme() {
         mkdir -p "$wallpaper_dir"
         cp "$wallpaper_src" "$wallpaper_dir/default.jpg"
         pkill swaybg 2>/dev/null; sleep 0.1
-        swaybg -i "$wallpaper_dir/default.jpg" -m fill &
-        disown
+        # Detached and off the terminal: onboarding runs this inside a setup
+        # window, and a child of that window dies when it closes (black desktop)
+        setsid -f swaybg -i "$wallpaper_dir/default.jpg" -m fill </dev/null >/dev/null 2>&1
     fi
     
     # 7. GTK theme (dark/light based on theme)
@@ -202,8 +203,8 @@ CSSEOF
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then
         swaymsg reload 2>/dev/null
-        pkill mako 2>/dev/null; sleep 0.1; mako &
-        disown
+        pkill mako 2>/dev/null; sleep 0.1
+        setsid -f mako </dev/null >/dev/null 2>&1
         notify-send "Tebian Theme" "$theme theme applied"
     fi
 

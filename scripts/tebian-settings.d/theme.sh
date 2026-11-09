@@ -108,8 +108,7 @@ custom_wallpaper_menu() {
         mkdir -p "$TARGET_DIR"
         cp "$SELECTED" "$TARGET_DIR/default.jpg"
         pkill swaybg 2>/dev/null; sleep 0.1
-        swaybg -i "$TARGET_DIR/default.jpg" -m fill &
-        disown
+        setsid -f swaybg -i "$TARGET_DIR/default.jpg" -m fill </dev/null >/dev/null 2>&1
         tnotify "Wallpaper" "Applied: $W_CHOICE"
     done
 }
