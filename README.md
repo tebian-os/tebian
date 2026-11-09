@@ -107,14 +107,14 @@ assets/             # wallpapers, plymouth splash
 
 ## Building the ISO
 
-On a Debian 13 machine with Podman, from the directory that contains
-`tebian-os/`:
+On a Debian 13 machine with Podman, from the repo:
 
 ```bash
-./build.sh --release   # container build of the committed tree
+build/build.sh --release   # container build of the committed tree
 ```
 
-or directly on a Debian host: `bash tebian-os/scripts/build-iso.sh --release`.
+The ISO lands in the folder that contains the repo. Or directly on a Debian
+host: `bash scripts/build-iso.sh --release`.
 `--release` builds only committed files (`git archive HEAD`) and records the
 commit in `/etc/tebian-release`; without it the working tree ships as-is,
 which is meant for development. A `.sha256` file is written next to the ISO.

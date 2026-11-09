@@ -27,7 +27,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEBIAN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-# The repo's parent (~/ on the dev machine) — where build.sh and ISOs live
+# The repo's parent (~/ on the dev machine) — where ISOs and test disks live
 WORK_DIR="${TEBIAN_WORK_DIR:-$(dirname "$TEBIAN_DIR")}"
 VM_DISK="$WORK_DIR/tebian-test.qcow2"
 DISK_SIZE="20G"
@@ -83,8 +83,8 @@ if $BUILD; then
     else
         echo -e "${GREEN}Building ISO...${NC}"
         # Prefer the container wrapper when it exists — it keeps the host clean
-        if [ -x "$WORK_DIR/build.sh" ]; then
-            "$WORK_DIR/build.sh"
+        if [ -x "$TEBIAN_DIR/build/build.sh" ] && command -v podman >/dev/null; then
+            TEBIAN_OUTPUT_DIR="$WORK_DIR" "$TEBIAN_DIR/build/build.sh"
         else
             sudo env TEBIAN_OUTPUT_DIR="$WORK_DIR" bash "$SCRIPT_DIR/build-iso.sh"
         fi
@@ -96,7 +96,7 @@ if $BOOT_ISO; then
     ISO=$(find_iso)
     if [ -z "$ISO" ]; then
         echo -e "${RED}No ISO found in $WORK_DIR or $WORK_DIR/iso${NC}"
-        echo "  Build one: $WORK_DIR/build.sh  (or: sudo bash scripts/build-iso.sh)"
+        echo "  Build one: $TEBIAN_DIR/build/build.sh  (or: sudo bash scripts/build-iso.sh)"
         exit 1
     fi
     echo ""

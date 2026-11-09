@@ -1,0 +1,13 @@
+# Build environment for the Tebian ISO — see build/build.sh.
+# Runs as root, so build-iso.sh needs no sudo; git is for --release builds
+# (git archive HEAD), rsync copies the Tebian tree into the image.
+FROM --platform=linux/amd64 debian:trixie
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        live-build \
+        git \
+        rsync \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build

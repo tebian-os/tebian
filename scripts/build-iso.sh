@@ -3,7 +3,7 @@
 # TEBIAN ISO BUILDER
 # Builds bootable x86_64 PC live ISO using Debian live-build
 # The live session boots to a whiptail installer (tebian-installer)
-# Requires: a Debian host (or ~/build.sh, which runs this in a container).
+# Requires: a Debian host (or build/build.sh, which runs this in a container).
 # Runs as root or as a user with sudo; missing build tools are installed.
 #
 # Usage: build-iso.sh [debian-version] [--release]
@@ -262,7 +262,7 @@ rsync -a --filter=':- .gitignore' \
     --exclude='dist' --exclude='.astro' --exclude='__pycache__' --exclude='*.pyc' \
     --exclude='.DS_Store' --exclude='._*' --exclude='*.iso' --exclude='*.qcow2' \
     --exclude='CLAUDE.md' --exclude='.claude' --exclude='MEMORY.md' \
-    --exclude='/tests' --exclude='/.github' \
+    --exclude='/tests' --exclude='/.github' --exclude='/build' \
     "$TEBIAN_SRC/" config/includes.chroot/home/user/Tebian/
 
 # Install tebian-installer system-wide
