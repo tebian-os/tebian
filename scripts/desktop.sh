@@ -88,7 +88,9 @@ PACKAGES=(
 )
 
 if [ "$USE_GREETD" = true ]; then
-    PACKAGES+=(greetd nwg-hello)
+    # The keyring belongs with the login screen: it must be installed before
+    # a login for that login to create and unlock it (see configs/greetd/pam)
+    PACKAGES+=(greetd nwg-hello gnome-keyring libpam-gnome-keyring)
 fi
 
 # Optional packages (don't fail if missing)

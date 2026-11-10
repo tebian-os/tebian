@@ -1422,6 +1422,13 @@ APT
         echo 42; echo "# Updating package lists..."
         chroot_apt_update
 
+        # debootstrap installs the release as it first shipped. Bring that
+        # base up to date now, so a fresh install doesn't start life with
+        # security fixes pending (apt itself was one of them). Not fatal:
+        # the update indicator in the bar still offers them later.
+        echo 43; echo "# Applying security updates..."
+        chroot_run apt-get -y -o Dpkg::Use-Pty=0 upgrade || true
+
         echo 45; echo "# Installing Linux kernel..."
         chroot_apt_install \
             "linux-image-${DEB_ARCH}"
@@ -1684,6 +1691,12 @@ KBEOF
             echo 90; echo "# Installing login screen..."
             chroot_apt_install_desktop \
                 greetd nwg-hello
+            # The keyring comes with the login screen, not with the desktop
+            # extras: it has to be there at the very first login for that
+            # login to create and unlock it. Installed later (mid-session),
+            # the first browser start asks the user to invent a keyring
+            # password instead.
+            chroot_apt_install gnome-keyring libpam-gnome-keyring
 
             echo 92; echo "# Installing fonts..."
             chroot_apt_install \
