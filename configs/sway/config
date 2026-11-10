@@ -80,6 +80,8 @@ bindsym $mod+d exec ~/.local/bin/tebian-menu
 bindsym $mod+a exec ~/.local/bin/tebian-drawer
 bindsym $mod+f fullscreen toggle
 bindsym $mod+Shift+slash exec tebian-keys
+# Window switcher. Mod+Tab is workspace back_and_forth (config.user)
+bindsym $mod+Shift+Tab exec tebian-windows
 bindsym $mod+s exec tebian-settings
 bindsym $mod+Shift+e exec swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit"
 

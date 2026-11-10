@@ -12,151 +12,104 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
-# User dirs first — XDG precedence lets user .desktop overrides (incl. NoDisplay) win the dedup
-DESKTOP_DIRS="$HOME/.local/share/applications $HOME/.local/share/flatpak/exports/share/applications /usr/share/applications /var/lib/flatpak/exports/share/applications"
 
 mkdir -p "$HOME/.config/tebian"
 [ -f "$PIN_FILE" ] || touch "$PIN_FILE"
 
+# Every launchable app, sorted by name; labels carry the ID where two apps
+# share a name. Split by hand, not with `IFS=$'\t' read`: that merges the
+# tabs around an empty icon.
+declare -A LABEL ICON
+APP_IDS=()
+while IFS= read -r line; do
+    id="${line%%$'\t'*}"; rest="${line#*$'\t'}"
+    LABEL[$id]="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    ICON[$id]="${rest%%$'\t'*}"
+    APP_IDS+=("$id")
+done < <(tebian_apps_labeled)
+
+# Pins are keyed by ID, so two apps with the same name are pinned apart
 is_pinned() {
     grep -qxF "$1" "$PIN_FILE" 2>/dev/null
 }
 
-# Edit Pins mode — show all apps with pin status, toggle on select
+# A fuzzel pick by position (--index), so the action never depends on the
+# label: an app named "Back" or "Edit Menu" is still just that app. Prints
+# the index, or nothing for Escape and for typed text that matched nothing.
+pick_index() {
+    local n="$1" pick; shift
+    pick=$(tfuzzel -d --index "$@")
+    [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -lt "$n" ] && echo "$pick"
+}
+
+# Edit Pins mode — every app with its pin state; picking one toggles it
 edit_pins() {
+    local pick id line
+    local -A pinned
     while true; do
-        local MENU=""
-        declare -A SEEN=()
-        declare -A NAME_TO_DESKTOP=()
-
-        for dir in $DESKTOP_DIRS; do
-            [ -d "$dir" ] || continue
-            for desktop in "$dir"/*.desktop; do
-                [ -f "$desktop" ] || continue
-                grep -q "^NoDisplay=true" "$desktop" 2>/dev/null && continue
-                grep -q "^Hidden=true" "$desktop" 2>/dev/null && continue
-                local tryexec
-                tryexec=$(grep -m1 "^TryExec=" "$desktop" | cut -d= -f2-)
-                [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && continue
-
-                local name bname
-                name=$(grep -m1 "^Name=" "$desktop" | cut -d= -f2-)
-                bname=$(basename "$desktop")
-                [ -z "$name" ] && continue
-                [ -n "${SEEN[$name]}" ] && continue
-                SEEN[$name]=1
-                NAME_TO_DESKTOP[$name]="$bname"
-
-                if is_pinned "$bname"; then
-                    MENU+="[pinned] $name\n"
-                else
-                    MENU+="[     ] $name\n"
-                fi
-            done
-        done
-
-        local SORTED
-        SORTED=$(echo -e "$MENU" | sort -t']' -k2)
-
-        local PICK
-        PICK=$(echo -e "󰌍 Back\n$SORTED" | tfuzzel -d -p " 📌 Edit Menu | " --width 40)
+        # Read once per round, not a grep per app
+        pinned=()
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] && pinned["$line"]=1
+        done < "$PIN_FILE"
+        pick=$(
+            {
+                echo "󰌍 Back"
+                for id in "${APP_IDS[@]}"; do
+                    if [ -n "${pinned[$id]+x}" ]; then
+                        printf '[pinned] %s\n' "${LABEL[$id]}"
+                    else
+                        printf '[     ] %s\n' "${LABEL[$id]}"
+                    fi
+                done
+            } | pick_index $(( ${#APP_IDS[@]} + 1 )) -p " 📌 Edit Menu | " --width 40
+        )
 
         # Escape closes; only Back returns to the drawer
-        [ -z "$PICK" ] && exit 0
-        if is_back "$PICK"; then
-            # Re-launch the drawer when leaving edit mode
-            exec tebian-drawer
-        fi
+        [ -n "$pick" ] || exit 0
+        [ "$pick" -eq 0 ] && exec tebian-drawer
 
-        # Extract app name (strip bracket prefix)
-        local app_name
-        app_name=$(echo "$PICK" | sed 's/^\[.*\] //')
-
-        # Look up .desktop file from our map
-        local bname="${NAME_TO_DESKTOP[$app_name]}"
-
-        if [ -n "$bname" ]; then
-            if is_pinned "$bname"; then
-                grep -vxF "$bname" "$PIN_FILE" > "$PIN_FILE.tmp"
-                mv "$PIN_FILE.tmp" "$PIN_FILE"
-                notify-send "Menu" "Unpinned: $app_name" 2>/dev/null
-            else
-                echo "$bname" >> "$PIN_FILE"
-                notify-send "Menu" "Pinned: $app_name" 2>/dev/null
-            fi
+        id="${APP_IDS[pick - 1]}"
+        if is_pinned "$id"; then
+            grep -vxF "$id" "$PIN_FILE" > "$PIN_FILE.tmp"
+            mv "$PIN_FILE.tmp" "$PIN_FILE"
+            notify-send "Menu" "Unpinned: ${LABEL[$id]}" 2>/dev/null
+        else
+            # An unterminated last line would otherwise merge with ours
+            [ -z "$(tail -c1 "$PIN_FILE")" ] || echo >> "$PIN_FILE"
+            echo "$id" >> "$PIN_FILE"
+            notify-send "Menu" "Pinned: ${LABEL[$id]}" 2>/dev/null
         fi
         # Loop continues — re-shows edit menu with updated pin status
     done
 }
 
-# Main drawer — collect apps as "name|icon" pairs, sort by name, then format for fuzzel
-declare -A SEEN
-ENTRIES=()
+# Main drawer: Edit Menu, the apps, Back. Printed straight into the pipe:
+# the icon separator is a NUL, which bash variables drop (see tfuzzel).
+PICK=$(
+    {
+        echo "󰏫 Edit Menu"
+        for id in "${APP_IDS[@]}"; do
+            if [ -n "${ICON[$id]}" ]; then
+                printf '%s\0icon\x1f%s\n' "${LABEL[$id]}" "${ICON[$id]}"
+            else
+                printf '%s\n' "${LABEL[$id]}"
+            fi
+        done
+        echo "󰌍 Back"
+    } | pick_index $(( ${#APP_IDS[@]} + 2 )) -p " 📂 Apps | " --width 40
+)
 
-for dir in $DESKTOP_DIRS; do
-    [ -d "$dir" ] || continue
-    for desktop in "$dir"/*.desktop; do
-        [ -f "$desktop" ] || continue
-        grep -q "^NoDisplay=true" "$desktop" 2>/dev/null && continue
-        grep -q "^Hidden=true" "$desktop" 2>/dev/null && continue
-        tryexec=$(grep -m1 "^TryExec=" "$desktop" | cut -d= -f2-)
-        [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && continue
+# Escape closes the drawer; only the Back entry returns to Mod+D
+[ -n "$PICK" ] || exit 0
 
-        name=$(grep -m1 "^Name=" "$desktop" | cut -d= -f2-)
-        [ -z "$name" ] && continue
-        [ -n "${SEEN[$name]}" ] && continue
-        SEEN[$name]=1
-
-        icon=$(grep -m1 "^Icon=" "$desktop" | cut -d= -f2-)
-        ENTRIES+=("$name|$icon")
-    done
-done
-
-# Sort entries by name
-IFS=$'\n' SORTED=($(printf '%s\n' "${ENTRIES[@]}" | sort -f)); unset IFS
-
-# Build fuzzel menu: Edit Menu first, sorted apps, Back last
-MENU="󰏫 Edit Menu\n"
-for entry in "${SORTED[@]}"; do
-    ename="${entry%%|*}"
-    eicon="${entry#*|}"
-    if [ -n "$eicon" ]; then
-        MENU+="${ename}\0icon\x1f${eicon}\n"
-    else
-        MENU+="${ename}\n"
-    fi
-done
-MENU+="󰌍 Back"
-
-CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 📂 Apps | " --width 40)
-
-# Escape closes the drawer; is_back counts it as Back, which opened Mod+D
-[ -z "$CHOICE" ] && exit 0
-# Exact Back match only — apps whose names contain "Back" (e.g. "Backups") must still launch
-if is_back "$CHOICE"; then
-    tebian-menu &
-    exit 0
-fi
-
-if [[ "$CHOICE" =~ "Edit Menu" ]]; then
+if [ "$PICK" -eq 0 ]; then
     edit_pins
-    exit 0
+elif [ "$PICK" -gt "${#APP_IDS[@]}" ]; then
+    tebian-menu &
+else
+    id="${APP_IDS[PICK - 1]}"
+    tebian_app_launch "$id" ||
+        notify-send "Apps" "Could not start ${LABEL[$id]}" 2>/dev/null
 fi
-
-# Find and launch the selected app
-CHOICE=$(echo "$CHOICE" | xargs)  # trim whitespace
-for dir in $DESKTOP_DIRS; do
-    [ -d "$dir" ] || continue
-    for desktop in "$dir"/*.desktop; do
-        [ -f "$desktop" ] || continue
-        if grep -qxF "Name=$CHOICE" "$desktop" 2>/dev/null; then
-            # Use gtk-launch for reliable .desktop launching, fall back to swaymsg exec
-            bname=$(basename "$desktop" .desktop)
-            gtk-launch "$bname" 2>/dev/null || {
-                exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
-                swaymsg exec -- "$exec_cmd"
-            }
-            exit 0
-        fi
-    done
-done
+exit 0

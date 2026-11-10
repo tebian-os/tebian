@@ -309,29 +309,7 @@ Fast (2x)
         echo "input type:touchpad scroll_factor $FACTOR" >> "$SWAY_CFG"
         tnotify "Input" "Scroll speed set to $FACTOR"
     elif [[ "$I_CHOICE" =~ "Keyboard Layout" ]]; then
-        LAYOUTS="us - English (US)
-gb - English (UK)
-de - German
-fr - French
-es - Spanish
-it - Italian
-pt - Portuguese
-ru - Russian
-jp - Japanese
-kr - Korean
-󰌍 Back"
-        KB=$(echo -e "$LAYOUTS" | tfuzzel -d -p " ⌨️ Layout | ")
-        if ! is_back "$KB"; then
-            LAYOUT=$(echo "$KB" | awk '{print $1}')
-            swaymsg "input type:keyboard xkb_layout $LAYOUT"
-            sed -i '/input type:keyboard.*xkb_layout/d' "$SWAY_CFG" 2>/dev/null
-            echo "input type:keyboard xkb_layout $LAYOUT" >> "$SWAY_CFG"
-            # The login screen (greetd exports it to sway) and the consoles read
-            # /etc/default/keyboard; localed writes it, asking through the polkit agent
-            localectl set-x11-keymap "$LAYOUT" 2>/dev/null ||
-                tnotify "Input" "Login screen keeps its old layout (couldn't update /etc/default/keyboard)"
-            tnotify "Input" "Keyboard layout set to $LAYOUT"
-        fi
+        keyboard_layout_menu
     elif [[ "$I_CHOICE" =~ "Mouse Speed" ]]; then
         SPEED_OPTS="Slow (-0.5)
 Normal (0)
@@ -350,6 +328,108 @@ Fast (0.5)
         tnotify "Input" "Mouse speed set to $ACCEL"
     fi
     done
+}
+
+# Every layout xkeyboard-config knows, "code - Name", sorted by name. Without
+# its rules file (a stripped system) the old short list still works.
+kb_layout_list() {
+    local lst="${TEBIAN_XKB_RULES:-/usr/share/X11/xkb/rules/base.lst}"
+    if [ -r "$lst" ]; then
+        awk '/^! / { sec = $2; next }
+             sec == "layout" && NF >= 2 { c = $1; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, ""); print $0 "\t" c }' "$lst" |
+            sort -f | awk -F'\t' '{ print $2 " - " $1 }'
+    else
+        printf '%s\n' "us - English (US)" "gb - English (UK)" "de - German" "fr - French" \
+            "es - Spanish" "it - Italian" "pt - Portuguese" "ru - Russian" "jp - Japanese" "kr - Korean"
+    fi
+}
+
+# The variants of one layout, "code - Name", in the rules file's order
+# (lines there read "  nodeadkeys  de: German (no dead keys)")
+kb_variant_list() {
+    local lst="${TEBIAN_XKB_RULES:-/usr/share/X11/xkb/rules/base.lst}"
+    [ -r "$lst" ] || return 0
+    awk -v lay="$1" '/^! / { sec = $2; next }
+        sec == "variant" && $2 == lay ":" { c = $1; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, ""); print c " - " $0 }' "$lst"
+}
+
+# One "X11 <field>:" value from localectl status. Only the label is cut
+# off: values hold colons of their own (Options: compose:ralt)
+kb_x11_field() {
+    localectl status 2>/dev/null |
+        awk -v f="X11 $1:" '{ sub(/^[[:space:]]+/, "") } index($0, f) == 1 { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }'
+}
+
+keyboard_layout_menu() {
+    local SWAY_CFG="$HOME/.config/sway/config.user"
+    local cur cur_var
+    cur=$(sed -n 's/^input type:keyboard xkb_layout //p' "$SWAY_CFG" 2>/dev/null | tail -1)
+    cur_var=$(sed -n 's/^input type:keyboard xkb_variant //p' "$SWAY_CFG" 2>/dev/null | tail -1)
+    [ -n "$cur" ] || cur=$(kb_x11_field Layout)
+
+    local list KB
+    list=$(kb_layout_list)
+    KB=$({
+        echo "󰌍 Back"
+        awk -v c="${cur:-us}" '$1 == c { print $0 " (current)"; exit }' <<< "$list"
+        awk -v c="${cur:-us}" '$1 != c' <<< "$list"
+    } | tfuzzel -d -p " 󰌌 Keyboard Layout (type a language) | " --width 60)
+    if is_back "$KB"; then return; fi
+    local LAYOUT="${KB%% *}"
+    # It goes into sway's config and localectl's arguments: only a name
+    # from the list
+    if ! awk -v l="$LAYOUT" '$1 == l { f = 1 } END { exit !f }' <<< "$list"; then
+        tnotify "Input" "Not a keyboard layout: $LAYOUT"
+        return
+    fi
+
+    # Variants (no dead keys, Dvorak, ...) as a second step, the plain
+    # layout first; Escape here leaves everything as it was
+    local VARIANT="" vlist V
+    vlist=$(kb_variant_list "$LAYOUT")
+    if [ -n "$vlist" ]; then
+        local name="${KB#* - }"
+        name="${name% (current)}"
+        local mark="//"
+        [ "$LAYOUT" = "$cur" ] && mark="${cur_var:-default}"
+        V=$({
+            echo "default - $name"
+            echo "$vlist"
+            echo "󰌍 Back"
+        } | awk -v m="$mark" '$1 == m { $0 = $0 " (current)" } 1' | tfuzzel -d -p " 󰌌 $name: variant | " --width 60)
+        if is_back "$V"; then return; fi
+        VARIANT="${V%% *}"
+        [ "$VARIANT" = default ] && VARIANT=""
+        if [ -n "$VARIANT" ] && ! awk -v v="$VARIANT" '$1 == v { f = 1 } END { exit !f }' <<< "$vlist"; then
+            tnotify "Input" "Not a variant of $LAYOUT: $VARIANT"
+            return
+        fi
+    fi
+
+    # A variant belongs to its layout: one left over from the previous
+    # layout makes the keymap fail to compile, so it is always rewritten
+    swaymsg "input type:keyboard xkb_layout $LAYOUT" >/dev/null 2>&1
+    swaymsg "input type:keyboard xkb_variant \"$VARIANT\"" >/dev/null 2>&1
+    sed -i '/input type:keyboard.*xkb_layout/d; /input type:keyboard.*xkb_variant/d' "$SWAY_CFG" 2>/dev/null
+    echo "input type:keyboard xkb_layout $LAYOUT" >> "$SWAY_CFG"
+    [ -n "$VARIANT" ] && echo "input type:keyboard xkb_variant $VARIANT" >> "$SWAY_CFG"
+
+    # The login screen (greetd exports it to sway) and the consoles read
+    # /etc/default/keyboard; localed writes it, asking through the polkit
+    # agent (sysprefs.sh falls back to sudo in a terminal when none runs).
+    # Model and options are passed back as they are: set-x11-keymap clears
+    # whatever it isn't given.
+    local model options
+    model=$(kb_x11_field Model)
+    options=$(kb_x11_field Options)
+    sysprefs_privileged localectl set-x11-keymap "$LAYOUT" "$model" "$VARIANT" "$options"
+    local now_lay now_var
+    now_lay=$(kb_x11_field Layout)
+    now_var=$(kb_x11_field Variant)
+    if [ "$now_lay" != "$LAYOUT" ] || [ "$now_var" != "$VARIANT" ]; then
+        tnotify "Input" "Login screen keeps its old layout (couldn't update /etc/default/keyboard${SYSPREFS_ERR:+: $SYSPREFS_ERR})"
+    fi
+    tnotify "Input" "Keyboard layout set to $LAYOUT${VARIANT:+ ($VARIANT)}"
 }
 
 # Bar settings persist as config.user blocks: sway applies

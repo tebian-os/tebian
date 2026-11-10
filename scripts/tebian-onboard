@@ -180,7 +180,8 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         echo "  Timezone: $CURRENT_TZ"
         echo "  Hostname: $CURRENT_HOST"
         echo "  Keyboard: $CURRENT_LAYOUT"
-        echo "  (Change these anytime in Settings > More > System Info)"
+        echo "  (Change these anytime: Super+S > More > System for timezone and name,"
+        echo "   Super+S > More > Desktop & UI > Input Devices for the keyboard)"
         echo ""
 
         # === DETECT HARDWARE ===

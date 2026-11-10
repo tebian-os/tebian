@@ -14,7 +14,7 @@ sysinfo_menu() {
     DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}')
     GPU=$(lspci 2>/dev/null | grep -iE "VGA|3D|Display" | head -1 | sed 's/.*: //')
     
-    INFO="󰋅 System Info
+    INFO="󰋅 About This Computer
 󰌢 Host: $HOSTNAME
 󰓅 Uptime: $UPTIME
 󰍛 Kernel: $KERNEL
@@ -493,8 +493,10 @@ notification_history_menu() {
     fi
     # printf, not echo -e: notification text comes from any app and may
     # hold backslashes
-    H_CHOICE=$(printf '%s\n' "$HISTORY" "🗑️  Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 60)
-    if [[ "$H_CHOICE" == "🗑️  Clear All" ]]; then
+    H_CHOICE=$(printf '%s\n' "$HISTORY" "󰆴 Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 60)
+    # Matched without its icon (Text Mode strips it). History lines are
+    # "app: summary", so they don't collide with the bare words
+    if [[ "$H_CHOICE" =~ ^[^[:alnum:]]*"Clear All"$ ]]; then
         # -h (--no-history) dismisses the visible ones without adding them
         # to history. History itself has no clear command; it lives only in
         # mako's memory, so restarting mako empties it.
@@ -512,11 +514,10 @@ more_menu() {
 󰒃 Security & Firewall
 󰡨 Infrastructure
 󰓅 Performance
-󰋅 System Info
+󰒓 System (name, time, language, printers)
 󰋊 Drives
 󰆏 Backup & Restore
 󰑀 Config Tracking (Git)
-󰍡 Notification History
 󰌍 Back"
 
     M_CHOICE=$(echo -e "$M_OPTS" | tfuzzel -d -p " More | ")
@@ -533,16 +534,15 @@ more_menu() {
         infra_menu
     elif [[ "$M_CHOICE" =~ "Performance" ]]; then
         perf_menu
-    elif [[ "$M_CHOICE" =~ "System Info" ]]; then
-        sysinfo_menu
+    elif [[ "$M_CHOICE" =~ "System" ]]; then
+        # Name, clock, language, printers, notifications (sysprefs.sh)
+        system_menu
     elif [[ "$M_CHOICE" =~ "Drives" ]]; then
         drives_menu
     elif [[ "$M_CHOICE" =~ "Backup & Restore" ]]; then
         backup_menu
     elif [[ "$M_CHOICE" =~ "Config Tracking" ]]; then
         config_menu
-    elif [[ "$M_CHOICE" =~ "Notification History" ]]; then
-        notification_history_menu
     fi
     done
 }

@@ -11,6 +11,7 @@ fi
 KEYBINDS="󰘔 Super+Enter → Terminal
 󰀻 Super+D → App Menu
 󰍉 Super+A → App Drawer
+󰖲 Super+Shift+Tab → Switch Window
 󰅍 Super+V → Clipboard
 󰘋 Super+Shift+Q → Kill Window
 󰘕 Super+F → Fullscreen
@@ -57,6 +58,7 @@ case "$CHOICE" in
         [ -n "$term" ] && swaymsg exec -- "$term" ;;
     *"App Menu"*) tebian-menu & ;;
     *"App Drawer"*) tebian-drawer & ;;
+    *"Switch Window"*) tebian-windows & ;;
     *"Clipboard"*) cliphist list | tfuzzel -d | cliphist decode | wl-copy ;;
     *"Kill Window"*) swaymsg kill ;;
     *"Fullscreen"*) swaymsg fullscreen toggle ;;

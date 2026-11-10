@@ -2,61 +2,184 @@
 # tebian-settings module: audio.sh
 # Sourced by tebian-settings — do not run directly
 
-# Audio submenu (combines mixer + output)
+# Audio submenu: mixer, output, input, microphone mute
 audio_menu() {
     while true; do
-        A_OPTS="󰕾 Audio Mixer
-󰔡 Switch Output
-󰌍 Back"
-
-        A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " Audio | ")
-
-        if is_back "$A_CHOICE"; then return; fi
-
-        if [[ "$A_CHOICE" =~ "Mixer" ]]; then
-            if command -v pulsemixer &>/dev/null; then
-                $TERM_CMD pulsemixer
-            elif command -v pavucontrol &>/dev/null; then
-                pavucontrol &
+        local out_label in_label mute_label choice
+        if command -v wpctl &>/dev/null; then
+            out_label=$(audio_default_name SINK)
+            in_label=$(audio_default_name SOURCE)
+            if [ -z "$in_label" ]; then
+                mute_label="Mute Microphone (No microphone)"
+            elif mic_is_muted; then
+                mute_label="Mute Microphone (ON)"
             else
-                $TERM_CMD bash -c "echo 'No audio mixer found.'; echo ''; read -p 'Install pulsemixer now? [Y/n] ' a; [[ \"\$a\" =~ ^[Nn] ]] || sudo apt install -y pulsemixer; read -p 'Press Enter...'"
+                mute_label="Mute Microphone (OFF)"
             fi
-        elif [[ "$A_CHOICE" =~ "Output" ]]; then
-            audio_output_menu
+            out_label="Switch Output (${out_label:-None})"
+            in_label="Switch Input (${in_label:-None})"
+        else
+            out_label="Switch Output (PipeWire not installed)"
+            in_label="Switch Input (PipeWire not installed)"
+            mute_label="Mute Microphone (PipeWire not installed)"
         fi
+
+        choice=$(printf '%s\n' "󰕾 Audio Mixer" "󰓃 $out_label" "󰍬 $in_label" \
+            "󰍭 $mute_label" "󰌍 Back" | tfuzzel -d -p " Audio | " --width 60)
+
+        if is_back "$choice"; then return; fi
+
+        # Matched from the start, after the glyph (none in text mode): the
+        # labels carry device names, which could contain another label's words
+        choice="${choice#"${choice%%[A-Za-z]*}"}"
+        case "$choice" in
+            "Audio Mixer"*)     audio_mixer ;;
+            "Switch Output"*)   audio_output_menu ;;
+            "Switch Input"*)    audio_input_menu ;;
+            "Mute Microphone"*) mic_mute_toggle ;;
+        esac
     done
 }
 
-audio_output_menu() {
-    # Parse wpctl's Sinks section. Real lines look like:
-    #   " │  *   55. Built-in Audio Analog Stereo   [vol: 0.65]"
-    # so strip the leading tree/asterisk junk down to the "<id>. name" and
-    # bound the range by the next section header, not the first blank line
-    # (which only appears after Streams).
-    SINKS=$(wpctl status 2>/dev/null | awk '/Sinks:/,/Sources:/' \
-        | grep -E '[0-9]+\.' \
-        | sed -E 's/^[^0-9]*([0-9]+\.)/\1/; s/[[:space:]]+\[vol.*$//; s/[[:space:]]+$//')
-
-    if [ -z "$SINKS" ]; then
-        notify-send "Audio" "No audio outputs found"
-        return
-    fi
-
-    # Build menu
-    MENU="󰌍 Back
-$SINKS"
-
-    CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 󰔡 Output | " --width 40)
-
-    if is_back "$CHOICE"; then
-        return
-    fi
-
-    # Extract sink ID and set as default
-    SINK_ID=$(echo "$CHOICE" | grep -oP '^\d+' | head -1)
-    if [ -n "$SINK_ID" ]; then
-        wpctl set-default "$SINK_ID"
-        notify-send "Audio Output" "Switched to: $(echo "$CHOICE" | sed 's/^[0-9]\+\. //')"
+audio_mixer() {
+    if command -v pulsemixer &>/dev/null; then
+        $TERM_CMD pulsemixer
+    elif command -v pavucontrol &>/dev/null; then
+        pavucontrol &
+    else
+        $TERM_CMD bash -c "echo 'No audio mixer found.'; echo ''; read -p 'Install pulsemixer now? [Y/n] ' a; [[ \"\$a\" =~ ^[Nn] ]] || sudo apt install -y pulsemixer; read -p 'Press Enter...'"
     fi
 }
 
+# wpctl ships with wireplumber, which the desktop install pulls in through
+# pipewire-audio. A base install (sway, fuzzel, network-manager) has no sound
+# server at all, so offer it rather than fail quietly.
+audio_need_wpctl() {
+    command -v wpctl &>/dev/null && return 0
+    local c
+    c=$(printf '%s\n' "󰏗 Install PipeWire (sound server)" "󰌍 Back" \
+        | tfuzzel -d -p " PipeWire not installed | ")
+    is_back "$c" && return 1
+    if tebian_term_apt_install pipewire-audio wireplumber; then
+        # The user services start on the next login, not in this session
+        tnotify "Audio" "PipeWire installed. Log out and back in to use it."
+    else
+        tnotify "Audio" "PipeWire install failed"
+    fi
+    return 1
+}
+
+# Print the Audio devices of one wpctl status section, one per line:
+#   <id>\t<1 if default, else 0>\t<name>
+# Lines look like " │  *   55. Built-in Audio Analog Stereo   [vol: 0.65]".
+# Only the "Audio" block counts: "Video" has its own Sinks and Sources
+# (webcams), and "Filters" sits between Sources and Streams. A section ends
+# at the next "├─ Name:" header. The id is the first number after the tree
+# glyphs, so names with brackets or "2." inside them survive; only a
+# trailing "[vol: ...]" is cut.
+audio_nodes() {
+    local want="$1"
+    wpctl status 2>/dev/null | W="$want" awk '
+        /^[^ \t]/ { top = $1; sect = ""; next }
+        /─ [A-Za-z][A-Za-z ]*:[ \t]*$/ {
+            s = $0
+            sub(/^[^A-Za-z]*/, "", s); sub(/:[ \t]*$/, "", s)
+            sect = s; next
+        }
+        top != "Audio" || sect != ENVIRON["W"] { next }
+        match($0, /^[^0-9*]*\*?[ \t]*[0-9]+\./) {
+            head = substr($0, 1, RLENGTH); name = substr($0, RLENGTH + 1)
+            def = (index(head, "*") > 0)
+            id = head; sub(/\.$/, "", id); sub(/^.*[^0-9]/, "", id)
+            sub(/[ \t]+\[vol:[^]]*\][ \t]*$/, "", name)
+            gsub(/^[ \t]+|[ \t]+$/, "", name)
+            if (name == "") name = "Device " id
+            print id "\t" def "\t" name
+        }'
+}
+
+# Name of the default SINK or SOURCE, empty if there is none. Asked of the
+# node itself rather than the starred status line: the default can be a
+# filter (echo cancel, EQ) that is not listed under Sinks/Sources.
+audio_default_name() {
+    wpctl inspect "@DEFAULT_AUDIO_$1@" 2>/dev/null | awk '
+        /^[ \t*]*node\.description = / { d = $0 }
+        /^[ \t*]*node\.nick = /        { n = $0 }
+        /^[ \t*]*node\.name = /        { m = $0 }
+        END {
+            v = d != "" ? d : (n != "" ? n : m)
+            sub(/^[^=]*= "?/, "", v); sub(/"[ \t]*$/, "", v)
+            print v
+        }'
+}
+
+mic_is_muted() {
+    wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | grep -q MUTED
+}
+
+audio_output_menu() { audio_pick_device Sinks; }
+audio_input_menu()  { audio_pick_device Sources; }
+
+# Picker for Sinks or Sources. Labels are device names; the default gets
+# "(Current)", and repeated names (two identical HDMI ports) get their
+# position, so each label maps back to exactly one id.
+audio_pick_device() {
+    local sect="$1" kind title
+    if [ "$sect" = Sinks ]; then kind="output"; title="󰓃 Output"
+    else kind="input"; title="󰍬 Input"; fi
+    audio_need_wpctl || return
+
+    local -a ids=() defs=() names=() labels=()
+    local id def name label n=0 cur="" seen l
+    while IFS=$'\t' read -r id def name; do
+        [ -n "$id" ] || continue
+        label="$name"
+        seen=0
+        for l in "${names[@]}"; do [ "$l" = "$name" ] && seen=$((seen + 1)); done
+        [ "$seen" -gt 0 ] && label="$name ($((seen + 1)))"
+        [ "$def" = 1 ] && { label="$label (Current)"; cur="$name"; }
+        ids+=("$id"); defs+=("$def"); names+=("$name"); labels+=("$label")
+        n=$((n + 1))
+    done < <(audio_nodes "$sect")
+
+    if [ "$n" -eq 0 ]; then
+        tnotify "Audio" "No audio ${kind}s found"
+        return
+    fi
+    if [ "$n" -eq 1 ] && [ -n "$cur" ]; then
+        tnotify "Audio" "Only one audio $kind: $cur (in use)"
+        return
+    fi
+
+    local choice i
+    choice=$(printf '%s\n' "${labels[@]}" "󰌍 Back" | tfuzzel -d -p " $title | " --width 60)
+    if is_back "$choice"; then return; fi
+    # Device labels carry no glyph, so icon and text mode return the same text
+    for i in "${!labels[@]}"; do
+        [ "${labels[$i]}" = "$choice" ] || continue
+        [ "${defs[$i]}" = 1 ] && return
+        if wpctl set-default "${ids[$i]}"; then
+            tnotify "Audio ${kind^}" "Switched to: ${labels[$i]}"
+        else
+            tnotify "Audio ${kind^}" "Could not switch to: ${labels[$i]}"
+        fi
+        return
+    done
+}
+
+mic_mute_toggle() {
+    audio_need_wpctl || return
+    if [ -z "$(audio_default_name SOURCE)" ]; then
+        tnotify "Microphone" "No microphone found"
+        return
+    fi
+    if ! wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; then
+        tnotify "Microphone" "Could not change mute"
+        return
+    fi
+    if mic_is_muted; then
+        tnotify "Microphone" "Muted"
+    else
+        tnotify "Microphone" "On"
+    fi
+}

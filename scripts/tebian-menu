@@ -2,7 +2,8 @@
 export PATH="$HOME/.local/bin:$PATH"
 # ==============================================================================
 # TEBIAN MAIN MENU (Mod+D)
-# Shows pinned apps + system entries. Pin/unpin from the App Drawer.
+# Opens on the pinned apps and the system entries; typing searches every
+# installed app. Pin/unpin from the App Drawer.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,8 +14,6 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
 fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
-# User dirs first — XDG precedence lets user .desktop overrides (incl. NoDisplay) win the dedup
-DESKTOP_DIRS="$HOME/.local/share/applications $HOME/.local/share/flatpak/exports/share/applications /usr/share/applications /var/lib/flatpak/exports/share/applications"
 
 # Create default pins on first run
 if [ ! -f "$PIN_FILE" ]; then
@@ -34,91 +33,94 @@ code.desktop
 EOF
 fi
 
-# Resolve a .desktop file to Name and Icon
-resolve_desktop() {
-    local basename="$1"
-    for dir in $DESKTOP_DIRS; do
-        local f="$dir/$basename"
-        [ -f "$f" ] || continue
-        # Skip NoDisplay/Hidden
-        grep -q "^NoDisplay=true" "$f" 2>/dev/null && return 1
-        grep -q "^Hidden=true" "$f" 2>/dev/null && return 1
-        # Check TryExec
-        local tryexec
-        tryexec=$(grep -m1 "^TryExec=" "$f" | cut -d= -f2-)
-        [ -n "$tryexec" ] && ! command -v "$tryexec" &>/dev/null && return 1
-        local name icon
-        name=$(grep -m1 "^Name=" "$f" | cut -d= -f2-)
-        icon=$(grep -m1 "^Icon=" "$f" | cut -d= -f2-)
-        [ -z "$name" ] && return 1
-        echo "$name|$icon|$basename"
-        return 0
-    done
-    return 1
-}
-
-# Build pinned apps list
-APPS=""
-declare -A SHOWN
+# Every launchable app, once, sorted by name. Split by hand, not with
+# `IFS=$'\t' read`: that merges the tabs around an empty icon.
+declare -A LABEL ICON
+APP_IDS=()
 while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    [[ "$line" =~ ^# ]] && continue
-    local_info=$(resolve_desktop "$line") || continue
-    IFS='|' read -r pname picon _pfile <<< "$local_info"
-    [ -n "${SHOWN[$pname]}" ] && continue
-    SHOWN[$pname]=1
-    if [ -n "$picon" ]; then
-        APPS+="$pname\0icon\x1f$picon\n"
-    else
-        APPS+="$pname\n"
-    fi
+    id="${line%%$'\t'*}"; rest="${line#*$'\t'}"
+    LABEL[$id]="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    ICON[$id]="${rest%%$'\t'*}"
+    APP_IDS+=("$id")
+done < <(tebian_apps_labeled)
+
+# The menu is built as two parallel lists: what fuzzel shows (ENTRY, ICONS)
+# and what picking it does (ACTION). fuzzel --index returns the position, so
+# nothing is matched on label text: an app called "Power Options" or a
+# same-named app can't be mistaken for another entry.
+ENTRY=() ICONS=() ACTION=()
+add() { ENTRY+=("$1"); ICONS+=("$2"); ACTION+=("$3"); }
+
+declare -A PINNED
+while IFS= read -r id || [ -n "$id" ]; do
+    # Hand-edited files may carry trailing spaces or a CR
+    id="${id%"${id##*[![:space:]]}"}"
+    [[ -z "$id" || "$id" == \#* ]] && continue
+    [ -n "${LABEL[$id]+x}" ] || continue
+    [ -n "${PINNED[$id]+x}" ] && continue
+    PINNED[$id]=1
+    add "${LABEL[$id]}" "${ICON[$id]}" "app:$id"
 done < "$PIN_FILE"
 
 # A base system has no browser, and the installer for one is otherwise four
 # menus deep. Offer it here until there is one, then get out of the way.
 if ! tebian-browser any-installed 2>/dev/null; then
-    APPS+="󰖟 Get a Web Browser\n"
+    add "󰖟 Get a Web Browser" "" browser
 fi
 
 # System entries (always present — nerd font icons for consistent mono look)
-APPS+="󰀻 App Drawer\n"
-APPS+="󰒓 System Settings\n"
-APPS+="󰐥 Power Options"
+add "󰀻 App Drawer" "" drawer
+add "󰒓 System Settings" "" settings
+add "󰐥 Power Options" "" power
 
-# Launch fuzzel
-CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰀻 Tebian | " --width 30)
+# The menu opens at the size of everything above; the rest is only seen
+# when typing filters it in
+TOP=${#ENTRY[@]}
 
-[ -z "$CHOICE" ] && exit 0
+# Every other app, below the visible part
+for id in "${APP_IDS[@]}"; do
+    [ -n "${PINNED[$id]+x}" ] || add "${LABEL[$id]}" "${ICON[$id]}" "app:$id"
+done
 
-# Handle system entries
-case "$CHOICE" in
-    *"Get a Web Browser"*)
-        tebian-settings --browser
-        exit 0
-        ;;
-    *"App Drawer"*)
-        tebian-drawer &
-        exit 0
-        ;;
-    *"System Settings"*)
-        tebian-settings
-        exit 0
-        ;;
-    *"Power Options"*)
-        tebian-settings --power
-        exit 0
-        ;;
-esac
+# --- SETTINGS SEARCH HOOK (phase 2) -------------------------------------------
+# Settings entries are appended here, after the apps, each as
+#   add "<label>" "" "setting:<id>"
+# from `tebian-settings --search-list`; picking one runs the "setting:*"
+# branch below. Nothing is added yet.
+# ------------------------------------------------------------------------------
 
-# Find and launch the selected pinned app
-for dir in $DESKTOP_DIRS; do
-    [ -d "$dir" ] || continue
-    for desktop in "$dir"/*.desktop; do
-        [ -f "$desktop" ] || continue
-        if grep -qxF "Name=$CHOICE" "$desktop" 2>/dev/null; then
-            exec_cmd=$(grep -m1 "^Exec=" "$desktop" | cut -d= -f2- | sed 's/ %[fFuUdDnNickvm]//g')
-            swaymsg exec -- "$exec_cmd"
-            exit 0
+LINES=$TOP
+[ "$LINES" -gt 15 ] && LINES=15
+
+# Printed straight into the pipe, never through a variable: the icon
+# separator is a NUL, which bash variables drop (see tfuzzel). printf %s
+# also keeps a backslash in an app's name from being read as an escape.
+print_entries() {
+    local i
+    for i in "${!ENTRY[@]}"; do
+        if [ -n "${ICONS[$i]}" ]; then
+            printf '%s\0icon\x1f%s\n' "${ENTRY[$i]}" "${ICONS[$i]}"
+        else
+            printf '%s\n' "${ENTRY[$i]}"
         fi
     done
-done
+}
+
+PICK=$(print_entries | tfuzzel -d --index -p " 󰀻 Tebian | " --width 30 --lines "$LINES")
+
+# Escape, or text typed that matched nothing
+[[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#ACTION[@]}" ] || exit 0
+
+case "${ACTION[$PICK]}" in
+    browser)  tebian-settings --browser ;;
+    drawer)   tebian-drawer & ;;
+    settings) tebian-settings ;;
+    power)    tebian-settings --power ;;
+    app:*)
+        tebian_app_launch "${ACTION[$PICK]#app:}" ||
+            notify-send "Menu" "Could not start ${ENTRY[$PICK]}" 2>/dev/null
+        ;;
+    # SETTINGS SEARCH HOOK (phase 2): entries added above land here
+    setting:*) tebian-settings --open "${ACTION[$PICK]#setting:}" ;;
+esac
+exit 0

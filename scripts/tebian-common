@@ -155,6 +155,262 @@ tebian_pin_app() {
     echo "$desktop" >> "$pins"
 }
 
+# ==============================================================================
+# APP INDEX
+# One reader of .desktop files for every menu (Mod+D, the drawer, Settings).
+#   tebian_apps_list        id<TAB>name<TAB>icon<TAB>terminal, sorted by name
+#   tebian_app_name ID      the Name, or return 1 if ID isn't launchable
+#   tebian_app_launch ID    start it through sway; return 1 if unknown
+# ID is the file name ("kitty.desktop"). Names are not unique (Firefox from
+# Debian and from Flatpak), so menus show names but launch by ID.
+# ==============================================================================
+
+# Application dirs, most important first: the first file with a given ID
+# hides the rest, which is how a user copy with NoDisplay=true hides an app.
+# Flatpak's export dirs are listed explicitly too, because sway (and so
+# Mod+D) is often started without them in XDG_DATA_DIRS.
+_tebian_app_dirs() {
+    local d seen=:
+    local IFS=:
+    for d in "${XDG_DATA_HOME:-$HOME/.local/share}" "$HOME/.local/share/flatpak/exports/share" \
+             ${XDG_DATA_DIRS:-/usr/local/share:/usr/share} /var/lib/flatpak/exports/share; do
+        [ -n "$d" ] || continue
+        [[ "$seen" == *":$d:"* ]] && continue
+        seen+="$d:"
+        [ -d "$d/applications" ] && printf '%s\n' "$d/applications"
+    done
+}
+
+# One awk pass over all the files, given in precedence order. Prints
+# id name icon terminal tryexec exec path, separated by \037, for each
+# application meant to be shown in this session. \037 rather than a tab:
+# `read` collapses runs of tabs (tab is IFS whitespace), so an empty icon
+# would shift every later field.
+# Only [Desktop Entry] counts: "Name=" under [Desktop Action new-window] is
+# an action's label, and Name[de]= is a translation. Values are unescaped
+# per the spec (\s \n \t \r \\), so a shell-quoted Exec reaches sh as its
+# author wrote it.
+_TEBIAN_AWK_DESKTOP='
+function unesc(v,   out, i, c, n) {
+    if (index(v, "\\") == 0) return v
+    out = ""; n = length(v)
+    for (i = 1; i <= n; i++) {
+        c = substr(v, i, 1)
+        if (c == "\\" && i < n) {
+            c = substr(v, ++i, 1)
+            if (c == "s" || c == "n" || c == "t") c = " "
+            else if (c == "r") c = ""
+        }
+        out = out c
+    }
+    return out
+}
+function clean(v) { gsub(/[\t\037]/, " ", v); return v }
+function listed(v,   n, a, i) {
+    n = split(v, a, ";")
+    for (i = 1; i <= n; i++) if (a[i] != "" && tolower(a[i]) in desk) return 1
+    return 0
+}
+function flush() {
+    if (path == "" || skip) return
+    if (type != "" && type != "Application") return
+    if (name == "" || exec == "") return
+    if (tolower(nodisplay) == "true" || tolower(hidden) == "true") return
+    if (onlyshow != "" && !listed(onlyshow)) return
+    if (notshow != "" && listed(notshow)) return
+    print id S clean(name) S clean(icon) S (tolower(terminal) == "true" ? 1 : 0) \
+        S clean(tryexec) S clean(exec) S path
+}
+BEGIN {
+    S = "\037"
+    n = split(tolower(ENVIRON["TEBIAN_DESKTOPS"]), d, ":")
+    for (i = 1; i <= n; i++) if (d[i] != "") desk[d[i]] = 1
+}
+FNR == 1 {
+    flush()
+    path = FILENAME; id = FILENAME; sub(/.*\//, "", id)
+    # The first file with an ID decides, launchable or not
+    skip = (id in seen) || id ~ /[\t\037]/
+    seen[id] = 1
+    split("", got)
+    group = type = name = icon = exec = tryexec = terminal = ""
+    nodisplay = hidden = onlyshow = notshow = ""
+}
+skip { next }
+# Translations (Name[de]=...) are most of a system file; drop them first
+/^[A-Za-z0-9-]+\[/ { next }
+{ sub(/[ \t\r]+$/, "") }
+/^[ \t]*(#|$)/ { next }
+/^\[/ {
+    # Desktop Entry is the first group; what follows is actions
+    if (group == "[Desktop Entry]") nextfile
+    group = $0; next
+}
+group != "[Desktop Entry]" { next }
+{
+    eq = index($0, "="); if (!eq) next
+    key = substr($0, 1, eq - 1); sub(/[ \t]+$/, "", key)
+    val = substr($0, eq + 1); sub(/^[ \t]+/, "", val)
+    # A key given twice is invalid; the first is what other launchers use
+    if (key in got) next
+    got[key] = 1
+    if (key == "Type") type = val
+    else if (key == "Name") name = unesc(val)
+    else if (key == "Icon") icon = unesc(val)
+    else if (key == "Exec") exec = unesc(val)
+    else if (key == "TryExec") tryexec = unesc(val)
+    else if (key == "Terminal") terminal = val
+    else if (key == "NoDisplay") nodisplay = val
+    else if (key == "Hidden") hidden = val
+    else if (key == "OnlyShowIn") onlyshow = val
+    else if (key == "NotShowIn") notshow = val
+}
+END { flush() }'
+
+# Run the awk pass over FILES and drop entries whose TryExec isn't there.
+# TryExec is checked here, by bash's own PATH lookup, rather than a
+# `command -v` fork per file from awk. MODE "list" prints the four public
+# fields with tabs; "full" prints the whole \037 record.
+_tebian_app_scan() {
+    local mode="$1"; shift
+    [ $# -gt 0 ] || return 0
+    local id name icon term tryexec exec path
+    # OnlyShowIn/NotShowIn compare against this session's desktop names
+    TEBIAN_DESKTOPS="${XDG_CURRENT_DESKTOP:-sway}" awk "$_TEBIAN_AWK_DESKTOP" "$@" |
+    while IFS=$'\037' read -r id name icon term tryexec exec path; do
+        [ -z "$tryexec" ] || command -v "$tryexec" >/dev/null 2>&1 || continue
+        if [ "$mode" = list ]; then
+            printf '%s\t%s\t%s\t%s\n' "$id" "$name" "$icon" "$term"
+        else
+            printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$id" "$name" "$icon" "$term" "$exec" "$path"
+        fi
+    done
+}
+
+# Readers: icon can be empty, so split lines with parameter expansion or
+# awk -F'\t', not `IFS=$'\t' read`, which merges the two tabs around it.
+tebian_apps_list() {
+    local d f
+    local -a files=()
+    while IFS= read -r d; do
+        for f in "$d"/*.desktop; do
+            [ -f "$f" ] && files+=("$f")
+        done
+    done < <(_tebian_app_dirs)
+    _tebian_app_scan list "${files[@]}" | sort -t $'\t' -k2,2f -k1,1
+}
+
+# tebian_apps_list with the name column replaced by a menu label: the name,
+# plus the ID where two apps share a name, so the two Firefoxes (Debian's
+# and Flatpak's) can be told apart in a list
+tebian_apps_labeled() {
+    tebian_apps_list | awk -F'\t' -v OFS='\t' '
+        { id[NR] = $1; nm[NR] = $2; ic[NR] = $3; tm[NR] = $4; n[$2]++ }
+        END {
+            for (i = 1; i <= NR; i++) {
+                l = nm[i]
+                if (n[l] > 1) { x = id[i]; sub(/\.desktop$/, "", x); l = l "  (" x ")" }
+                print id[i], l, ic[i], tm[i]
+            }
+        }'
+}
+
+# The full \037 record for one ID (id name icon terminal exec path), or
+# return 1. Only the first file with that ID is looked at, as in the list.
+_tebian_app_entry() {
+    local id="$1" d out
+    [[ "$id" == ?*.desktop && "$id" != */* ]] || return 1
+    while IFS= read -r d; do
+        [ -f "$d/$id" ] || continue
+        out=$(_tebian_app_scan full "$d/$id")
+        [ -n "$out" ] || return 1
+        printf '%s\n' "$out"
+        return 0
+    done < <(_tebian_app_dirs)
+    return 1
+}
+
+tebian_app_name() {
+    local rec
+    rec=$(_tebian_app_entry "$1") || return 1
+    rec="${rec#*$'\037'}"
+    printf '%s\n' "${rec%%$'\037'*}"
+}
+
+# The user's terminal as a prefix that runs the command after it
+# ("kitty -e"): the one picked in Settings > Software (config.user's
+# "terminal" block), then the base config's $term, then the first one
+# installed.
+tebian_term_cmd() {
+    local t c
+    t=$(tebian_block_get terminal 2>/dev/null | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
+    command -v "$t" >/dev/null 2>&1 ||
+        t=$(awk '/^set \$term[[:space:]]/ { print $3; exit }' "$HOME/.config/sway/config" 2>/dev/null)
+    if ! command -v "$t" >/dev/null 2>&1; then
+        t=kitty
+        for c in kitty foot alacritty gnome-terminal xterm; do
+            command -v "$c" >/dev/null 2>&1 && { t="$c"; break; }
+        done
+    fi
+    case "$t" in
+        gnome-terminal|kgx|ptyxis) echo "$t --" ;;
+        wezterm)                   echo "wezterm start --" ;;
+        *)                         echo "$t -e" ;;
+    esac
+}
+
+# Quote a string for sh
+_tebian_sq() {
+    printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+# Exec with its field codes resolved. A menu opens an app with no file or
+# URL, so %f %F %u %U (and the deprecated ones) go; a code quoted on its own
+# ("%f") goes with its quotes, or the app gets an empty argument and some
+# then try to open a file named "".
+_tebian_exec_expand() {
+    local rest="$1" name="$2" icon="$3" file="$4" out="" c
+    rest="${rest//\"%[fFuUdDnNvm]\"/}"
+    while [[ "$rest" == *%* ]]; do
+        out+="${rest%%\%*}"
+        rest="${rest#*%}"
+        c="${rest:0:1}"
+        rest="${rest:1}"
+        case "$c" in
+            %) out+="%" ;;
+            c) out+=$(_tebian_sq "$name") ;;
+            k) out+=$(_tebian_sq "$file") ;;
+            i) [ -z "$icon" ] || out+="--icon $(_tebian_sq "$icon")" ;;
+        esac
+    done
+    printf '%s\n' "$out$rest"
+}
+
+# Started by sway, not by the menu: the app is not the menu's child, and
+# sway knows which workspace it was launched from. The command reaches sway
+# in a file, not inline, because sway parses a command before running it:
+# an Exec containing ";" or "," was split into separate sway commands, and
+# sway's quote handling differs from sh's. "sh FILE" gives it nothing to
+# parse.
+tebian_app_launch() {
+    local rec id name icon term exec path cmd launch
+    rec=$(_tebian_app_entry "$1") || return 1
+    IFS=$'\037' read -r id name icon term exec path <<< "$rec"
+    cmd=$(_tebian_exec_expand "$exec" "$name" "$icon" "$path")
+    [ "$term" = 1 ] && cmd="$(tebian_term_cmd) $cmd"
+
+    if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null 2>&1; then
+        launch=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/tebian-launch.XXXXXX") || return 1
+        # It deletes itself first; exec leaves the app as sway's own child
+        # shellcheck disable=SC2016
+        printf 'rm -f -- "$0"\nexec %s\n' "$cmd" > "$launch"
+        swaymsg exec -- "sh $launch" >/dev/null 2>&1 && return 0
+        rm -f "$launch"
+    fi
+    # No sway to ask (a TTY, sway gone): detach so it outlives the caller
+    setsid -f sh -c "exec $cmd" >/dev/null 2>&1 < /dev/null
+}
+
 # Fuzzel Wrapper (Handles Icon Toggling + Separator Filtering)
 tfuzzel() {
     local RESULT
