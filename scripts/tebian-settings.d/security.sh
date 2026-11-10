@@ -24,27 +24,27 @@ security_menu() {
     cur_profile=$(security_current_profile)
     SSH_ACTIVE=$(systemctl is-active --quiet ssh && echo "ON" || echo "OFF")
 
-    SEC_LABEL="🛡️ Security Profile (Current: ${cur_profile^})"
+    SEC_LABEL="󰒃 Security Profile (Current: ${cur_profile^})"
 
     if [[ "$SSH_ACTIVE" == "ON" ]]; then
-        SSH_LABEL="🛑 Disable Remote Access (SSH)"
+        SSH_LABEL="󰆍 Disable Remote Access (SSH)"
     else
-        SSH_LABEL="🌍 Enable Remote Access (SSH)"
+        SSH_LABEL="󰆍 Enable Remote Access (SSH)"
     fi
 
     # Detect SSH key-only mode — check our specific file (00- now; 99- on
     # older installs), not all of sshd_config.d
     if [ -f /etc/ssh/sshd_config.d/00-tebian-keyonly.conf ] || [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
-        SSH_KEY_LABEL="🔑 Revert SSH to Password Auth (Current: Key-Only)"
+        SSH_KEY_LABEL="󰌆 Revert SSH to Password Auth (Current: Key-Only)"
     else
-        SSH_KEY_LABEL="🔑 Harden SSH (Key-Only Mode)"
+        SSH_KEY_LABEL="󰌆 Harden SSH (Key-Only Mode)"
     fi
 
     # Detect kernel hardening sysctl
     if [ -f /etc/sysctl.d/99-tebian-hardening.conf ]; then
-        KERN_LABEL="🧠 Remove Kernel Hardening (Current: Hardened)"
+        KERN_LABEL="󰍛 Remove Kernel Hardening (Current: Hardened)"
     else
-        KERN_LABEL="🧠 Enable Kernel Hardening"
+        KERN_LABEL="󰍛 Enable Kernel Hardening"
     fi
 
     # AppArmor: the kernel decides whether it can run at all (some Pi
@@ -89,12 +89,12 @@ security_menu() {
     # unit failing means traffic is NOT going through Tor — say so
     if [ -f /etc/systemd/system/tebian-tor-iptables.service ]; then
         if ! systemctl is-active --quiet tebian-tor-iptables 2>/dev/null; then
-            PARANOID_LABEL="☠️ Paranoid Mode (FAILED — traffic not via Tor)"
+            PARANOID_LABEL="󰗹 Paranoid Mode (FAILED — traffic not via Tor)"
         else
-            PARANOID_LABEL="☠️ Paranoid Mode (ON)"
+            PARANOID_LABEL="󰗹 Paranoid Mode (ON)"
         fi
     else
-        PARANOID_LABEL="☠️ Paranoid Mode (OFF)"
+        PARANOID_LABEL="󰗹 Paranoid Mode (OFF)"
     fi
 
     # Detect auto-updates
@@ -108,22 +108,22 @@ security_menu() {
     # readable): -k ignores cached credentials, so this only succeeds when a
     # NOPASSWD rule applies
     if sudo -k -n true 2>/dev/null; then
-        SUDO_LABEL="🔑 Passwordless sudo (Current: On)"
+        SUDO_LABEL="󰌆 Passwordless sudo (Current: On)"
     else
-        SUDO_LABEL="🔑 Passwordless sudo (Current: Off)"
+        SUDO_LABEL="󰌆 Passwordless sudo (Current: Off)"
     fi
 
     # Skip the login screen after the disk passphrase — only offered when the
     # system disk really is encrypted (tebian-autologin decides)
     AUTOLOGIN_LABEL=""
     case "$(tebian-autologin status 2>/dev/null)" in
-        on)  AUTOLOGIN_LABEL="🔓 Skip Login After Disk Unlock (Current: On)" ;;
-        off) AUTOLOGIN_LABEL="🔓 Skip Login After Disk Unlock (Current: Off)" ;;
+        on)  AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (Current: On)" ;;
+        off) AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (Current: Off)" ;;
     esac
 
     SEC_OPTS="$PARANOID_LABEL
 $SEC_LABEL
-🔑 Change Password
+󰌆 Change Password
 ${AUTOLOGIN_LABEL:+$AUTOLOGIN_LABEL
 }$SUDO_LABEL
 $SSH_LABEL
@@ -141,6 +141,7 @@ $AUTOUPDATE_LABEL
 
     S_CHOICE=$(echo -e "$SEC_OPTS" | tfuzzel -d -p " Security | " --width 48)
 
+    [ -n "$S_CHOICE" ] || menu_close
     if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Paranoid Mode" ]] && [[ "$S_CHOICE" =~ "ON"|"FAILED" ]]; then
@@ -198,42 +199,9 @@ $AUTOUPDATE_LABEL
     elif [[ "$S_CHOICE" =~ "Change Password" ]]; then
         change_password_flow
     elif [[ "$S_CHOICE" =~ "Skip Login After Disk Unlock" ]]; then
-        if [[ "$S_CHOICE" =~ "Current: On" ]]; then
-            $TERM_CMD bash -c 'tebian-autologin disable; echo; read -rp "Press Enter to close. "'
-            tnotify "Security" "Login screen shown after disk unlock"
-        else
-            $TERM_CMD bash -c 'tebian-autologin enable; echo; read -rp "Press Enter to close. "'
-            tnotify "Security" "Desktop opens after disk unlock (applies next boot)"
-        fi
-    elif [[ "$S_CHOICE" =~ "Enable Remote Access" ]]; then
-        # The firewall opens the port(s) sshd really listens on — "ufw allow
-        # ssh" is port 22 only, which locks out a custom Port
-        $TERM_CMD bash -c '
-        echo "Enabling SSH Server..."
-        sudo apt update && sudo apt install -y openssh-server
-        sudo systemctl enable --now ssh
-        if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
-            for p in $(sudo sshd -T 2>/dev/null | awk "\$1 == \"port\" { print \$2 }"); do
-                sudo ufw allow "$p/tcp" comment SSH >/dev/null && echo "Firewall: SSH port $p open."
-            done
-        fi
-        echo ""
-        echo "Done! You can now SSH into this machine."
-        echo "Your IP addresses:"
-        ip -4 a | grep inet | grep -v 127.0.0.1 | awk "{ print \"  \" \$2 }"
-        read -p "Press Enter to close..."'
-        tnotify "Security" "SSH enabled"
-    elif [[ "$S_CHOICE" =~ "Disable Remote Access" ]]; then
-        $TERM_CMD bash -c '
-        echo "Disabling SSH Server..."
-        ports=$(sudo sshd -T 2>/dev/null | awk "\$1 == \"port\" { print \$2 }")
-        sudo systemctl stop ssh ssh.socket 2>/dev/null
-        sudo systemctl disable ssh ssh.socket 2>/dev/null
-        sudo ufw delete allow ssh >/dev/null 2>&1
-        for p in $ports; do sudo ufw delete allow "$p/tcp" >/dev/null 2>&1; done
-        echo "Done! SSH access disabled."
-        read -p "Press Enter to close..."'
-        tnotify "Security" "SSH disabled"
+        autologin_toggle
+    elif [[ "$S_CHOICE" =~ "Remote Access" ]]; then
+        ssh_toggle
     elif [[ "$S_CHOICE" =~ "Key-Only Mode" ]]; then
         if [[ "$SSH_ACTIVE" != "ON" ]]; then
             tnotify "Security" "SSH is not enabled. Enable SSH first."
@@ -287,7 +255,7 @@ SYSEOF
         apparmor_menu
     elif [[ "$S_CHOICE" =~ "Firejail" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         FJ_ACT=$(echo -e "󰈡 Disable Sandboxing (keep Firejail)\n󰆴 Disable & Uninstall Firejail\n󰌍 Back" | tfuzzel -d -p " 󰈡 Firejail | ")
-        if is_back "$FJ_ACT"; then continue; fi
+        if [ -z "$FJ_ACT" ] || is_back "$FJ_ACT"; then continue; fi
         if [[ "$FJ_ACT" =~ "Disable Sandboxing" ]] || [[ "$FJ_ACT" =~ "Uninstall" ]]; then
             $TERM_CMD bash -c "echo 'Removing Firejail sandboxing...';
             for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
@@ -334,7 +302,7 @@ SYSEOF
         tnotify "Security" "In Paranoid Mode all traffic goes through Tor — turn Paranoid Mode off to stop it"
     elif [[ "$S_CHOICE" =~ "Tor Routing" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
         TOR_ACT=$(echo -e "󰗹 Disable Tor Service\n󰆴 Disable & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
-        if is_back "$TOR_ACT"; then continue; fi
+        if [ -z "$TOR_ACT" ] || is_back "$TOR_ACT"; then continue; fi
         local tor_purge=""
         [[ "$TOR_ACT" =~ "Uninstall" ]] && tor_purge=1
         SECMOD="$(security_module)" TOR_PURGE="$tor_purge" $TERM_CMD bash -c '
@@ -373,8 +341,8 @@ SYSEOF
         '
         tnotify "Security" "DNS Privacy disabled"
     elif [[ "$S_CHOICE" =~ "DNS Privacy" ]]; then
-        DNS_PROVIDER=$(echo -e "🛡️ Quad9 (privacy + malware blocking)\n⚡ Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
-        if is_back "$DNS_PROVIDER"; then continue; fi
+        DNS_PROVIDER=$(echo -e "󰇖 Quad9 (privacy + malware blocking)\n󰇖 Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
+        if [ -z "$DNS_PROVIDER" ] || is_back "$DNS_PROVIDER"; then continue; fi
         local dns_provider
         case "$DNS_PROVIDER" in
             *Cloudflare*) dns_provider=cloudflare ;;
@@ -392,27 +360,8 @@ SYSEOF
         else
             tnotify "Security" "DNS Privacy not enabled — see the terminal output"
         fi
-    elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
-        CONFIRM=$(echo -e "No, keep auto-updates\nYes, disable auto-updates" | tfuzzel -d --match-mode=exact -p " ⚠️ Disable auto security updates? | ")
-        if [[ "$CONFIRM" =~ "Yes" ]]; then
-            $TERM_CMD bash -c "echo 'Disabling automatic security updates...';
-            sudo apt remove -y unattended-upgrades;
-            echo '';
-            echo 'Auto-updates disabled. Run System Update manually.';
-            read -p 'Press Enter to close...'"
-            tnotify "Security" "Auto security updates disabled"
-        fi
     elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]]; then
-        $TERM_CMD bash -c "echo 'Enabling automatic security updates...';
-        echo '';
-        sudo apt update && sudo apt install -y unattended-upgrades;
-        # Non-interactive configuration
-        sudo mkdir -p /etc/apt/apt.conf.d;
-        printf 'APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades;
-        echo '';
-        echo 'Auto-updates enabled! Security patches will install automatically.';
-        read -p 'Press Enter to close...'"
-        tnotify "Security" "Auto security updates enabled"
+        auto_updates_toggle
     elif [[ "$S_CHOICE" =~ "Security Tools" ]]; then
         security_tools_menu
     elif [[ "$S_CHOICE" =~ "View Open Ports" ]]; then
@@ -424,6 +373,84 @@ SYSEOF
     done
 }
 
+# Skip Login After Disk Unlock: only offered when the system disk really is
+# encrypted (tebian-autologin decides)
+autologin_toggle() {
+    local state
+    state=$(tebian-autologin status 2>/dev/null)
+    if [ "$state" != on ] && [ "$state" != off ]; then
+        tnotify "Security" "Only for an encrypted system disk: there is no disk passphrase to unlock it with"
+        return
+    fi
+    if [ "$state" = on ]; then
+        $TERM_CMD bash -c 'tebian-autologin disable; echo; read -rp "Press Enter to close. "'
+        tnotify "Security" "Login screen shown after disk unlock"
+    else
+        $TERM_CMD bash -c 'tebian-autologin enable; echo; read -rp "Press Enter to close. "'
+        tnotify "Security" "Desktop opens after disk unlock (applies next boot)"
+    fi
+}
+
+# Remote access over SSH, on or off. The firewall opens the port(s) sshd
+# really listens on — "ufw allow ssh" is port 22 only, which locks out a
+# custom Port.
+ssh_toggle() {
+    if ! systemctl is-active --quiet ssh; then
+        $TERM_CMD bash -c '
+        echo "Enabling SSH Server..."
+        sudo apt update && sudo apt install -y openssh-server
+        sudo systemctl enable --now ssh
+        if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+            for p in $(sudo sshd -T 2>/dev/null | awk "\$1 == \"port\" { print \$2 }"); do
+                sudo ufw allow "$p/tcp" comment SSH >/dev/null && echo "Firewall: SSH port $p open."
+            done
+        fi
+        echo ""
+        echo "Done! You can now SSH into this machine."
+        echo "Your IP addresses:"
+        ip -4 a | grep inet | grep -v 127.0.0.1 | awk "{ print \"  \" \$2 }"
+        read -p "Press Enter to close..."'
+        tnotify "Security" "SSH enabled"
+    else
+        $TERM_CMD bash -c '
+        echo "Disabling SSH Server..."
+        ports=$(sudo sshd -T 2>/dev/null | awk "\$1 == \"port\" { print \$2 }")
+        sudo systemctl stop ssh ssh.socket 2>/dev/null
+        sudo systemctl disable ssh ssh.socket 2>/dev/null
+        sudo ufw delete allow ssh >/dev/null 2>&1
+        for p in $ports; do sudo ufw delete allow "$p/tcp" >/dev/null 2>&1; done
+        echo "Done! SSH access disabled."
+        read -p "Press Enter to close..."'
+        tnotify "Security" "SSH disabled"
+    fi
+}
+
+# unattended-upgrades on or off; turning it off asks first
+auto_updates_toggle() {
+    if dpkg -l unattended-upgrades 2>/dev/null | grep -q '^ii'; then
+        CONFIRM=$(echo -e "No, keep auto-updates\nYes, disable auto-updates" | tfuzzel -d --match-mode=exact -p " Disable auto security updates? | ")
+        if [[ "$CONFIRM" =~ "Yes" ]]; then
+            $TERM_CMD bash -c "echo 'Disabling automatic security updates...';
+            sudo apt remove -y unattended-upgrades;
+            echo '';
+            echo 'Auto-updates disabled. Run System Update manually.';
+            read -p 'Press Enter to close...'"
+            tnotify "Security" "Auto security updates disabled"
+        fi
+    else
+        $TERM_CMD bash -c "echo 'Enabling automatic security updates...';
+        echo '';
+        sudo apt update && sudo apt install -y unattended-upgrades;
+        # Non-interactive configuration
+        sudo mkdir -p /etc/apt/apt.conf.d;
+        printf 'APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades;
+        echo '';
+        echo 'Auto-updates enabled! Security patches will install automatically.';
+        read -p 'Press Enter to close...'"
+        tnotify "Security" "Auto security updates enabled"
+    fi
+}
+
 # Passwordless sudo on/off. Tebian manages two drop-ins:
 #   /etc/sudoers.d/tebian-sudo      USER ALL=(ALL:ALL) ALL          (password)
 #   /etc/sudoers.d/tebian-nopasswd  USER ALL=(ALL:ALL) NOPASSWD: ALL
@@ -432,7 +459,11 @@ SYSEOF
 # NOPASSWD file (not the sudo group), so deleting it alone would take sudo
 # away entirely. Every file is checked with visudo before it goes in.
 passwordless_sudo_toggle() {
-    local choice="$1"
+    # The menu passes its label; opened on its own, the state is read here
+    local choice="${1:-}"
+    if [ -z "$choice" ]; then
+        if sudo -k -n true 2>/dev/null; then choice="Current: On"; else choice="Current: Off"; fi
+    fi
     if [[ ! "$USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
         tnotify "Security" "Unexpected username '$USER' — not touching sudoers"
         return
@@ -541,7 +572,7 @@ firejail_desktop_overrides() {
 # Pick a whole profile; the module applies it (the same code install and
 # tebian-rebuild run). Paranoid has its own entry in the Security menu.
 security_profile_menu() {
-    local cur="$1" choice profile mark
+    local cur="${1:-$(security_current_profile)}" choice profile mark
     local -a rows=(
         "minimal|Minimal — firewall and fail2ban off"
         "standard|Standard — firewall, fail2ban, AppArmor, browser sandbox"
@@ -553,6 +584,7 @@ security_profile_menu() {
         menu+="$mark ${row#*|}\n"
     done
     choice=$(echo -e "${menu}󰌍 Back" | tfuzzel -d -p " Profile | " --width 62)
+    [ -n "$choice" ] || menu_close
     is_back "$choice" && return
     case "$choice" in
         *Minimal*)  profile=minimal ;;
@@ -567,7 +599,7 @@ security_profile_menu() {
     [ "$cur" = paranoid ] && warn="ends Paranoid Mode (traffic stops going through Tor)"
     if [ -n "$warn" ]; then
         local confirm
-        confirm=$(echo -e "No, cancel\nYes, switch to ${profile^}" | tfuzzel -d --match-mode=exact -p " ⚠️ This $warn | " --width 70)
+        confirm=$(echo -e "No, cancel\nYes, switch to ${profile^}" | tfuzzel -d --match-mode=exact -p " This $warn | " --width 70)
         [[ "$confirm" =~ "Yes" ]] || return
     fi
     SECMOD="$(security_module)" PROFILE="$profile" $TERM_CMD bash -c '
@@ -575,6 +607,8 @@ security_profile_menu() {
         echo ""
         read -p "Press Enter to close..."'
     tnotify "Security" "Security profile: $(security_current_profile)"
+    # Opened from the search the Security menu isn't there to record it
+    security_record_profile
 }
 
 # Record what the system is actually in — profile, Tor, DNS privacy — as
@@ -629,6 +663,7 @@ apparmor_menu() {
 
     local AA_CHOICE
     AA_CHOICE=$(echo -e "$AA_OPTS" | tfuzzel -d -p " 󰒃 AppArmor | " --width 42)
+    [ -n "$AA_CHOICE" ] || menu_close
     if is_back "$AA_CHOICE"; then return; fi
 
     if [[ "$AA_CHOICE" =~ "Enable" ]]; then
@@ -655,15 +690,16 @@ apparmor_menu() {
 security_logs_menu() {
     local LOG_OPTS=""
     # Build list of available log sources
-    systemctl is-active --quiet fail2ban 2>/dev/null && LOG_OPTS+="🛡️ Fail2Ban Logs\n"
-    systemctl is-active --quiet ufw 2>/dev/null && LOG_OPTS+="🔥 Firewall (UFW) Logs\n"
-    systemctl is-active --quiet ssh 2>/dev/null && LOG_OPTS+="🔑 SSH Auth Logs\n"
-    LOG_OPTS+="📋 All Auth Logs\n"
+    systemctl is-active --quiet fail2ban 2>/dev/null && LOG_OPTS+="󰍉 Fail2Ban Logs\n"
+    systemctl is-active --quiet ufw 2>/dev/null && LOG_OPTS+="󰍉 Firewall (UFW) Logs\n"
+    systemctl is-active --quiet ssh 2>/dev/null && LOG_OPTS+="󰍉 SSH Auth Logs\n"
+    LOG_OPTS+="󰍉 All Auth Logs\n"
     systemctl is-active --quiet apparmor 2>/dev/null && LOG_OPTS+="󰒃 AppArmor Denials\n"
     LOG_OPTS+="󰌍 Back"
 
     local LOG_CHOICE
     LOG_CHOICE=$(echo -e "$LOG_OPTS" | tfuzzel -d -p " 󰍉 Security Logs | ")
+    [ -n "$LOG_CHOICE" ] || menu_close
     if is_back "$LOG_CHOICE"; then return; fi
 
     if [[ "$LOG_CHOICE" =~ "Fail2Ban" ]]; then
@@ -694,6 +730,7 @@ security_tools_menu() {
 
     ST_CHOICE=$(echo -e "$ST_OPTS" | tfuzzel -d -p " 󰒃 Security Tools | ")
 
+    [ -n "$ST_CHOICE" ] || menu_close
     if is_back "$ST_CHOICE"; then return; fi
 
     if [[ "$ST_CHOICE" =~ "Recon" ]]; then
@@ -809,6 +846,7 @@ sec_tool_install_menu() {
     local CHOICE
     CHOICE=$(echo -e "$MENU_ITEMS" | tfuzzel -d -p " 󰒃 $CATEGORY | ")
 
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
     # Find which tool was selected
@@ -885,15 +923,15 @@ secure_workspace_menu() {
         SW_OPTS="󰋽 Gateway: $GW_STATE
 󰋽 Workstation: $WS_STATE"
         if [[ "$WS_STATE" == "running" ]]; then
-            SW_OPTS+="\n🛑 Stop Workspace
+            SW_OPTS+="\n󰅖 Stop Workspace
 󰍹 Open Workstation (virt-viewer)"
         else
-            SW_OPTS+="\n▶️ Start Workspace"
+            SW_OPTS+="\n󰐊 Start Workspace"
         fi
         SW_OPTS+="\n󰩈 Destroy Workspace (delete everything)"
         SW_OPTS+="\n󰌍 Back"
     else
-        SW_OPTS="☠️ Setup Secure Workspace
+        SW_OPTS="󰗹 Setup Secure Workspace
 Architecture:
   Workstation ──▶ Gateway ──▶ Tor ──▶ Internet
   (your work)    (Tor proxy)
@@ -901,8 +939,9 @@ Architecture:
 󰌍 Back"
     fi
 
-    SW_CHOICE=$(echo -e "$SW_OPTS" | tfuzzel -d -p " ☠️ Secure Workspace | ")
+    SW_CHOICE=$(echo -e "$SW_OPTS" | tfuzzel -d -p " 󰗹 Secure Workspace | ")
 
+    [ -n "$SW_CHOICE" ] || menu_close
     if is_back "$SW_CHOICE"; then return; fi
 
     if [[ "$SW_CHOICE" =~ "Setup Secure Workspace" ]]; then

@@ -76,6 +76,7 @@ $printers
 
     local CHOICE
     CHOICE=$(echo -e "$OPTS" | tfuzzel -d -p " 󰒓 System | " --width 50)
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
     case "$(sysprefs_words "$CHOICE")" in
@@ -225,19 +226,19 @@ datetime_menu() {
     local OPTS="󰥔 Now: $now
 󰥔 Time Zone: ${zone:-unknown}
 $ntp_label
-󰥔 Clock Format: $clock_fmt (in Desktop & UI)
+󰥔 Clock Format: $clock_fmt
 󰌍 Back"
 
     local CHOICE
     CHOICE=$(echo -e "$OPTS" | tfuzzel -d -p " 󰥔 Date & Time | " --width 50)
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
     case "$(sysprefs_words "$CHOICE")" in
         "Time Zone"*)      timezone_menu ;;
         "Automatic Time"*) ntp_toggle ;;
-        # The 12/24-hour switch lives in Desktop & UI beside the bar's other
-        # settings; open it there rather than keep a second copy
-        "Clock Format"*)   ui_menu ;;
+        # The same switch as in Desktop & UI, beside the bar's other settings
+        "Clock Format"*)   clock_format_toggle ;;
     esac
     done
 }
@@ -257,6 +258,7 @@ timezone_menu() {
         [ -n "$cur" ] && echo "$cur (current)"
         grep -vxF -- "${cur:-//}" <<< "$zones"
     } | tfuzzel -d -p " 󰥔 Time Zone (type a city) | " --width 50)
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
     local zone="${CHOICE% (current)}"
@@ -371,6 +373,7 @@ locale_menu() {
         awk -v c="$cur" '$1 == c { print $0 " (current)"; exit }' <<< "$list"
         awk -v c="$cur" '$1 != c' <<< "$list"
     } | tfuzzel -d -p " 󰖟 Language & Region (now: ${cur:-not set}) | " --width 70)
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
     local loc="${CHOICE%% *}"
@@ -474,6 +477,7 @@ notifications_menu() {
     esac
     local CHOICE
     CHOICE=$(echo -e "$dnd_label\n󰍡 Notification History\n󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 45)
+    [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
     case "$(sysprefs_words "$CHOICE")" in
         "Do Not Disturb"*)       dnd_toggle ;;

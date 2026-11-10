@@ -79,6 +79,9 @@ PACKAGES=(
     fonts-noto-core fonts-noto-color-emoji fonts-jetbrains-mono
     network-manager
     curl
+    # xdg-open/xdg-settings/xdg-mime: links from apps, Settings > Default
+    # Apps. Only wl-clipboard's Recommends brought it in before
+    xdg-utils
     libnotify-bin mako-notifier
     grim slurp wl-clipboard
     brightnessctl wob

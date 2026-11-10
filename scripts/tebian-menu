@@ -82,11 +82,22 @@ for id in "${APP_IDS[@]}"; do
     [ -n "${PINNED[$id]+x}" ] || add "${LABEL[$id]}" "${ICON[$id]}" "app:$id"
 done
 
-# --- SETTINGS SEARCH HOOK (phase 2) -------------------------------------------
-# Settings entries are appended here, after the apps, each as
-#   add "<label>" "" "setting:<id>"
-# from `tebian-settings --search-list`; picking one runs the "setting:*"
-# branch below. Nothing is added yet.
+# --- SETTINGS SEARCH HOOK -----------------------------------------------------
+# Every setting, after all the apps, so typing "time zone" or "printer" finds
+# it too; picking one runs the "setting:*" branch below. --search-list reads
+# one table and takes no lock, so an open Settings window is left alone.
+# Read in one go and split on newlines (bash reads a pipe a byte at a time
+# for read and mapfile), then appended whole-array, no icon; the action keeps
+# "id<TAB>label", cut in the branch below. Four hundred lines handled one at
+# a time added a noticeable pause to Mod+D.
+settings_out=$(tebian-settings --search-list 2>/dev/null)
+set -f; old_ifs=$IFS; IFS=$'\n'
+# shellcheck disable=SC2206  # split on newlines on purpose, globbing off
+SETTINGS=($settings_out)
+IFS=$old_ifs; set +f
+ENTRY+=("${SETTINGS[@]#*$'\t'}")
+ICONS+=("${SETTINGS[@]/*/}")
+ACTION+=("${SETTINGS[@]/#/setting:}")
 # ------------------------------------------------------------------------------
 
 LINES=$TOP
@@ -106,7 +117,7 @@ print_entries() {
     done
 }
 
-PICK=$(print_entries | tfuzzel -d --index -p " 󰀻 Tebian | " --width 30 --lines "$LINES")
+PICK=$(print_entries | tfuzzel -d --index -p " 󰀻 Tebian | " --width 40 --lines "$LINES")
 
 # Escape, or text typed that matched nothing
 [[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#ACTION[@]}" ] || exit 0
@@ -120,7 +131,9 @@ case "${ACTION[$PICK]}" in
         tebian_app_launch "${ACTION[$PICK]#app:}" ||
             notify-send "Menu" "Could not start ${ENTRY[$PICK]}" 2>/dev/null
         ;;
-    # SETTINGS SEARCH HOOK (phase 2): entries added above land here
-    setting:*) tebian-settings --open "${ACTION[$PICK]#setting:}" ;;
+    # SETTINGS SEARCH HOOK: entries added above land here
+    setting:*)
+        id="${ACTION[$PICK]#setting:}"
+        tebian-settings --open "${id%%$'\t'*}" ;;
 esac
 exit 0

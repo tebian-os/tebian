@@ -27,6 +27,7 @@ audio_menu() {
         choice=$(printf '%s\n' "󰕾 Audio Mixer" "󰓃 $out_label" "󰍬 $in_label" \
             "󰍭 $mute_label" "󰌍 Back" | tfuzzel -d -p " Audio | " --width 60)
 
+        [ -n "$choice" ] || menu_close
         if is_back "$choice"; then return; fi
 
         # Matched from the start, after the glyph (none in text mode): the
@@ -59,7 +60,7 @@ audio_need_wpctl() {
     local c
     c=$(printf '%s\n' "󰏗 Install PipeWire (sound server)" "󰌍 Back" \
         | tfuzzel -d -p " PipeWire not installed | ")
-    is_back "$c" && return 1
+    if [ -z "$c" ] || is_back "$c"; then return 1; fi
     if tebian_term_apt_install pipewire-audio wireplumber; then
         # The user services start on the next login, not in this session
         tnotify "Audio" "PipeWire installed. Log out and back in to use it."
@@ -153,6 +154,7 @@ audio_pick_device() {
 
     local choice i
     choice=$(printf '%s\n' "${labels[@]}" "󰌍 Back" | tfuzzel -d -p " $title | " --width 60)
+    [ -n "$choice" ] || menu_close
     if is_back "$choice"; then return; fi
     # Device labels carry no glyph, so icon and text mode return the same text
     for i in "${!labels[@]}"; do

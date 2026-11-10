@@ -5,7 +5,7 @@
 software_hub() {
     while true; do
     SH_OPTS="󰖟 Web Browser
-📦 Package Browser
+󰏗 Package Browser
 󰚩 AI Tools
 󰊴 Software & Gaming
 󰆍 Terminal
@@ -15,6 +15,7 @@ software_hub() {
 
     SH_CHOICE=$(echo -e "$SH_OPTS" | tfuzzel -d -p " 󰏗 Software | ")
 
+    [ -n "$SH_CHOICE" ] || menu_close
     if is_back "$SH_CHOICE"; then return; fi
 
     if [[ "$SH_CHOICE" =~ "Web Browser" ]]; then
@@ -41,14 +42,15 @@ browser_menu() {
     local BR_OPTS="" BR_ID BR_CHOICE BR_ACT BR_NAME
     for BR_ID in $(tebian-browser list); do
         if tebian-browser installed "$BR_ID"; then
-            BR_OPTS+="🟢 $(tebian-browser label "$BR_ID") (Installed)\n"
+            BR_OPTS+="󰄬 $(tebian-browser label "$BR_ID") (Installed)\n"
         else
-            BR_OPTS+="⚪ $(tebian-browser label "$BR_ID")\n"
+            BR_OPTS+="󰄰 $(tebian-browser label "$BR_ID")\n"
         fi
     done
 
     BR_CHOICE=$(echo -e "${BR_OPTS}󰌍 Back" | tfuzzel -d -p " 󰖟 Web Browser | " --width 78)
 
+    [ -n "$BR_CHOICE" ] || menu_close
     if is_back "$BR_CHOICE"; then return; fi
 
     BR_ID=$(tebian-browser id-of "$BR_CHOICE") || continue
@@ -56,7 +58,7 @@ browser_menu() {
 
     if tebian-browser installed "$BR_ID"; then
         BR_ACT=$(echo -e "󰖟 Launch $BR_NAME\n󰆴 Remove $BR_NAME\n󰌍 Back" | tfuzzel -d -p " $BR_NAME | ")
-        if is_back "$BR_ACT"; then continue; fi
+        if [ -z "$BR_ACT" ] || is_back "$BR_ACT"; then continue; fi
         if [[ "$BR_ACT" =~ "Launch" ]]; then
             tebian-browser launch "$BR_ID"
             return
@@ -96,14 +98,15 @@ ai_tools_menu() {
             AI_LAST=$AI_GROUP
         fi
         if tebian-ai-tools installed "$AI_ID"; then
-            AI_OPTS+="🟢 $(tebian-ai-tools label "$AI_ID") (Installed)\n"
+            AI_OPTS+="󰄬 $(tebian-ai-tools label "$AI_ID") (Installed)\n"
         else
-            AI_OPTS+="⚪ $(tebian-ai-tools label "$AI_ID")\n"
+            AI_OPTS+="󰄰 $(tebian-ai-tools label "$AI_ID")\n"
         fi
     done
 
     AI_CHOICE=$(echo -e "${AI_OPTS}󰌍 Back" | tfuzzel -d -p " 󰚩 AI Tools | " --width 70)
 
+    [ -n "$AI_CHOICE" ] || menu_close
     if is_back "$AI_CHOICE"; then return; fi
 
     # The group headers match no tool, so picking one just redraws
@@ -124,7 +127,7 @@ ai_tools_menu() {
         AI_ACTIONS+="\n󰆴 Remove $AI_NAME"
     fi
     AI_ACT=$(echo -e "$AI_ACTIONS\n󰌍 Back" | tfuzzel -d -p " $AI_NAME | ")
-    if is_back "$AI_ACT"; then continue; fi
+    if [ -z "$AI_ACT" ] || is_back "$AI_ACT"; then continue; fi
 
     if [[ "$AI_ACT" =~ "Open" ]]; then
         if [ "$(tebian-ai-tools group "$AI_ID")" = app ]; then
@@ -150,21 +153,21 @@ de_menu() {
     local gnome_status kde_status cinnamon_status
 
     if dpkg -l gnome-shell 2>/dev/null | grep -q '^ii'; then
-        gnome_status="🟢 GNOME (Installed — Remove)"
+        gnome_status="󰄬 GNOME (Installed — Remove)"
     else
-        gnome_status="⚪ GNOME (Install)"
+        gnome_status="󰄰 GNOME (Install)"
     fi
 
     if dpkg -l kde-plasma-desktop 2>/dev/null | grep -q '^ii'; then
-        kde_status="🟢 KDE Plasma (Installed — Remove)"
+        kde_status="󰄬 KDE Plasma (Installed — Remove)"
     else
-        kde_status="⚪ KDE Plasma (Install)"
+        kde_status="󰄰 KDE Plasma (Install)"
     fi
 
     if dpkg -l cinnamon-desktop-environment 2>/dev/null | grep -q '^ii'; then
-        cinnamon_status="🟢 Cinnamon (Installed — Remove)"
+        cinnamon_status="󰄬 Cinnamon (Installed — Remove)"
     else
-        cinnamon_status="⚪ Cinnamon (Install)"
+        cinnamon_status="󰄰 Cinnamon (Install)"
     fi
 
     DE_OPTS="󰍹 Desktop Environments
@@ -176,6 +179,7 @@ $cinnamon_status
 
     DE_CHOICE=$(echo -e "$DE_OPTS" | tfuzzel -d -p " 󰍹 DEs | ")
 
+    [ -n "$DE_CHOICE" ] || menu_close
     if is_back "$DE_CHOICE"; then return; fi
 
     # GNOME
@@ -307,6 +311,7 @@ Install Legacy System Utils (man, locate...)
     
     E_CHOICE=$(echo -e "$E_OPTS" | tfuzzel -d -p " 󰑓 Essentials | ")
 
+    [ -n "$E_CHOICE" ] || menu_close
     if is_back "$E_CHOICE"; then return; fi
 
     if [[ "$E_CHOICE" =~ "Legacy System Utils" ]]; then
@@ -348,7 +353,9 @@ Install Legacy System Utils (man, locate...)
             echo ''
             echo 'Configuring...'
             mkdir -p ~/.config/mako
-            [ -f ~/.config/mako/config ] || echo 'default-timeout=5000' > ~/.config/mako/config
+            # The shipped config, not a one-liner: it defines the do-not-disturb mode
+            [ -f ~/.config/mako/config ] || cp \"\${TEBIAN_DIR:-\$HOME/Tebian}/configs/mako/config\" ~/.config/mako/config 2>/dev/null ||
+                echo 'default-timeout=5000' > ~/.config/mako/config
             tebian-lockscreen-setup
             # ZRAM
             if command -v zramctl &>/dev/null; then
@@ -383,7 +390,9 @@ Install Legacy System Utils (man, locate...)
         $TERM_CMD bash -c "
             sudo apt update && sudo apt install -y mako-notifier
             mkdir -p ~/.config/mako
-            [ -f ~/.config/mako/config ] || echo 'default-timeout=5000' > ~/.config/mako/config
+            # The shipped config, not a one-liner: it defines the do-not-disturb mode
+            [ -f ~/.config/mako/config ] || cp \"\${TEBIAN_DIR:-\$HOME/Tebian}/configs/mako/config\" ~/.config/mako/config 2>/dev/null ||
+                echo 'default-timeout=5000' > ~/.config/mako/config
             echo 'Done! Run: mako & to start'; read -p 'Press Enter...'
         "
     elif [[ "$E_CHOICE" =~ "Clipboard" ]]; then
@@ -427,6 +436,7 @@ Current default: ${DEFAULT_TERM:-kitty}
 
     T_CHOICE=$(echo -e "$TERM_OPTS" | tfuzzel -d -p " 󰆍 Terminal | ")
 
+    [ -n "$T_CHOICE" ] || menu_close
     if is_back "$T_CHOICE"; then return; fi
     # Informational row — contains a terminal name, don't treat as an install pick
     if [[ "$T_CHOICE" =~ "Current default" ]]; then continue; fi
@@ -564,9 +574,9 @@ software_menu() {
 
     # Build Dynamic Menu
     APPS="󰌍 Back
-📦 Install Flatpak Support
-📦 Install Distrobox (AUR)
-📦 Install Nix Package Manager"
+󰏗 Install Flatpak Support
+󰏗 Install Distrobox (AUR)
+󰏗 Install Nix Package Manager"
     
     # Steam Logic
     if [[ "$HAS_STEAM" == "YES" ]]; then
@@ -609,6 +619,7 @@ software_menu() {
 
     A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | " --width 50)
     
+    [ -n "$A_CHOICE" ] || menu_close
     if is_back "$A_CHOICE"; then return; fi
 
     # Action Handlers
@@ -831,6 +842,7 @@ gfx_drivers_menu() {
 󰌍 Back"
 
         G_CHOICE=$(echo -e "$G_OPTS" | tfuzzel -d -p " 󰢮 Graphics | ")
+        [ -n "$G_CHOICE" ] || menu_close
         if is_back "$G_CHOICE"; then return; fi
 
         if [[ "$G_CHOICE" =~ "Switch to Backports" ]]; then
@@ -892,6 +904,7 @@ package_browser() {
 
     PB_CHOICE=$(echo -e "$PB_OPTS" | tfuzzel -d -p " 󰏗 Packages | ")
 
+    [ -n "$PB_CHOICE" ] || menu_close
     if is_back "$PB_CHOICE"; then return; fi
 
     if [[ "$PB_CHOICE" =~ "Search APT" ]]; then
@@ -950,7 +963,7 @@ apt_search() {
     local SEL
     SEL=$(printf '%s\n' "$MENU" | tfuzzel -d -p " 󰏗 Results ($COUNT) | ")
 
-    if is_back "$SEL"; then return; fi
+    if [ -z "$SEL" ] || is_back "$SEL"; then return; fi
 
     # Extract package name — strip only the known status icons (in no_icons
     # mode the icon is already gone, so a blanket "delete first word" would
@@ -982,7 +995,7 @@ apt_package_action() {
     local A_CHOICE
     A_CHOICE=$(echo -e "$ACTION_OPTS" | tfuzzel -d -p " 󰏗 $PKG | ")
 
-    if is_back "$A_CHOICE"; then return; fi
+    if [ -z "$A_CHOICE" ] || is_back "$A_CHOICE"; then return; fi
 
     # Whole-label matches: the description row can contain "Install" too
     if [[ "$A_CHOICE" == *"Uninstall $PKG" ]]; then
@@ -1047,6 +1060,7 @@ apt_installed_browser() {
         local SEL
         SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Installed APT ($COUNT) | ")
 
+        [ -n "$SEL" ] || menu_close
         if is_back "$SEL"; then return; fi
 
         local SEL_PKG
@@ -1100,7 +1114,7 @@ flatpak_search() {
     local SEL
     SEL=$(printf '%s\n' "$MENU" | tfuzzel -d -p " 󰏗 Flatpak ($COUNT) | ")
 
-    if is_back "$SEL"; then return; fi
+    if [ -z "$SEL" ] || is_back "$SEL"; then return; fi
 
     # Extract app ID from brackets
     local APP_ID
@@ -1120,7 +1134,7 @@ flatpak_search() {
     local FP_CHOICE
     FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
 
-    if is_back "$FP_CHOICE"; then return; fi
+    if [ -z "$FP_CHOICE" ] || is_back "$FP_CHOICE"; then return; fi
 
     # Whole-label matches: "Uninstall org.x.Installer" contains "Install"
     if [[ "$FP_CHOICE" == *"Uninstall $APP_ID" ]]; then
@@ -1169,6 +1183,7 @@ flatpak_installed_browser() {
         local SEL
         SEL=$(echo -e "$MENU" | tfuzzel -d -p " 󰏗 Installed Flatpak ($COUNT) | ")
 
+        [ -n "$SEL" ] || menu_close
         if is_back "$SEL"; then return; fi
 
         local APP_ID
@@ -1181,7 +1196,7 @@ flatpak_installed_browser() {
         local FP_CHOICE
         FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
 
-        if is_back "$FP_CHOICE"; then continue; fi
+        if [ -z "$FP_CHOICE" ] || is_back "$FP_CHOICE"; then continue; fi
 
         if [[ "$FP_CHOICE" =~ "Uninstall" ]]; then
             $TERM_CMD bash -c "

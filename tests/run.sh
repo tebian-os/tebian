@@ -107,6 +107,100 @@ else
     pass "tebian.org links are https"
 fi
 
+# 7. Settings search: every row opens a function the modules define, and
+#    ids (what `tebian-settings --open` takes) are unique. Modules are only
+#    sourced — they define functions and variables, nothing runs — in a
+#    child shell with a throwaway HOME.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+index_out=$(HOME="$tmp" bash -c '
+    for m in scripts/tebian-settings.d/*.sh; do source "$m" || echo "SOURCE-FAILED $m"; done
+    printf "%s" "$SETTINGS_INDEX" | while IFS="|" read -r id label words where fn; do
+        [ -n "$id" ] || continue
+        [ -n "$label" ] && [ -n "$fn" ] || echo "MALFORMED $id"
+        declare -F "$fn" >/dev/null || echo "UNDEFINED $id -> $fn"
+        echo "ID $id"
+    done' 2>&1 || true)
+bad=$(grep -E '^(SOURCE-FAILED|MALFORMED|UNDEFINED) ' <<< "$index_out" || true)
+dups=$(grep '^ID ' <<< "$index_out" | sort | uniq -d || true)
+count=$(grep -c '^ID ' <<< "$index_out" || true)
+if [ -n "$bad" ] || [ -n "$dups" ] || [ "$count" -lt 20 ]; then
+    fail "settings search index:"; echo "$bad"; [ -z "$dups" ] || echo "duplicate ids: $dups"
+    [ "$count" -ge 20 ] || echo "only $count rows read"
+else
+    pass "settings search: $count rows, all open a defined function, ids unique"
+fi
+
+# 8. No entry twice in the Settings top level and More together: the label
+#    words without the glyph, and without a hint in parentheses
+labels=$( {
+    awk '/local -a top=\(/ { f = 1; next } f && /^ *\)/ { exit } f' scripts/tebian-settings |
+        sed -E 's/^ *"([^"]*)".*/\1/'
+    awk '/^more_menu\(\)/ { f = 1 } f && /M_OPTS="/ { g = 1; sub(/.*M_OPTS="/, "") }
+         g { if (sub(/".*/, "")) { print; exit } print }' scripts/tebian-settings.d/system.sh
+} | perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}]//g; s/^\s+//; s/\s*\(.*//' | grep -v '^Back$')
+dups=$(sort <<< "$labels" | uniq -d)
+if [ -z "$labels" ] || [ "$(wc -l <<< "$labels")" -lt 15 ]; then
+    fail "menu labels: couldn't read the top level and More menus"
+elif [ -n "$dups" ]; then
+    fail "menu entries listed twice in Settings (top level + More):"; echo "$dups"
+else
+    pass "Settings top level and More: $(wc -l <<< "$labels") entries, none twice"
+fi
+
+# 9. The app index (tebian-common) on a fixture tree: a user copy with
+#    NoDisplay=true hides the system entry, a missing TryExec hides an app,
+#    and only [Desktop Entry]'s own untranslated Name counts
+mkdir -p "$tmp/user/applications" "$tmp/sys/applications" "$tmp/home"
+printf '[Desktop Entry]\nType=Application\nName=Alpha\nExec=alpha\n' \
+    > "$tmp/sys/applications/tebiantest-a.desktop"
+printf '[Desktop Entry]\nType=Application\nName=Alpha\nExec=alpha\nNoDisplay=true\n' \
+    > "$tmp/user/applications/tebiantest-a.desktop"
+printf '[Desktop Entry]\nType=Application\nName=Beta\nExec=beta\nTryExec=/nonexistent/tebian-test-beta\n' \
+    > "$tmp/sys/applications/tebiantest-b.desktop"
+printf '[Desktop Entry]\nType=Application\nName[de]=Gamma DE\nName=Gamma\nExec=gamma %%U\n\n[Desktop Action new]\nName=New Gamma Window\nExec=gamma --new\n' \
+    > "$tmp/sys/applications/tebiantest-c.desktop"
+apps=$(HOME="$tmp/home" XDG_DATA_HOME="$tmp/user" XDG_DATA_DIRS="$tmp/sys" XDG_CURRENT_DESKTOP=sway \
+    bash -c 'source scripts/tebian-common && tebian_apps_list' 2>&1 | grep '^tebiantest-' || true)
+want=$(printf 'tebiantest-c.desktop\tGamma\t\t0')
+if [ "$apps" = "$want" ]; then
+    pass "app index: NoDisplay override, TryExec, translated and action names handled"
+else
+    fail "app index on the fixture tree gave:"; printf '%s\n' "$apps" | cat -A | head -5
+fi
+
+# 10. Field codes: a quoted code goes with its quotes, %% is a literal %
+got=$(bash -c 'source scripts/tebian-common && _tebian_exec_expand "a %U \"%f\" 100%%"' 2>&1 || true)
+if [ "$got" = "a   100%" ]; then
+    pass "Exec field codes expand as the spec says"
+else
+    fail "_tebian_exec_expand 'a %U \"%f\" 100%%' gave [$got], expected [a   100%]"
+fi
+
+# 11. No key bound twice: config.user is included after the base config, so
+#     a second binding there silently replaces the first. Bindings inside a
+#     block (mode "resize" { }, bar { }) are separate from the top level.
+dups=$(awk '
+    { sub(/^[ \t]+/, "") }
+    /^#/ { next }
+    /\{[ \t]*$/ { scope[++d] = $0; next }
+    /^\}/ { if (d) d--; next }
+    $1 == "bindsym" {
+        k = ""
+        for (i = 2; i <= NF; i++) if ($i !~ /^--/) { k = $i; break }
+        n = split(tolower(k), p, "+"); # modifiers in any order are one binding
+        for (i = 1; i < n; i++) for (j = i + 1; j < n; j++) if (p[j] < p[i]) { t = p[i]; p[i] = p[j]; p[j] = t }
+        k = p[n]; for (i = n - 1; i >= 1; i--) k = p[i] "+" k
+        s = (d ? scope[d] : "")
+        if ((s, k) in seen) print FILENAME ":" FNR ": " k " (also " seen[s, k] ")"
+        else seen[s, k] = FILENAME ":" FNR
+    }' configs/sway/config configs/sway/config.user)
+if [ -n "$dups" ]; then
+    fail "sway keys bound twice:"; echo "$dups"
+else
+    pass "sway: no key bound twice across config and config.user"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
     echo -e "${GREEN}All checks passed.${NC}"

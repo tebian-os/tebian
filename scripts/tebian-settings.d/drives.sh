@@ -58,12 +58,13 @@ drives_menu() {
             done < <(lsblk -nrpo NAME "$disk")
             [ -n "$mounted" ] || continue
             label=$(lsblk -nro LABEL "$disk" | grep -m1 .) || label="USB drive"
-            opts+="\n⏏ Eject $label ($disk)"
+            opts+="\n󰋊 Eject $label ($disk)"
         done < <(lsblk -dnrpo NAME,TRAN | awk '$2=="usb"{print $1}')
 
         opts+="\n󰌍 Back"
 
         D_CHOICE=$(echo -e "$opts" | tfuzzel -d -p " 󰋊 Drives | ")
+        [ -n "$D_CHOICE" ] || menu_close
         if is_back "$D_CHOICE"; then return; fi
 
         if [[ "$D_CHOICE" =~ "Drive Doctor" ]]; then
@@ -136,6 +137,7 @@ format_drive_menu() {
     fi
 
     choice=$(echo -e "${disks}󰌍 Back" | tfuzzel -d -w 60 -p " Format which drive? | ")
+    [ -n "$choice" ] || menu_close
     if is_back "$choice"; then return; fi
     [[ "$choice" =~ \[(/dev/[a-zA-Z0-9]+)\]$ ]] || return
     disk="${BASH_REMATCH[1]}"
@@ -144,7 +146,7 @@ format_drive_menu() {
 NTFS — Windows, best for big files and Windows backups
 ext4 — Linux only
 󰌍 Back" | tfuzzel -d -w 60 -p " Format as | ")
-    if is_back "$choice"; then return; fi
+    if [ -z "$choice" ] || is_back "$choice"; then return; fi
     case "$choice" in
         exFAT*) fs=exfat ;;
         NTFS*)  fs=ntfs ;;

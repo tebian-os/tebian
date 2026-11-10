@@ -6,9 +6,9 @@ ui_menu() {
     while true; do
     # Detect icon state
     if [ -f "$HOME/.config/tebian/no_icons" ]; then
-        ICON_LABEL="📦 Enable UI Icons (Text Mode: ON)"
+        ICON_LABEL="󰇄 Enable UI Icons (Text Mode: ON)"
     else
-        ICON_LABEL="🚫 Disable UI Icons (Text Mode: OFF)"
+        ICON_LABEL="󰇄 Disable UI Icons (Text Mode: OFF)"
     fi
 
     # Detect bar state
@@ -100,26 +100,17 @@ $SNAP_LABEL
 $FX_LABEL
 󰛖 Font Rendering
 󰌌 Keybinds (Mod+S: settings, Mod+D: apps)
-󰍽 Input Devices
 󰌍 Back"
     
     U_CHOICE=$(echo -e "$UI_OPTS" | tfuzzel -d -p " 󰇄 UI | ")
 
+    [ -n "$U_CHOICE" ] || menu_close
     if is_back "$U_CHOICE"; then return; fi
 
-    if [[ "$U_CHOICE" =~ "Disable UI Icons" ]]; then
-        mkdir -p "$HOME/.config/tebian"
-        touch "$HOME/.config/tebian/no_icons"
-        tnotify "Tebian UI" "Text Mode Enabled (Icons Hidden)"
-    elif [[ "$U_CHOICE" =~ "Enable UI Icons" ]]; then
-        rm -f "$HOME/.config/tebian/no_icons"
-        tnotify "Tebian UI" "Icon Mode Enabled"
+    if [[ "$U_CHOICE" =~ "UI Icons" ]]; then
+        ui_icons_toggle
     elif [[ "$U_CHOICE" =~ "Bar Style" ]]; then
-        if tebian_block_has bar-style; then
-            bar_style_set classic
-        else
-            bar_style_set modern
-        fi
+        bar_style_toggle
     elif [[ "$U_CHOICE" =~ "Show Bar Always" ]]; then
         bar_set_mode dock
         tnotify "UI" "Bar set to always visible"
@@ -163,26 +154,9 @@ $FX_LABEL
         swaymsg '[class=".*"] border normal 2' 2>/dev/null
         tnotify "UI" "Title bars enabled"
     elif [[ "$U_CHOICE" == *"Clock (Current"* ]]; then
-        mkdir -p "$HOME/.config/tebian"
-        if [ -f "$HOME/.config/tebian/clock-12h" ]; then
-            rm -f "$HOME/.config/tebian/clock-12h"
-            tnotify "Clock" "24-hour clock"
-        else
-            touch "$HOME/.config/tebian/clock-12h"
-            tnotify "Clock" "12-hour clock"
-        fi
-        # The bar reads it at start; sway restarts the bar on reload
-        swaymsg reload >/dev/null 2>&1 &
-    elif [[ "$U_CHOICE" == *"Weather in Bar (OFF)"* ]]; then
-        tebian-weather setup
-    elif [[ "$U_CHOICE" == *"Weather in Bar (ON"* ]]; then
-        W_CHOICE=$(echo -e "󰖐 Change Place\n󰖪 Turn Off Weather\n󰌍 Back" | tfuzzel -d -p " 󰖐 Weather | ")
-        if [[ "$W_CHOICE" =~ "Change Place" ]]; then
-            tebian-weather setup
-        elif [[ "$W_CHOICE" =~ "Turn Off" ]]; then
-            tebian-weather off
-            tnotify "Weather" "Off — nothing is fetched any more"
-        fi
+        clock_format_toggle
+    elif [[ "$U_CHOICE" == *"Weather in Bar"* ]]; then
+        weather_menu
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
         window_snapping_install
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
@@ -200,7 +174,65 @@ $FX_LABEL
     elif [[ "$U_CHOICE" =~ "Font Rendering" ]]; then
         font_rendering_menu
     elif [[ "$U_CHOICE" =~ "Keybinds" ]]; then
-        KEY_LIST="Mod+D ··· App Launcher
+        keybinds_list
+    fi
+    done
+}
+
+# Text Mode: menus without icons (tfuzzel strips them when this file exists)
+ui_icons_toggle() {
+    if [ -f "$HOME/.config/tebian/no_icons" ]; then
+        rm -f "$HOME/.config/tebian/no_icons"
+        tnotify "Tebian UI" "Icon Mode Enabled"
+    else
+        mkdir -p "$HOME/.config/tebian"
+        touch "$HOME/.config/tebian/no_icons"
+        tnotify "Tebian UI" "Text Mode Enabled (Icons Hidden)"
+    fi
+}
+
+bar_style_toggle() {
+    if tebian_block_has bar-style; then
+        bar_style_set classic
+    else
+        bar_style_set modern
+    fi
+}
+
+# The bar's clock, 12- or 24-hour. Also reached from System > Date & Time.
+clock_format_toggle() {
+    mkdir -p "$HOME/.config/tebian"
+    if [ -f "$HOME/.config/tebian/clock-12h" ]; then
+        rm -f "$HOME/.config/tebian/clock-12h"
+        tnotify "Clock" "24-hour clock"
+    else
+        touch "$HOME/.config/tebian/clock-12h"
+        tnotify "Clock" "12-hour clock"
+    fi
+    # The bar reads it at start; sway restarts the bar on reload
+    swaymsg reload >/dev/null 2>&1 &
+}
+
+# Weather in the Modern bar: set a place when it's off, change or stop it
+# when it's on
+weather_menu() {
+    local w_state W_CHOICE
+    IFS=$'\t' read -r w_state _ < <(tebian-weather status 2>/dev/null)
+    if [ "$w_state" != on ]; then
+        tebian-weather setup
+        return
+    fi
+    W_CHOICE=$(echo -e "󰖐 Change Place\n󰖪 Turn Off Weather\n󰌍 Back" | tfuzzel -d -p " 󰖐 Weather | ")
+    if [[ "$W_CHOICE" =~ "Change Place" ]]; then
+        tebian-weather setup
+    elif [[ "$W_CHOICE" =~ "Turn Off" ]]; then
+        tebian-weather off
+        tnotify "Weather" "Off — nothing is fetched any more"
+    fi
+}
+
+keybinds_list() {
+    local KEY_LIST="Mod+D ··· App Launcher
 Mod+A ··· All Apps (Drawer)
 Mod+S ··· Settings
 Mod+Return ··· Terminal
@@ -218,11 +250,9 @@ Shift+Print ··· Screenshot (Full)
 Mod+V ··· Clipboard History
 Mod+Alt+Left/Right ··· Previous/Next Workspace
 󰌍 Back"
-        echo -e "$KEY_LIST" | tfuzzel -d -p " 󰌌 Keybinds | "
-    elif [[ "$U_CHOICE" =~ "Input Devices" ]]; then
-        input_device_menu
-    fi
-    done
+    local c
+    c=$(echo -e "$KEY_LIST" | tfuzzel -d -p " 󰌌 Keybinds | ")
+    [ -n "$c" ] || menu_close
 }
 
 input_device_menu() {
@@ -261,11 +291,12 @@ for i in json.load(sys.stdin):
     fi
 
     INPUT_OPTS="$INPUT_OPTS
-⌨️  Keyboard Layout
+󰌌 Keyboard Layout
 󰍽 Mouse Speed
 󰌍 Back"
 
     I_CHOICE=$(echo -e "$INPUT_OPTS" | tfuzzel -d -p " 󰍽 Input | ")
+    [ -n "$I_CHOICE" ] || menu_close
     if is_back "$I_CHOICE"; then return; fi
 
     SWAY_CFG="$HOME/.config/sway/config.user"
@@ -293,41 +324,53 @@ for i in json.load(sys.stdin):
             tnotify "Input" "Natural Scroll enabled"
         fi
     elif [[ "$I_CHOICE" =~ "Scroll Speed" ]]; then
-        SPEED_OPTS="Slow (0.5x)
-Normal (1x)
-Fast (2x)
-󰌍 Back"
-        SP=$(echo -e "$SPEED_OPTS" | tfuzzel -d -p " Scroll Speed | ")
-        case "$SP" in
-            *Slow*) FACTOR="0.5" ;;
-            *Normal*) FACTOR="1.0" ;;
-            *Fast*) FACTOR="2.0" ;;
-            *) continue ;;
-        esac
-        swaymsg "input type:touchpad scroll_factor $FACTOR"
-        sed -i '/input type:touchpad.*scroll_factor/d' "$SWAY_CFG" 2>/dev/null
-        echo "input type:touchpad scroll_factor $FACTOR" >> "$SWAY_CFG"
-        tnotify "Input" "Scroll speed set to $FACTOR"
+        scroll_speed_menu
     elif [[ "$I_CHOICE" =~ "Keyboard Layout" ]]; then
         keyboard_layout_menu
     elif [[ "$I_CHOICE" =~ "Mouse Speed" ]]; then
-        SPEED_OPTS="Slow (-0.5)
+        mouse_speed_menu
+    fi
+    done
+}
+
+scroll_speed_menu() {
+    local SWAY_CFG="$HOME/.config/sway/config.user" SPEED_OPTS SP FACTOR
+    SPEED_OPTS="Slow (0.5x)
+Normal (1x)
+Fast (2x)
+󰌍 Back"
+    SP=$(echo -e "$SPEED_OPTS" | tfuzzel -d -p " Scroll Speed | ")
+    [ -n "$SP" ] || menu_close
+    case "$SP" in
+        *Slow*) FACTOR="0.5" ;;
+        *Normal*) FACTOR="1.0" ;;
+        *Fast*) FACTOR="2.0" ;;
+        *) return ;;
+    esac
+    swaymsg "input type:touchpad scroll_factor $FACTOR"
+    sed -i '/input type:touchpad.*scroll_factor/d' "$SWAY_CFG" 2>/dev/null
+    echo "input type:touchpad scroll_factor $FACTOR" >> "$SWAY_CFG"
+    tnotify "Input" "Scroll speed set to $FACTOR"
+}
+
+mouse_speed_menu() {
+    local SWAY_CFG="$HOME/.config/sway/config.user" SPEED_OPTS MS ACCEL
+    SPEED_OPTS="Slow (-0.5)
 Normal (0)
 Fast (0.5)
 󰌍 Back"
-        MS=$(echo -e "$SPEED_OPTS" | tfuzzel -d -p " Mouse Speed | ")
-        case "$MS" in
-            *Slow*) ACCEL="-0.5" ;;
-            *Normal*) ACCEL="0" ;;
-            *Fast*) ACCEL="0.5" ;;
-            *) continue ;;
-        esac
-        swaymsg "input type:pointer pointer_accel $ACCEL"
-        sed -i '/input type:pointer.*pointer_accel/d' "$SWAY_CFG" 2>/dev/null
-        echo "input type:pointer pointer_accel $ACCEL" >> "$SWAY_CFG"
-        tnotify "Input" "Mouse speed set to $ACCEL"
-    fi
-    done
+    MS=$(echo -e "$SPEED_OPTS" | tfuzzel -d -p " Mouse Speed | ")
+    [ -n "$MS" ] || menu_close
+    case "$MS" in
+        *Slow*) ACCEL="-0.5" ;;
+        *Normal*) ACCEL="0" ;;
+        *Fast*) ACCEL="0.5" ;;
+        *) return ;;
+    esac
+    swaymsg "input type:pointer pointer_accel $ACCEL"
+    sed -i '/input type:pointer.*pointer_accel/d' "$SWAY_CFG" 2>/dev/null
+    echo "input type:pointer pointer_accel $ACCEL" >> "$SWAY_CFG"
+    tnotify "Input" "Mouse speed set to $ACCEL"
 }
 
 # Every layout xkeyboard-config knows, "code - Name", sorted by name. Without
@@ -374,6 +417,7 @@ keyboard_layout_menu() {
         awk -v c="${cur:-us}" '$1 == c { print $0 " (current)"; exit }' <<< "$list"
         awk -v c="${cur:-us}" '$1 != c' <<< "$list"
     } | tfuzzel -d -p " 󰌌 Keyboard Layout (type a language) | " --width 60)
+    [ -n "$KB" ] || menu_close
     if is_back "$KB"; then return; fi
     local LAYOUT="${KB%% *}"
     # It goes into sway's config and localectl's arguments: only a name
@@ -397,7 +441,7 @@ keyboard_layout_menu() {
             echo "$vlist"
             echo "󰌍 Back"
         } | awk -v m="$mark" '$1 == m { $0 = $0 " (current)" } 1' | tfuzzel -d -p " 󰌌 $name: variant | " --width 60)
-        if is_back "$V"; then return; fi
+        if [ -z "$V" ] || is_back "$V"; then return; fi
         VARIANT="${V%% *}"
         [ "$VARIANT" = default ] && VARIANT=""
         if [ -n "$VARIANT" ] && ! awk -v v="$VARIANT" '$1 == v { f = 1 } END { exit !f }' <<< "$vlist"; then
@@ -545,6 +589,7 @@ window_effects_menu() {
 
     FX_CHOICE=$(echo -e "$FX_OPTS" | tfuzzel -d -p " 󰖲 Effects | ")
 
+    [ -n "$FX_CHOICE" ] || menu_close
     if is_back "$FX_CHOICE"; then return; fi
 
     if [[ "$FX_CHOICE" =~ "Effects:" ]]; then
@@ -575,6 +620,7 @@ Medium (2 passes, radius 5)
 Heavy (3 passes, radius 8)
 󰌍 Back"
         B_CHOICE=$(echo -e "$BLUR_OPTS" | tfuzzel -d -p " 󰂵 Blur | ")
+        [ -n "$B_CHOICE" ] || menu_close
         case "$B_CHOICE" in
             *Light*) _bp=1; _br=3 ;;
             *Medium*) _bp=2; _br=5 ;;
@@ -592,6 +638,7 @@ Round (12)
 Pill (16)
 󰌍 Back"
         C_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 󰘖 Corners | ")
+        [ -n "$C_CHOICE" ] || menu_close
         case "$C_CHOICE" in
             *None*) _cr=0 ;;
             *Subtle*) _cr=4 ;;
@@ -610,6 +657,7 @@ Medium (20)
 Heavy (40)
 󰌍 Back"
         S_CHOICE=$(echo -e "$SH_OPTS" | tfuzzel -d -p " 󰘚 Shadows | ")
+        [ -n "$S_CHOICE" ] || menu_close
         case "$S_CHOICE" in
             *Off*) _sr=0; _se="disable" ;;
             *Subtle*) _sr=10; _se="enable" ;;
@@ -627,6 +675,7 @@ Medium (0.2)
 Strong (0.35)
 󰌍 Back"
         D_CHOICE=$(echo -e "$DIM_OPTS" | tfuzzel -d -p " 󰌁 Dim | ")
+        [ -n "$D_CHOICE" ] || menu_close
         case "$D_CHOICE" in
             *Off*) _dv="0" ;;
             *Subtle*) _dv="0.1" ;;
@@ -696,6 +745,7 @@ font_rendering_menu() {
 󰌍 Back"
 
         FR_CHOICE=$(echo -e "$FR_OPTS" | tfuzzel -d -p " 󰛖 Fonts | ")
+        [ -n "$FR_CHOICE" ] || menu_close
         if is_back "$FR_CHOICE"; then return; fi
 
         if [[ "$FR_CHOICE" =~ "Reset" ]]; then

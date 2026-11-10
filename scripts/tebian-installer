@@ -1677,7 +1677,7 @@ KBEOF
 
             echo 87; echo "# Installing desktop extras..."
             chroot_apt_install_desktop \
-                blueman mako-notifier grim slurp wl-clipboard \
+                blueman mako-notifier grim slurp wl-clipboard xdg-utils \
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop \
                 pavucontrol adwaita-qt \
@@ -1876,7 +1876,7 @@ DIAGSVC
                 touch "$user_home/.config/sway/config.user"
             fi
 
-            # Pre-seed keyboard layout. One line, the form Settings > Keyboard
+            # Pre-seed keyboard layout. One line, the form Settings > Keyboard & Mouse
             # finds and replaces (it can't see inside a { } block). The login
             # screen reads /etc/default/keyboard, written above.
             if [ "$KB_LAYOUT" != "us" ]; then
@@ -1907,7 +1907,7 @@ DIAGSVC
             # Font rendering: RGB subpixel + medium hinting. Debian's baseline
             # (hintslight, no subpixel) reads soft on 1080p panels next to
             # Windows ClearType; Ubuntu ships RGB subpixel and Fedora ships
-            # medium hinting. Tunable later in Settings > UI > Font Rendering.
+            # medium hinting. Tunable later in Settings > More > Desktop & UI > Font Rendering.
             mkdir -p "$user_home/.config/fontconfig/conf.d"
             cat > "$user_home/.config/fontconfig/conf.d/50-tebian-font-rendering.conf" << 'FONTEOF'
 <?xml version="1.0"?>

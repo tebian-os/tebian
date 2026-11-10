@@ -14,6 +14,7 @@ wifi_menu() {
 
             W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰖩 WiFi | ")
 
+            [ -n "$W_CHOICE" ] || menu_close
             if is_back "$W_CHOICE"; then return; fi
 
             if [[ "$W_CHOICE" =~ "WiFi: OFF" ]]; then
@@ -87,6 +88,7 @@ $WIFI_LIST
             # named "Cafe\c" cut the menu off at that point
             SSID_RAW=$(printf '%s\n' "$W_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰖩 WiFi | ")
 
+            [ -n "$SSID_RAW" ] || menu_close
             if is_back "$SSID_RAW"; then return; fi
 
             if [[ "$SSID_RAW" =~ "Turn WiFi OFF" ]]; then
@@ -182,6 +184,7 @@ bluetooth_menu() {
         # service wasn't running; ask systemd first, and cap every query
         if ! systemctl is-active --quiet bluetooth; then
             B_CHOICE=$(printf '%s\n' "󰂲 Bluetooth service is stopped — start it" "󰌍 Back" | tfuzzel -d -p " 󰂯 Bluetooth | ")
+            [ -n "$B_CHOICE" ] || menu_close
             if is_back "$B_CHOICE"; then return; fi
             $TERM_CMD bash -c "sudo systemctl enable --now bluetooth || read -p 'Press Enter...'"
             systemctl is-active --quiet bluetooth || return
@@ -197,6 +200,7 @@ bluetooth_menu() {
 
             B_CHOICE=$(echo -e "$B_OPTS" | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
+            [ -n "$B_CHOICE" ] || menu_close
             if is_back "$B_CHOICE"; then return; fi
 
             if [[ "$B_CHOICE" =~ "Bluetooth: OFF" ]]; then
@@ -246,6 +250,7 @@ ${CONNECTED}${PAIRED}󰴈 Scan for new devices...
             # the device, and escapes in them rewrote the menu
             B_CHOICE=$(printf '%s\n' "$B_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂯 Bluetooth | ")
 
+            [ -n "$B_CHOICE" ] || menu_close
             if is_back "$B_CHOICE"; then return; fi
 
             if [[ "$B_CHOICE" =~ "Turn Bluetooth OFF" ]]; then
@@ -340,7 +345,7 @@ bt_scan_and_pair() {
     local DEV_CHOICE
     DEV_CHOICE=$(printf '%s\n' "$DEV_OPTS" | sed '/^$/d' | tfuzzel -d -p " 󰂰 New devices | ")
 
-    if is_back "$DEV_CHOICE"; then
+    if [ -z "$DEV_CHOICE" ] || is_back "$DEV_CHOICE"; then
         bluetoothctl pairable off 2>/dev/null
         return
     fi

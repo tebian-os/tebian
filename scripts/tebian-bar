@@ -2,7 +2,7 @@
 # ==============================================================================
 # TEBIAN BAR
 # The Modern bar: Waybar, with hover-highlighted buttons whose menus drop down
-# from the bar. Started by sway as `swaybar_command` (Settings > Desktop & UI >
+# from the bar. Started by sway as `swaybar_command` (Settings > More > Desktop & UI >
 # Bar Style writes that into config.user), so sway still owns the bar's
 # lifecycle and restarts it on reload.
 #
@@ -33,7 +33,7 @@ if [ -f "$HOME/.config/waybar/config.jsonc" ]; then
     config="$HOME/.config/waybar/config.jsonc"
 else
     config="$RUN/config.jsonc"
-    # 12-hour clock (Settings > Desktop & UI > Clock): the shipped formats
+    # 12-hour clock (Settings > More > Desktop & UI > Clock): the shipped formats
     # use %H:%M, swapped here like the position
     # (A bare ":" as the no-op once stood in for 24-hour; sed rejects it, and
     # the bar silently kept whatever config it had generated before.)

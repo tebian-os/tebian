@@ -76,7 +76,11 @@ print_entries() {
 
 # By position (--index): titles are arbitrary text, two windows can share
 # one, and only the con_id says which window was meant
-PICK=$(print_entries | tfuzzel -d --index -p " 󰖲 Windows | " --width 60)
+# Sized to the list: at the themes' fixed 15 lines, two windows left a tall
+# empty box that fuzzel filled with a huge copy of the selected icon
+LINES_N=${#IDS[@]}
+[ "$LINES_N" -gt 15 ] && LINES_N=15
+PICK=$(print_entries | tfuzzel -d --index -p " 󰖲 Windows | " --width 60 --lines "$LINES_N")
 [[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#IDS[@]}" ] || exit 0
 
 if [ "${WS[$PICK]}" = "__i3_scratch" ]; then

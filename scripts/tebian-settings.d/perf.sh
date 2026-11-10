@@ -31,7 +31,7 @@ perf_menu() {
     if [[ "$HAS_ZRAM" == "NO" ]]; then
         ZRAM_LABEL="󰚰 Install RAM Boost (zram)"
     elif [[ "$ZRAM_ACTIVE" == "ON" ]]; then
-        ZRAM_LABEL="🚀 RAM Boost (Active)"
+        ZRAM_LABEL="󰓅 RAM Boost (Active)"
     else
         ZRAM_LABEL="󰓅 RAM Boost (Inactive)"
     fi
@@ -61,9 +61,9 @@ perf_menu() {
     HAS_INTEL_UC=$(dpkg -l intel-microcode 2>/dev/null | grep -q '^ii' && echo "YES" || echo "NO")
     HAS_AMD_UC=$(dpkg -l amd64-microcode 2>/dev/null | grep -q '^ii' && echo "YES" || echo "NO")
     if [[ "$HAS_INTEL_UC" == "YES" || "$HAS_AMD_UC" == "YES" ]]; then
-        UC_LABEL="✅ CPU Microcode (Installed)"
+        UC_LABEL="󰄬 CPU Microcode (Installed)"
     else
-        UC_LABEL="🔲 Install CPU Microcode"
+        UC_LABEL="󰄰 Install CPU Microcode"
     fi
 
     # HiDPI (the bare line is how older versions wrote it)
@@ -75,7 +75,7 @@ perf_menu() {
 
     # Rolling (either apt sources format)
     if [[ "$(tebian_apt_suite)" =~ ^(testing|sid|unstable)$ ]]; then
-        ROLLING_LABEL="✅ Rolling Branch (Active)"
+        ROLLING_LABEL="󰄬 Rolling Branch (Active)"
     else
         ROLLING_LABEL="󰚰 Join Rolling Branch (Testing)"
     fi
@@ -88,17 +88,17 @@ perf_menu() {
     [[ "$HAS_PRELOAD" == "YES" ]] && PERF_OPTS+="\n󰆴 Uninstall App Preload"
 
     if [[ "$HAS_TLP" == "YES" ]]; then
-        PERF_OPTS+="\n🔋 Power Mode"
+        PERF_OPTS+="\n󰌪 Power Mode"
         PERF_OPTS+="\n󰆴 Uninstall Laptop Power Management"
     else
-        PERF_OPTS+="\n🔋 Install Laptop Power Management"
+        PERF_OPTS+="\n󰌪 Install Laptop Power Management"
     fi
 
     if [[ "$HAS_GAMING" == "YES" ]]; then
-        PERF_OPTS+="\n🎮 Gaming Optimization (Installed)"
+        PERF_OPTS+="\n󰊴 Gaming Optimization (Installed)"
         PERF_OPTS+="\n󰆴 Uninstall Gaming Optimization"
     else
-        PERF_OPTS+="\n🎮 Install Gaming Optimization"
+        PERF_OPTS+="\n󰊴 Install Gaming Optimization"
     fi
 
     if [[ "$HAS_NVIDIA_DRV" == "YES" ]]; then
@@ -110,13 +110,14 @@ perf_menu() {
 
     PERF_OPTS+="\n$UC_LABEL"
     PERF_OPTS+="\n$HIDPI_LABEL"
-    PERF_OPTS+="\n🧹 Clean System Junk"
+    PERF_OPTS+="\n󰆴 Clean System Junk"
     PERF_OPTS+="\n$ROLLING_LABEL"
-    PERF_OPTS+="\n🔍 Detect & Configure Hardware"
+    PERF_OPTS+="\n󰍉 Detect & Configure Hardware"
     PERF_OPTS+="\n󰌍 Back"
 
     P_CHOICE=$(echo -e "$PERF_OPTS" | tfuzzel -d -p " 󰓅 Boost | ")
 
+    [ -n "$P_CHOICE" ] || menu_close
     if is_back "$P_CHOICE"; then return; fi
 
     # === Handle choices ===
@@ -647,7 +648,7 @@ hardware_detect_menu() {
         # nouveau blacklisted) — offer it rather than installing it silently.
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
             echo "NVIDIA GPU found. The proprietary driver is available from"
-            echo "Settings → Performance → Install Nvidia Drivers."
+            echo "Settings → More → Performance → Install Nvidia Drivers."
             echo "(nouveau, the open driver already in use, needs no setup.)"
         elif [ "$GPU_TYPE" = "AMD" ]; then
             echo "Installing AMD firmware..."
@@ -746,7 +747,8 @@ power_mode_pick() {
 power_mode_menu() {
     local choice
     while true; do
-        choice=$( { power_mode_lines; echo "󰌍 Back"; } | tfuzzel -d -p " 🔋 Power Mode | ")
+        choice=$( { power_mode_lines; echo "󰌍 Back"; } | tfuzzel -d -p " 󰌪 Power Mode | ")
+        [ -n "$choice" ] || menu_close
         is_back "$choice" && return
         power_mode_pick "$choice" || return
     done

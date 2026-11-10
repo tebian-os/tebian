@@ -62,7 +62,7 @@ edit_pins() {
                         printf '[     ] %s\n' "${LABEL[$id]}"
                     fi
                 done
-            } | pick_index $(( ${#APP_IDS[@]} + 1 )) -p " 📌 Edit Menu | " --width 40
+            } | pick_index $(( ${#APP_IDS[@]} + 1 )) -p " 󰏫 Edit Menu | " --width 40
         )
 
         # Escape closes; only Back returns to the drawer
@@ -97,7 +97,7 @@ PICK=$(
             fi
         done
         echo "󰌍 Back"
-    } | pick_index $(( ${#APP_IDS[@]} + 2 )) -p " 📂 Apps | " --width 40
+    } | pick_index $(( ${#APP_IDS[@]} + 2 )) -p " 󰀻 Apps | " --width 40
 )
 
 # Escape closes the drawer; only the Back entry returns to Mod+D

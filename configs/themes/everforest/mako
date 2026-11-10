@@ -35,3 +35,13 @@ default-timeout=0
 [urgency=low]
 border-color=#3D484D
 default-timeout=3000
+
+# Do Not Disturb (the bar's bell, Settings > Notifications) hides everything
+# while the mode is on, except critical urgency: senders keep that for what
+# can't wait, like a battery about to die or a VM that crashed. Later
+# sections win, so these stay last. tebian-update copies from this line on.
+[mode=do-not-disturb]
+invisible=1
+
+[mode=do-not-disturb urgency=critical]
+invisible=0

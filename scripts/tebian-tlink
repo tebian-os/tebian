@@ -78,8 +78,10 @@ tlink_menu() {
 
     CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " 󰌄 T-Link | " --width 45 --lines 25)
 
-    if [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]]; then
-        tebian-settings
+    # Escape closes T-Link and the Settings it was opened from (non-zero
+    # tells Settings so); Back returns to Settings' T-Link menu
+    [ -n "$CHOICE" ] || exit 1
+    if is_back "$CHOICE"; then
         exit 0
     fi
 
@@ -318,7 +320,8 @@ server_detail() {
 
     CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " $SERVER | " --width 45 --lines 20)
     
-    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+    [ -n "$CHOICE" ] || exit 1
+    is_back "$CHOICE" && { tlink_menu; return; }
 
     if [[ "$CHOICE" =~ "Shell In" ]]; then
         $TERM_CMD ssh root@$IP
@@ -340,6 +343,11 @@ server_detail() {
         # Server is rebooting — don't recurse into a dead detail menu
         tlink_menu; return
     elif [[ "$CHOICE" =~ "Remove" ]]; then
+        # Only forgets it here (the server itself is untouched), but its
+        # address is gone with it, so ask
+        local sure
+        sure=$(echo -e "No, keep it\nYes, remove $SERVER from this list" | tfuzzel -d --match-mode=exact -p " Remove $SERVER? | " --width 45)
+        [[ "$sure" == Yes* ]] || { server_detail "$SERVER_LINE"; return; }
         sed -i "/^$SERVER=/d" "$SERVERS_FILE"
         notify-send "T-Link" "$SERVER removed"
         # Server is gone — back to the main list

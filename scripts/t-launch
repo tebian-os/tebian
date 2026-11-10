@@ -31,9 +31,9 @@ SESSIONS_DIR="$HOME/Sessions"
 DATE=$(date +%Y-%m-%d)
 
 # 1. Generate the list of options
-OPTIONS="🏠 Home
-🆕 New Daily Session
-📂 Scratchpad
+OPTIONS="󰋜 Home
+󰐊 New Daily Session
+󰷊 Scratchpad
 ----------------"
 RECENT_SESSIONS=$(find "$SESSIONS_DIR/Daily" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r | head -n 5)
 PROJECTS=$(find "$SESSIONS_DIR/Projects" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null)
@@ -48,19 +48,21 @@ CHOICE=$(echo -e "$FULL_LIST" | tfuzzel -d)
 # Esc/no selection — abort instead of falling through to a $HOME terminal
 [ -z "$CHOICE" ] && exit 0
 
-# 3. Logic for the choice
-case "$CHOICE" in
-    "🏠 Home")
+# 3. Logic for the choice. Matched on the words: Text Mode strips the
+# glyph, and "Scratchpad" then fell through to the session lookup and
+# opened $HOME instead.
+case "${CHOICE#"${CHOICE%%[[:alnum:]-]*}"}" in
+    "Home")
         TARGET="$HOME"
         ;;
-    "🆕 New Daily Session")
+    "New Daily Session")
         NAME=$(echo "" | tfuzzel -d)
         if [ -z "$NAME" ]; then exit 1; fi
         TARGET="$SESSIONS_DIR/Daily/$DATE-$NAME"
         mkdir -p "$TARGET"
         echo "# Session: $NAME ($DATE)" > "$TARGET/README.md"
         ;;
-    "📂 Scratchpad")
+    "Scratchpad")
         TARGET="$SESSIONS_DIR/Scratchpad"
         ;;
     "----------------")

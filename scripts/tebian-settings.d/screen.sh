@@ -54,6 +54,7 @@ $NIGHT_LABEL
 
         S_CHOICE=$(echo -e "$S_OPTS" | tfuzzel -d -p " Screen | ")
 
+        [ -n "$S_CHOICE" ] || menu_close
         if is_back "$S_CHOICE"; then return; fi
 
         if [[ "$S_CHOICE" =~ "Brightness" ]]; then
@@ -65,19 +66,26 @@ $NIGHT_LABEL
         elif [[ "$S_CHOICE" =~ "Lock" ]]; then
             lock_menu
         elif [[ "$S_CHOICE" =~ "Bar Stats" ]]; then
-            mkdir -p "$HOME/.config/tebian"
-            if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
-                rm "$HOME/.config/tebian/bar_perf_off"
-            else
-                touch "$HOME/.config/tebian/bar_perf_off"
-            fi
-            # Restart status bar to apply
-            pkill -f '\.local/bin/status\.sh' 2>/dev/null
-            swaymsg reload 2>/dev/null &
+            bar_stats_toggle
         elif [[ "$S_CHOICE" =~ "Night Light" ]]; then
             night_light_menu
         fi
     done
+}
+
+# CPU/RAM figures in the Classic bar (status.sh)
+bar_stats_toggle() {
+    mkdir -p "$HOME/.config/tebian"
+    if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
+        rm "$HOME/.config/tebian/bar_perf_off"
+        tnotify "Screen" "Bar stats on"
+    else
+        touch "$HOME/.config/tebian/bar_perf_off"
+        tnotify "Screen" "Bar stats off"
+    fi
+    # Restart status bar to apply
+    pkill -f '\.local/bin/status\.sh' 2>/dev/null
+    swaymsg reload 2>/dev/null &
 }
 
 night_light_menu() {
@@ -113,6 +121,7 @@ Current: ${TEMP}K
 󰌍 Back"
         NL_CHOICE=$(echo -e "$NL_OPTS" | tfuzzel -d -p " 󰖔 Night Light | ")
 
+        [ -n "$NL_CHOICE" ] || menu_close
         if is_back "$NL_CHOICE" || [[ "$NL_CHOICE" =~ "Current" ]]; then return; fi
 
         local NEW_TEMP=""
@@ -159,19 +168,26 @@ screen_menu() {
 󰌍 Back"
     S_CHOICE=$(echo -e "$SCREEN_OPTS" | tfuzzel -d -p " 󰌢 Screen | ")
 
+    [ -n "$S_CHOICE" ] || menu_close
     if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Brightness Up" ]]; then brightnessctl set +10%
     elif [[ "$S_CHOICE" =~ "Brightness Down" ]]; then brightnessctl set 10%-
     elif [[ "$S_CHOICE" =~ "Display Outputs" ]]; then display_output_menu
     elif [[ "$S_CHOICE" =~ "Display Layout" ]]; then
-        if command -v wdisplays &>/dev/null; then
-            wdisplays &
-        else
-            notify-send "Display" "wdisplays not installed. Install via More > Software."
-        fi
+        display_layout_gui
     fi
     done
+}
+
+# wdisplays: resolution, refresh rate, scale and arrangement by dragging.
+# Not in the desktop install, so it is offered when missing.
+display_layout_gui() {
+    if ! command -v wdisplays &>/dev/null && ! tebian_term_apt_install wdisplays; then
+        tnotify "Display" "wdisplays could not be installed"
+        return
+    fi
+    setsid -f wdisplays >/dev/null 2>&1 < /dev/null
 }
 
 display_output_menu() {
@@ -220,6 +236,7 @@ print(len([o for o in json.load(sys.stdin) if o.get('active')]))
     D_OPTS+="\n󰌍 Back"
 
     D_CHOICE=$(echo -e "$D_OPTS" | tfuzzel -d -p " 󰍹 Displays | ")
+    [ -n "$D_CHOICE" ] || menu_close
     if is_back "$D_CHOICE"; then return; fi
 
     # No "Mirror All": sway cannot mirror outputs; stacking them all at
@@ -373,6 +390,7 @@ for o in json.load(sys.stdin):
 
     local pick
     pick=$(echo -e "$output_list\n󰌍 Back" | tfuzzel -d -p " Which monitor to move? | ")
+    [ -n "$pick" ] || menu_close
     if is_back "$pick"; then return; fi
 
     local move_name
@@ -392,19 +410,19 @@ for o in json.load(sys.stdin):
 
     local anchor
     anchor=$(echo -e "$others\n󰌍 Back" | tfuzzel -d -p " Relative to which monitor? | ")
-    if is_back "$anchor"; then return; fi
+    if [ -z "$anchor" ] || is_back "$anchor"; then return; fi
 
     local anchor_name
     anchor_name=$(echo "$anchor" | awk '{print $1}')
 
     # Pick direction
     local dir
-    dir=$(echo -e "⬅️  Left of $anchor_name
-➡️  Right of $anchor_name
-⬆️  Above $anchor_name
-⬇️  Below $anchor_name
+    dir=$(echo -e "󰇅 Left of $anchor_name
+󰇄 Right of $anchor_name
+󰆢 Above $anchor_name
+󰆣 Below $anchor_name
 󰌍 Back" | tfuzzel -d -p " Position $move_name | ")
-    if is_back "$dir"; then return; fi
+    if [ -z "$dir" ] || is_back "$dir"; then return; fi
 
     # Get anchor dimensions and position
     local anchor_info
@@ -461,6 +479,7 @@ screenshot_menu() {
 󰌍 Back"
     S_CHOICE=$(echo -e "$SCR_OPTS" | tfuzzel -d -p " 󰄀 Snaps | ")
 
+    [ -n "$S_CHOICE" ] || menu_close
     if is_back "$S_CHOICE"; then return; fi
 
     if [[ "$S_CHOICE" =~ "Region" ]]; then
@@ -515,6 +534,7 @@ $KEY_LABEL
 󰌍 Back"
     L_CHOICE=$(echo -e "$LOCK_OPTS" | tfuzzel -d -p " 󰌾 Lock | " --width 56)
 
+    [ -n "$L_CHOICE" ] || menu_close
     if is_back "$L_CHOICE"; then return; fi
 
     if [[ "$L_CHOICE" =~ "Lock Now" ]]; then
@@ -554,6 +574,7 @@ lock_timeout_menu() {
 󰌍 Back"
     T_CHOICE=$(echo -e "$TO_OPTS" | tfuzzel -d -p " 󰔛 Timeout | ")
 
+    [ -n "$T_CHOICE" ] || menu_close
     if is_back "$T_CHOICE"; then return; fi
 
     # Extract number of minutes (first number in the string)

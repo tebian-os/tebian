@@ -26,6 +26,7 @@ sysinfo_menu() {
 An act of God."
 
     CHOICE=$(echo -e "$INFO" | tfuzzel -d -p "" --width 50 --lines 15)
+    [ -n "$CHOICE" ] || menu_close
 
     if [[ "$CHOICE" =~ "act of God" ]]; then
         temple_os
@@ -106,6 +107,7 @@ backup_menu() {
 
     B_CHOICE=$(echo -e "$BACKUP_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
 
+    [ -n "$B_CHOICE" ] || menu_close
     if is_back "$B_CHOICE"; then return; fi
 
     if [[ "$B_CHOICE" =~ "Backup Configs" ]]; then
@@ -128,6 +130,7 @@ backup_menu() {
         BACKUPS=$(ls -1t "$BACKUP_DIR" | head -10)
         R_CHOICE=$(echo -e "󰌍 Back\n$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
 
+        [ -n "$R_CHOICE" ] || menu_close
         if is_back "$R_CHOICE"; then
             continue
         fi
@@ -237,7 +240,7 @@ config_menu() {
 󰋽 $REMOTE_LABEL
 󰚰 Update Tebian
 󰑓 Rebuild System
-📝 Edit Machine Settings
+󰏫 Edit Machine Settings
 󰊢 View Tebian Diff
 󰆓 Set Tebian Remote URL
 $TRACK_OPTS
@@ -245,13 +248,14 @@ $TRACK_OPTS
     else
         C_OPTS="󰚰 Update Tebian
 󰑓 Rebuild System
-📝 Edit Machine Settings
+󰏫 Edit Machine Settings
 $TRACK_OPTS
 󰌍 Back"
     fi
 
     C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | " --width 40)
 
+    [ -n "$C_CHOICE" ] || menu_close
     if is_back "$C_CHOICE"; then return; fi
 
     if [[ "$C_CHOICE" =~ "Update Tebian" ]]; then
@@ -433,6 +437,7 @@ ${LID_LABEL:+$LID_LABEL
 }󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
     
+    [ -n "$P_CHOICE" ] || menu_close
     if is_back "$P_CHOICE"; then return; fi
 
     # Power modes, then the drop-down again so the switch shows its new state
@@ -494,6 +499,7 @@ notification_history_menu() {
     # printf, not echo -e: notification text comes from any app and may
     # hold backslashes
     H_CHOICE=$(printf '%s\n' "$HISTORY" "󰆴 Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 60)
+    [ -n "$H_CHOICE" ] || menu_close
     # Matched without its icon (Text Mode strips it). History lines are
     # "app: summary", so they don't collide with the bare words
     if [[ "$H_CHOICE" =~ ^[^[:alnum:]]*"Clear All"$ ]]; then
@@ -506,44 +512,40 @@ notification_history_menu() {
     fi
 }
 
+# Everything System Update does is update-all's, in a terminal; the Modern
+# bar's update indicator is told to look again once it has run
+system_update() {
+    $TERM_CMD update-all
+    pkill -RTMIN+7 -x waybar 2>/dev/null
+}
+
 # More drawer (advanced/occasional items)
 more_menu() {
     while true; do
     M_OPTS="󰇄 Desktop & UI
-󰏗 Software
-󰒃 Security & Firewall
-󰡨 Infrastructure
-󰓅 Performance
-󰒓 System (name, time, language, printers)
+󰄬 Default Apps
+󰐊 Startup Apps
 󰋊 Drives
+󰓅 Performance
+󰡨 Infrastructure
 󰆏 Backup & Restore
 󰑀 Config Tracking (Git)
 󰌍 Back"
 
-    M_CHOICE=$(echo -e "$M_OPTS" | tfuzzel -d -p " More | ")
+    M_CHOICE=$(echo -e "$M_OPTS" | tfuzzel -d -p " 󰇄 More | ")
 
+    [ -n "$M_CHOICE" ] || menu_close
     if is_back "$M_CHOICE"; then return; fi
 
-    if [[ "$M_CHOICE" =~ "Desktop & UI" ]]; then
-        ui_menu
-    elif [[ "$M_CHOICE" =~ "Software" ]]; then
-        software_hub
-    elif [[ "$M_CHOICE" =~ "Security" ]]; then
-        security_menu
-    elif [[ "$M_CHOICE" =~ "Infrastructure" ]]; then
-        infra_menu
-    elif [[ "$M_CHOICE" =~ "Performance" ]]; then
-        perf_menu
-    elif [[ "$M_CHOICE" =~ "System" ]]; then
-        # Name, clock, language, printers, notifications (sysprefs.sh)
-        system_menu
-    elif [[ "$M_CHOICE" =~ "Drives" ]]; then
-        drives_menu
-    elif [[ "$M_CHOICE" =~ "Backup & Restore" ]]; then
-        backup_menu
-    elif [[ "$M_CHOICE" =~ "Config Tracking" ]]; then
-        config_menu
-    fi
+    case "$(sysprefs_words "$M_CHOICE")" in
+        "Desktop & UI"*)     ui_menu ;;
+        "Default Apps"*)     default_apps_menu ;;
+        "Startup Apps"*)     startup_apps_menu ;;
+        "Drives"*)           drives_menu ;;
+        "Performance"*)      perf_menu ;;
+        "Infrastructure"*)   infra_menu ;;
+        "Backup & Restore"*) backup_menu ;;
+        "Config Tracking"*)  config_menu ;;
+    esac
     done
 }
-

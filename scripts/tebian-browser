@@ -2,7 +2,7 @@
 # ==============================================================================
 # TEBIAN BROWSER
 # One install path for the browsers Tebian offers, shared by onboarding and
-# Settings > More > Software > Web Browser, so the two cannot drift apart.
+# Settings > Software > Web Browser, so the two cannot drift apart.
 #
 #   tebian-browser list             ids offered on this architecture
 #   tebian-browser name <id>        short name
@@ -165,6 +165,120 @@ pin() {
     tebian_pin_app "$(desktop_file "$1")"
 }
 
+# --- Default browser ---------------------------------------------------------
+# Links opened by other apps go to the default browser (xdg-open, GTK apps and
+# portals all read mimeapps.list). Settings > More > Default Apps changes it; here it
+# is only filled in when nothing working is set, never overridden.
+
+# Directories whose applications/ hold desktop files. Flatpak's export dirs are
+# added because a session started before the first Flatpak was installed does
+# not list them yet, and xdg-settings refuses an id it cannot find.
+app_dirs() {
+    local d IFS=:
+    echo "${XDG_DATA_HOME:-$HOME/.local/share}"
+    for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share} \
+             "$HOME/.local/share/flatpak/exports/share" /var/lib/flatpak/exports/share; do
+        [ -n "$d" ] && echo "$d"
+    done
+}
+
+desktop_exists() {  # <desktop id>
+    local d
+    while IFS= read -r d; do
+        # A dash in an id may stand for a subdirectory (vendor-app.desktop)
+        if [ -f "$d/applications/$1" ] || [ -f "$d/applications/${1/-//}" ]; then
+            return 0
+        fi
+    done < <(app_dirs)
+    return 1
+}
+
+have_xdg() {
+    command -v xdg-settings &>/dev/null && command -v xdg-mime &>/dev/null
+}
+
+# xdg-mime does not check that the app it names still exists, so a default
+# whose desktop file is gone (browser removed) counts as unset
+current_default() {
+    local cur
+    cur=$(xdg-settings get default-web-browser 2>/dev/null | head -1) || true
+    if [ -n "$cur" ] && desktop_exists "$cur"; then echo "$cur"; fi
+}
+
+set_default() {  # <desktop id>
+    local dirs
+    dirs=$(app_dirs | tail -n +2 | paste -sd:)
+    # xdg-mime creates mimeapps.list before its directory, so without one
+    # the first type (text/html) would be lost without an error
+    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}"
+    # Same fallback as Settings > More > Default Apps: some xdg-utils releases refuse
+    # under sway (no GNOME/KDE detected) or when $BROWSER is set
+    XDG_DATA_DIRS="$dirs" xdg-settings set default-web-browser "$1" &>/dev/null ||
+        xdg-mime default "$1" x-scheme-handler/http x-scheme-handler/https text/html &>/dev/null
+}
+
+claim_default() {  # <id>
+    local name file
+    name=$(browser_name "$1")
+    file=$(desktop_file "$1")
+    if ! have_xdg; then
+        echo "  Links from other apps won't open in $name until xdg-utils is installed (Settings > More > Default Apps)."
+        return 0
+    fi
+    [ -z "$(current_default)" ] || return 0
+    desktop_exists "$file" || return 0
+    if set_default "$file"; then
+        echo "  $name is now your default browser (change it in Settings > More > Default Apps)."
+    fi
+    return 0
+}
+
+# The browser to hand the default to: one Tebian offers first, then any other
+# app that calls itself a web browser
+other_browser() {  # <desktop id being removed>
+    local id f d
+    for id in helium zen firefox-esr; do
+        f=$(desktop_file "$id")
+        if [ "$f" != "$1" ] && is_installed "$id" && desktop_exists "$f"; then
+            echo "$f"
+            return 0
+        fi
+    done
+    while IFS= read -r d; do
+        for f in "$d"/applications/*.desktop; do
+            [ -f "$f" ] && [ "${f##*/}" != "$1" ] || continue
+            if grep -qsE '^Categories=.*WebBrowser' "$f" && ! grep -qsE '^(NoDisplay|Hidden)=true' "$f"; then
+                echo "${f##*/}"
+                return 0
+            fi
+        done
+    done < <(app_dirs)
+    return 1
+}
+
+# Removing the default browser would leave links with nowhere to go while
+# another browser is still installed. xdg-settings skips a choice whose app is
+# gone and answers with Debian's x-www-browser instead, which hides the stale
+# entry, so mimeapps.list itself is checked too.
+hand_off_default() {  # <removed id>
+    have_xdg || return 0
+    local gone cur next
+    gone=$(desktop_file "$1")
+    cur=$(current_default)
+    [ "$cur" = "$gone" ] && cur=""
+    if [ -n "$cur" ] && ! grep -qsE "^x-scheme-handler/https?=${gone//./\\.}(;|$)" \
+            "${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"; then
+        return 0
+    fi
+    # The browser links already fall back to, when there is one
+    next="$cur"
+    [ -n "$next" ] || next=$(other_browser "$gone") || return 0
+    if set_default "$next"; then
+        echo "  Links now open in $(tebian_app_name "$next" 2>/dev/null || echo "${next%.desktop}")."
+    fi
+    return 0
+}
+
 firejail_active() {
     # Links are the same signal Settings > Security reports ON/OFF from.
     local link
@@ -270,6 +384,7 @@ do_install() {
     if is_installed "$id"; then
         echo "$name is already installed."
         pin "$id"
+        claim_default "$id"
         return 0
     fi
 
@@ -312,6 +427,7 @@ do_install() {
             firejail_active && echo "  Note: Firejail does not cover Helium. It uses its own Chromium sandbox."
             ;;
     esac
+    claim_default "$id"
     echo "$name is installed. Find it in Mod+D."
 }
 
@@ -345,6 +461,7 @@ do_remove() {
             ;;
     esac
     echo "$name removed. Your profile and bookmarks were kept."
+    hand_off_default "$id"
 }
 
 do_launch() {

@@ -3,7 +3,7 @@
 # TEBIAN POWER MODES
 # Power saver / Balanced / Performance on a TLP laptop, like Windows' power
 # mode. Off unless you switch it on (the Power drop-down on the bar, or
-# Settings > Performance > Power Mode).
+# Settings > More > Performance > Power Mode).
 #
 #   tebian-power-modes status   "on", "off" (TLP without modes) or "none" (no TLP)
 #   tebian-power-modes on       TLP 1.10 + tlp-pd from trixie-backports
@@ -51,7 +51,7 @@ status)
     else echo none; fi
     ;;
 on)
-    installed tlp || fail "TLP isn't installed — Settings > Performance > Install Laptop Power Management first."
+    installed tlp || fail "TLP isn't installed — Settings > More > Performance > Install Laptop Power Management first."
     installed tlp-pd && { say "Power modes are already on."; exit 0; }
     say "Power modes need TLP 1.10; Debian stable has 1.8. The newer one comes from"
     say "Debian's official backports archive, and TLP updates from there until you"
@@ -72,7 +72,7 @@ on)
         fail "Install failed (see above)."
     sudo systemctl enable --now tlp-pd >/dev/null 2>&1 || true
     pkill -RTMIN+10 -x waybar 2>/dev/null || true
-    say "Power modes on. Pick one in the Power panel or Settings > Performance > Power Mode."
+    say "Power modes on. Pick one in the Power panel or Settings > More > Performance > Power Mode."
     ;;
 off)
     installed tlp-pd || { say "Power modes are already off."; exit 0; }

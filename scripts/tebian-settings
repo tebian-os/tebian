@@ -1,7 +1,20 @@
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 
+# Mod+D asks for this on every open, so it comes before anything slow (the
+# helpers, the modules, the lock — even the subshell that finds this
+# directory) and touches none of it: listing settings must not close a
+# Settings window that is open
+if [ "${1:-}" = "--search-list" ]; then
+    _dir="${BASH_SOURCE[0]%/*}"; [ "$_dir" = "${BASH_SOURCE[0]}" ] && _dir=.
+    # shellcheck source=tebian-settings.d/search.sh
+    source "$_dir/tebian-settings.d/search.sh" && settings_search_list
+    exit
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETTINGS_DIR="${SCRIPT_DIR:-$HOME/.local/bin}/tebian-settings.d"
+
 if [ -f "$SCRIPT_DIR/tebian-common" ]; then
     TEBIAN_COMMON="$SCRIPT_DIR/tebian-common"
 elif [ -f "$HOME/.local/bin/tebian-common" ]; then
@@ -11,40 +24,65 @@ fi
 # the same helpers
 export TEBIAN_COMMON
 [ -n "$TEBIAN_COMMON" ] && source "$TEBIAN_COMMON"
+# Every menu is drawn and closed through it; without it none could be shown
+# or left
+if ! declare -F tfuzzel >/dev/null || ! declare -F menu_close >/dev/null; then
+    notify-send "Settings" "tebian-common is missing or out of date — run tebian-update" 2>/dev/null
+    echo "tebian-settings: tebian-common is missing or out of date" >&2
+    exit 1
+fi
 
-get_term() {
-    # The terminal chosen in Settings > Software wins (it lives in config.user
-    # as "set $term NAME"); otherwise the first one installed
-    local t
-    t=$(tebian_block_get terminal 2>/dev/null | awk '$1=="set" && $2=="$term" {print $3; exit}')
-    case "$t" in
-        kitty|foot|alacritty) command -v "$t" &>/dev/null && { echo "$t -e"; return; } ;;
-    esac
-    if command -v kitty &>/dev/null; then echo "kitty -e"
-    elif command -v foot &>/dev/null; then echo "foot -e"
-    elif command -v alacritty &>/dev/null; then echo "alacritty -e"
-    elif command -v gnome-terminal &>/dev/null; then echo "gnome-terminal --"
-    elif command -v xterm &>/dev/null; then echo "xterm -e"
-    else echo "kitty -e"
-    fi
-}
-
-TERM_CMD=$(get_term)
+# The terminal chosen in Settings > Software, as everything else opens it.
+# Except gnome-terminal (and its kin): it returns before its command
+# finishes, and Settings waits on "$TERM_CMD bash -c ..." to read back what
+# was changed in there, so a terminal that waits is used when there is one.
+TERM_CMD=$(tebian_term_cmd 2>/dev/null)
+case "$TERM_CMD" in
+    gnome-terminal*|kgx*|ptyxis*)
+        for _t in kitty foot alacritty; do
+            command -v "$_t" &>/dev/null && { TERM_CMD="$_t -e"; break; }
+        done
+        unset _t ;;
+    "") TERM_CMD="kitty -e" ;;
+esac
 
 # Ensure only one instance runs at a time (PID-based — fd locks leak to
-# child processes like swaybg, preventing settings from reopening)
-LOCK_FILE="/tmp/tebian-settings.lock"
+# child processes like swaybg, preventing settings from reopening). In the
+# user's runtime dir: a fixed name in /tmp is shared with every other user.
+LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/tebian-settings.lock"
+# The fuzzel processes anywhere below PID
+settings_menu_pids() {
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null); do
+        [ "$(cat "/proc/$c/comm" 2>/dev/null)" = fuzzel ] && echo "$c"
+        settings_menu_pids "$c"
+    done
+}
 if [ -f "$LOCK_FILE" ]; then
     lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
     if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null &&
        grep -q "tebian-settings" "/proc/$lock_pid/cmdline" 2>/dev/null; then
-        # Kill stale instance and take over (user explicitly re-launched)
+        # Kill stale instance and take over (user explicitly re-launched).
+        # Its menu goes with it: that fuzzel is a grandchild which outlived
+        # the kill and kept the screen, so ours could not open and Settings
+        # showed a dead menu whose picks went nowhere. Only fuzzel, though:
+        # a terminal it opened may be halfway through an install.
+        old_menus=$(settings_menu_pids "$lock_pid")
         kill "$lock_pid" 2>/dev/null
-        sleep 0.2
+        # shellcheck disable=SC2086  # a list of PIDs
+        [ -z "$old_menus" ] || kill $old_menus 2>/dev/null
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            # shellcheck disable=SC2086
+            kill -0 "$lock_pid" $old_menus 2>/dev/null || break
+            sleep 0.05
+        done
+        unset old_menus
     fi
 fi
 echo $$ > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"' EXIT
+# Only while it is still ours: the instance that took over has written its
+# own PID there, and the one it stopped exits after that
+trap '[ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LOCK_FILE"' EXIT
 
 # Transaction log — records installs, config changes, toggles
 TEBIAN_LOG="$HOME/.local/share/tebian-settings.log"
@@ -64,7 +102,6 @@ tnotify() {
 declare -F tebian_user_migrate >/dev/null && tebian_user_migrate
 
 # Source modular function files
-SETTINGS_DIR="${SCRIPT_DIR:-$HOME/.local/bin}/tebian-settings.d"
 for _mod in "$SETTINGS_DIR"/*.sh; do
     [ -f "$_mod" ] && source "$_mod"
 done
@@ -72,79 +109,86 @@ unset _mod
 
 # Tebian Control Center - V2.0 (Modular)
 
+# The top level opens on its menus; typing searches every setting
+# (search.sh), listed below them and only seen when typing filters them in.
+# fuzzel --index returns a position, so a setting called like a menu can't
+# be mistaken for it.
 show_main_menu() {
+    local -a top=(
+        "󰖩 WiFi"                         wifi_menu
+        "󰂯 Bluetooth"                    bluetooth_menu
+        "󰔡 Audio"                        audio_menu
+        "󰌢 Screen (Print: screenshot)"   screen_all_menu
+        "󰏘 Themes"                       theme_menu
+        "󰌌 Keyboard & Mouse"             input_device_menu
+        "󰏗 Software"                     software_hub
+        "󰚰 System Update"                system_update
+        "󰒃 Security"                     security_menu
+        "󰒓 System"                       system_menu
+        "󰐥 Power"                        power_menu
+        "󰇄 More"                         more_menu
+        "󰌍 Back (Mod+D: app launcher)"   back
+    )
+    local -a labels=() actions=() ids=()
+    local i id label pick n
+    for ((i = 0; i < ${#top[@]}; i += 2)); do
+        labels+=("${top[i]}"); actions+=("${top[i+1]}")
+    done
+    n=${#labels[@]}
+    while IFS=$'\t' read -r id label; do
+        labels+=("$label"); actions+=(search); ids[${#labels[@]}-1]="$id"
+    done < <(settings_search_list nested)
+
     while true; do
-        OPTIONS="󰖩 WiFi
-󰂯 Bluetooth
-󰔡 Audio
-󰌢 Screen (Print: screenshot)
-󰏘 Themes
-󰏗 Software
-󰚰 System Update
-󰐥 Power
-󰇄 More
-󰌍 Back (Mod+D: app launcher)"
+        pick=$(printf '%s\n' "${labels[@]}" |
+            tfuzzel -d --index --lines "$n" -p " 󰀻 Settings | " \
+                --placeholder "Type to search")
+        [ -n "$pick" ] || menu_close
+        # Enter on typed text that matched nothing: just show it again
+        [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -lt "${#actions[@]}" ] || continue
 
-        CHOICE=$(echo -e "$OPTIONS" | tfuzzel -d -p " 󰀻 Settings | ")
-
-        if [ -z "$CHOICE" ] || is_back "$CHOICE"; then
-            tebian-menu 9>&- &
-            return
-        fi
-
-        if [[ "$CHOICE" =~ "WiFi" ]]; then
-            wifi_menu
-        elif [[ "$CHOICE" =~ "Bluetooth" ]]; then
-            bluetooth_menu
-        elif [[ "$CHOICE" =~ "Audio" ]]; then
-            audio_menu
-        elif [[ "$CHOICE" =~ "Screen" ]]; then
-            screen_all_menu
-        elif [[ "$CHOICE" =~ "Themes" ]]; then
-            theme_menu
-        elif [[ "$CHOICE" =~ "Software" ]]; then
-            # Also under More, where it used to be the only way in
-            software_hub
-        elif [[ "$CHOICE" =~ "System Update" ]]; then
-            $TERM_CMD update-all
-        elif [[ "$CHOICE" =~ "Power" ]]; then
-            power_menu
-        elif [[ "$CHOICE" =~ "More" ]]; then
-            more_menu
-        fi
+        case "${actions[$pick]}" in
+            back)
+                tebian-menu 9>&- &
+                return ;;
+            search)
+                # Lands back here once the setting is done with
+                settings_open "${ids[$pick]}" ;;
+            *)
+                "${actions[$pick]}" ;;
+        esac
     done
 }
 
 # --- Flag Handling ---
-if [[ "$1" == "--power" ]]; then
-    power_menu
-    tebian-menu &
-elif [[ "$1" == "--ui" ]]; then
-    ui_menu
-elif [[ "$1" == "--lock" ]]; then
-    lock_menu
-elif [[ "$1" == "--feel" ]]; then
-    feel_menu
-elif [[ "$1" == "--software" ]]; then
-    software_hub
-elif [[ "$1" == "--packages" ]]; then
-    package_browser
-elif [[ "$1" == "--browser" ]]; then
-    browser_menu
-elif [[ "$1" == "--ai-tools" ]]; then
-    ai_tools_menu
-elif [[ "$1" == "--menu" ]]; then
-    # One menu, opened straight from a bar button (tebian-bar-menu)
-    case "${2:-}" in
-        wifi)      wifi_menu ;;
-        bluetooth) bluetooth_menu ;;
-        audio)     audio_menu ;;
-        screen)    screen_all_menu ;;
-        power)     power_menu ;;
-        drives)    drives_menu ;;
-        update)    $TERM_CMD update-all; pkill -RTMIN+7 -x waybar 2>/dev/null ;;
-        *)         show_main_menu ;;
-    esac
-else
-    show_main_menu
-fi
+case "${1:-}" in
+    --power)
+        # From Mod+D (and the power key): Back returns there; Escape closes
+        power_menu
+        tebian-menu & ;;
+    --ui)        ui_menu ;;
+    --lock)      lock_menu ;;
+    --feel)      feel_menu ;;
+    --software)  software_hub ;;
+    --packages)  package_browser ;;
+    --browser)   browser_menu ;;
+    --ai-tools)  ai_tools_menu ;;
+    --open)
+        # A setting found from Mod+D: open it, then the Settings menu it
+        # belongs to, rather than leave the user with nothing
+        settings_open "${2:-}" || exit 1
+        show_main_menu ;;
+    --menu)
+        # One menu, opened straight from a bar button (tebian-bar-menu)
+        case "${2:-}" in
+            wifi)      wifi_menu ;;
+            bluetooth) bluetooth_menu ;;
+            audio)     audio_menu ;;
+            screen)    screen_all_menu ;;
+            power)     power_menu ;;
+            drives)    drives_menu ;;
+            update)    system_update ;;
+            *)         show_main_menu ;;
+        esac ;;
+    *)           show_main_menu ;;
+esac

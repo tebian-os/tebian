@@ -11,6 +11,7 @@ infra_menu() {
 
     INF_CHOICE=$(echo -e "$INF_OPTS" | tfuzzel -d -p " 󰡨 Infrastructure | ")
 
+    [ -n "$INF_CHOICE" ] || menu_close
     if is_back "$INF_CHOICE"; then return; fi
 
     if [[ "$INF_CHOICE" =~ "Containers" ]]; then
@@ -27,12 +28,13 @@ containers_menu() {
     while true; do
     # If no container engine at all, offer setup
     if ! command -v distrobox &>/dev/null && ! command -v docker &>/dev/null; then
-        C_OPTS="📦 Setup Containers (Distrobox + Podman)
-🐳 Install Docker + Compose (servers)
+        C_OPTS="󰏗 Setup Containers (Distrobox + Podman)
+󰡨 Install Docker + Compose (servers)
 󰌍 Back"
 
         C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰡨 Containers | ")
 
+        [ -n "$C_CHOICE" ] || menu_close
         if is_back "$C_CHOICE"; then return; fi
 
         if [[ "$C_CHOICE" =~ "Setup Containers" ]]; then
@@ -67,9 +69,9 @@ containers_menu() {
             image=$(echo "$image" | xargs)
             HAS_CONTAINERS=true
             if [[ "$status" == *"Up"* ]]; then
-                CONTAINER_LIST+="🟢 $name ($image)\n"
+                CONTAINER_LIST+="󰄬 $name ($image)\n"
             else
-                CONTAINER_LIST+="⚪ $name ($image)\n"
+                CONTAINER_LIST+="󰄰 $name ($image)\n"
             fi
         done < <(distrobox list --no-color 2>/dev/null | tail -n +2)
     fi
@@ -83,9 +85,9 @@ containers_menu() {
             image=$(echo "$image" | xargs)
             HAS_CONTAINERS=true
             if [[ "$state" == "running" ]]; then
-                CONTAINER_LIST+="🐳 🟢 $name ($image)\n"
+                CONTAINER_LIST+="󰡨 󰄬 $name ($image)\n"
             else
-                CONTAINER_LIST+="🐳 ⚪ $name ($image)\n"
+                CONTAINER_LIST+="󰡨 󰄰 $name ($image)\n"
             fi
         done < <(docker ps -a --format '{{.Names}}|{{.State}}|{{.Image}}' 2>/dev/null)
     fi
@@ -98,17 +100,18 @@ containers_menu() {
         C_OPTS+="󰐊 New Container\n"
     fi
     if command -v docker &>/dev/null; then
-        C_OPTS+="🐳 New Docker Container\n"
+        C_OPTS+="󰡨 New Docker Container\n"
     else
-        C_OPTS+="🐳 Install Docker + Compose\n"
+        C_OPTS+="󰡨 Install Docker + Compose\n"
     fi
     if ! command -v distrobox &>/dev/null; then
-        C_OPTS+="📦 Setup Distrobox + Podman\n"
+        C_OPTS+="󰏗 Setup Distrobox + Podman\n"
     fi
     C_OPTS+="󰌍 Back"
 
     C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰡨 Containers | ")
 
+    [ -n "$C_CHOICE" ] || menu_close
     if is_back "$C_CHOICE"; then return; fi
 
     if [[ "$C_CHOICE" =~ "New Docker Container" ]]; then
@@ -126,10 +129,11 @@ containers_menu() {
         fi;
         echo 'Done!'; read -p 'Press Enter...'"
     else
-        # Container entry — emoji prefixes are (partially) stripped in no_icons
-        # mode, so extract the name and route by membership, not icon prefix
+        # Container entry — the glyphs in front are gone in Text Mode, so
+        # take the name after them (names start with a letter or digit) and
+        # route by membership, not by icon
         local sel_name
-        sel_name=$(echo "$C_CHOICE" | sed -E 's/^(🐳 |🟢 |⚪ )*//; s/ \(.*//')
+        sel_name=$(echo "$C_CHOICE" | sed -E 's/^[^[:alnum:]]*//; s/ \(.*//')
         if [ -n "$sel_name" ]; then
             if command -v docker &>/dev/null && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qxF "$sel_name"; then
                 docker_action_menu "$sel_name"
@@ -143,18 +147,19 @@ containers_menu() {
 
 container_create_menu() {
     local CR_OPTS="󰣖 Arch Linux - AUR, bleeding edge
-⛰️ Alpine Linux - Minimal (5MB), musl
+󰣖 Alpine Linux - Minimal (5MB), musl
  Ubuntu - Stable, huge repos
  Fedora - Latest packages, DNF
 󰣖 Kali Linux - Security & pentesting
 󰣖 Parrot OS - Security & privacy
  openSUSE Tumbleweed - Rolling release
-📝 Custom Image
+󰏫 Custom Image
 󰌍 Back"
 
     local CR_CHOICE
     CR_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 󰐊 New Container | ")
 
+    [ -n "$CR_CHOICE" ] || menu_close
     if is_back "$CR_CHOICE"; then return; fi
 
     local image="" box_name=""
@@ -173,7 +178,7 @@ container_create_menu() {
     elif [[ "$CR_CHOICE" =~ "openSUSE" ]]; then
         image="opensuse/tumbleweed:latest"; box_name="opensuse"
     elif [[ "$CR_CHOICE" =~ "Custom" ]]; then
-        image=$(echo "" | tfuzzel -d -p " 📝 Image (e.g. debian:sid): ")
+        image=$(echo "" | tfuzzel -d -p " 󰏫 Image (e.g. debian:sid): ")
         if [ -z "$image" ]; then return; fi
         # Typed text ends up in a command line — only image-reference
         # characters, as for Docker below
@@ -221,17 +226,17 @@ container_action_menu() {
     local A_OPTS=""
     A_OPTS+="󰆍 Enter $name\n"
     if $is_running; then
-        A_OPTS+="🛑 Stop $name\n"
+        A_OPTS+="󰅖 Stop $name\n"
     fi
-    A_OPTS+="📤 Export App to Host Menu\n"
-    A_OPTS+="⚙️ Configure $name\n"
+    A_OPTS+="󰕒 Export App to Host Menu\n"
+    A_OPTS+="󰒓 Configure $name\n"
     A_OPTS+="󰆴 Remove $name\n"
     A_OPTS+="󰌍 Back"
 
     local A_CHOICE
     A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 󰡨 $name | ")
 
-    if is_back "$A_CHOICE"; then return; fi
+    if [ -z "$A_CHOICE" ] || is_back "$A_CHOICE"; then return; fi
 
     if [[ "$A_CHOICE" == *"Enter $name" ]]; then
         local image
@@ -259,7 +264,7 @@ container_action_menu() {
         container_config_menu "$name"
     elif [[ "$A_CHOICE" == *"Remove $name" ]]; then
         local CONFIRM
-        CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " ⚠️ Delete $name? | ")
+        CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " Delete $name? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
             if distrobox rm "$name" -f >/dev/null 2>&1; then
                 tnotify "Containers" "$name removed"
@@ -285,9 +290,9 @@ container_export_menu() {
 
     local APP_OPTS="󰌍 Back\n$APPS"
     local APP_CHOICE
-    APP_CHOICE=$(echo -e "$APP_OPTS" | tfuzzel -d -p " 📤 Export from $name | ")
+    APP_CHOICE=$(echo -e "$APP_OPTS" | tfuzzel -d -p " 󰕒 Export from $name | ")
 
-    if is_back "$APP_CHOICE"; then return; fi
+    if [ -z "$APP_CHOICE" ] || is_back "$APP_CHOICE"; then return; fi
 
     # Find the .desktop file matching the selected app name. The name comes
     # from the container's packages, so it goes in as an argument, never
@@ -336,18 +341,18 @@ docker_action_menu() {
     local A_OPTS=""
     if $is_running; then
         A_OPTS+="󰆍 Enter $name\n"
-        A_OPTS+="🛑 Stop $name\n"
+        A_OPTS+="󰅖 Stop $name\n"
     else
         A_OPTS+="󰐊 Start $name\n"
     fi
-    A_OPTS+="📋 View Logs\n"
+    A_OPTS+="󰋜 View Logs\n"
     A_OPTS+="󰆴 Remove $name\n"
     A_OPTS+="󰌍 Back"
 
     local A_CHOICE
-    A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 🐳 $name | ")
+    A_CHOICE=$(echo -e "$A_OPTS" | tfuzzel -d -p " 󰡨 $name | ")
 
-    if is_back "$A_CHOICE"; then return; fi
+    if [ -z "$A_CHOICE" ] || is_back "$A_CHOICE"; then return; fi
 
     # Whole labels, which hold the name: "Start Stopwatch" matched =~ "Stop"
     if [[ "$A_CHOICE" == *"Enter $name" ]]; then
@@ -374,7 +379,7 @@ docker_action_menu() {
         $TERM_CMD bash -c "docker logs --tail 100 '$name' 2>&1; echo ''; read -p 'Press Enter to close...'"
     elif [[ "$A_CHOICE" == *"Remove $name" ]]; then
         local CONFIRM
-        CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " ⚠️ Delete $name? | ")
+        CONFIRM=$(echo -e "No, keep it\nYes, remove $name" | tfuzzel -d --match-mode=exact -p " Delete $name? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
             if docker rm -f "$name" >/dev/null 2>&1; then
                 tnotify "Docker" "$name removed"
@@ -386,16 +391,17 @@ docker_action_menu() {
 }
 
 docker_create_menu() {
-    local CR_OPTS="⛰️ Alpine SSH Server (port 2222)
-🌐 Nginx Web Server (port 8080)
-🐘 PostgreSQL Database (port 5432)
+    local CR_OPTS="󰣖 Alpine SSH Server (port 2222)
+󰖟 Nginx Web Server (port 8080)
+󰡨 PostgreSQL Database (port 5432)
  Redis Cache (port 6379)
-📝 Custom Image
+󰏫 Custom Image
 󰌍 Back"
 
     local CR_CHOICE
-    CR_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 🐳 New Docker Container | ")
+    CR_CHOICE=$(echo -e "$CR_OPTS" | tfuzzel -d -p " 󰡨 New Docker Container | ")
 
+    [ -n "$CR_CHOICE" ] || menu_close
     if is_back "$CR_CHOICE"; then return; fi
 
     # Published ports bind to 127.0.0.1: Docker's own iptables rules bypass
@@ -448,7 +454,7 @@ docker_create_menu() {
             'printf "requirepass %s\n" "$REDIS_PASSWORD" > /tmp/redis.conf && unset REDIS_PASSWORD && exec redis-server /tmp/redis.conf')
         post_msg="Connect: redis-cli -h localhost --askpass"
     elif [[ "$CR_CHOICE" =~ "Custom" ]]; then
-        image=$(echo "" | tfuzzel -d -p " 📝 Image (e.g. nginx:latest): ")
+        image=$(echo "" | tfuzzel -d -p " 󰏫 Image (e.g. nginx:latest): ")
         [ -z "$image" ] && return
         # Typed text ends up in a command line — only image-reference characters
         if [[ ! "$image" =~ ^[a-z0-9][a-z0-9._/:@-]*$ ]]; then
@@ -547,6 +553,7 @@ vm_config_menu() {
     local CFG_CHOICE
     CFG_CHOICE=$(echo -e "$CFG_OPTS" | tfuzzel -d -p " $vm_name Config | ")
 
+    [ -n "$CFG_CHOICE" ] || menu_close
     if is_back "$CFG_CHOICE"; then return; fi
 
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
@@ -601,6 +608,7 @@ container_config_menu() {
     local CFG_CHOICE
     CFG_CHOICE=$(echo -e "$CFG_OPTS" | tfuzzel -d -p " $name Config | ")
 
+    [ -n "$CFG_CHOICE" ] || menu_close
     if is_back "$CFG_CHOICE"; then return; fi
 
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
@@ -644,21 +652,21 @@ vm_menu() {
     # Detect Windows VM
     local win_label
     if [ -f "$VM_DIR/windows/windows.qcow2" ]; then
-        win_label="🪟 Launch Windows 11"
+        win_label="󰍹 Launch Windows 11"
     elif [ -f "$VM_DIR/windows/windows.iso" ]; then
-        win_label="🪟 Install Windows 11 (ISO Ready)"
+        win_label="󰍹 Install Windows 11 (ISO Ready)"
     else
-        win_label="🪟 Setup Windows 11 VM"
+        win_label="󰍹 Setup Windows 11 VM"
     fi
 
     # Detect macOS VM
     local mac_label
     if [ -f "$VM_DIR/macos/mac_hdd.qcow2" ] && [ -f "$VM_DIR/macos/OpenCore.qcow2" ]; then
-        mac_label="🍎 Launch macOS"
+        mac_label="󰍹 Launch macOS"
     elif [ -f "$VM_DIR/macos/BaseSystem.img" ]; then
-        mac_label="🍎 Install macOS (Base System Ready)"
+        mac_label="󰍹 Install macOS (Base System Ready)"
     else
-        mac_label="🍎 Setup macOS VM"
+        mac_label="󰍹 Setup macOS VM"
     fi
 
     # Detect isolated workspace state
@@ -667,12 +675,12 @@ vm_menu() {
         local ws_state
         ws_state=$(virsh domstate tebian-workstation 2>/dev/null || echo "unknown")
         if [[ "$ws_state" == "running" ]]; then
-            iso_label="☠️ Secure Workspace (Running)"
+            iso_label="󰗹 Secure Workspace (Running)"
         else
-            iso_label="☠️ Secure Workspace (Stopped)"
+            iso_label="󰗹 Secure Workspace (Stopped)"
         fi
     else
-        iso_label="☠️ Secure Workspace (Not Setup)"
+        iso_label="󰗹 Secure Workspace (Not Setup)"
     fi
 
     local VM_OPTS=""
@@ -688,6 +696,7 @@ vm_menu() {
 
     V_CHOICE=$(echo -e "$VM_OPTS" | tfuzzel -d -p " 󰾵 VMs | ")
 
+    [ -n "$V_CHOICE" ] || menu_close
     if is_back "$V_CHOICE"; then return; fi
 
     if [[ "$V_CHOICE" =~ "Install KVM Core" ]]; then
@@ -1047,17 +1056,20 @@ vm_launch_macos() {
 tlink_menu() {
     while true; do
     TL_OPTS="󰌄 Fleet Management (Servers & Deploy)
-🌐 Network Setup (Tailscale)
-🔒 VPN (WireGuard)
+󰖟 Network Setup (Tailscale)
+󰌾 VPN (WireGuard)
 󰋜 Quick Status
 󰌍 Back"
 
     TL_CHOICE=$(echo -e "$TL_OPTS" | tfuzzel -d -p " 󰌄 T-Link | ")
 
+    [ -n "$TL_CHOICE" ] || menu_close
     if is_back "$TL_CHOICE"; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Fleet Management" ]]; then
-        tebian-tlink
+        # Its own menus, in their own process: it exits non-zero when it
+        # was closed with Escape, which closes Settings too
+        tebian-tlink || menu_close
     elif [[ "$TL_CHOICE" =~ "Network Setup" ]]; then
         tlink_network_menu
     elif [[ "$TL_CHOICE" =~ "VPN" ]]; then
@@ -1076,21 +1088,21 @@ vpn_menu() {
         # whenever sudo creds aren't cached (the normal fuzzel-launched case)
         WG_IFACE=$(ip -o link show type wireguard 2>/dev/null | head -1 | awk -F': ' '{print $2}')
         if [ -n "$WG_IFACE" ]; then
-            WG_LABEL="✅ WireGuard Active ($WG_IFACE)"
+            WG_LABEL="󰄬 WireGuard Active ($WG_IFACE)"
         else
-            WG_LABEL="⚠️ WireGuard Installed (No Tunnel)"
+            WG_LABEL="󰄰 WireGuard Installed (No Tunnel)"
         fi
     else
-        WG_LABEL="📦 WireGuard Not Installed"
+        WG_LABEL="󰄰 WireGuard Not Installed"
     fi
 
     VPN_OPTS="$WG_LABEL"
 
     if ! command -v wg &>/dev/null; then
-        VPN_OPTS+="\n📦 Install WireGuard"
+        VPN_OPTS+="\n󰏗 Install WireGuard"
     else
         if [ -n "$WG_IFACE" ]; then
-            VPN_OPTS+="\n🛑 Disconnect ($WG_IFACE)"
+            VPN_OPTS+="\n󰅖 Disconnect ($WG_IFACE)"
         fi
         # List available configs — /etc/wireguard is root-only (0700), so merge
         # a direct listing (if readable), a cached-sudo listing, and the names
@@ -1102,17 +1114,18 @@ vpn_menu() {
         } | sed 's/\.conf$//' | sort -u)
         if [ -n "$WG_CONFIGS" ]; then
             for cfg in $WG_CONFIGS; do
-                VPN_OPTS+="\n🚀 Connect: $cfg"
+                VPN_OPTS+="\n󰐊 Connect: $cfg"
             done
         fi
-        VPN_OPTS+="\n📝 Import Config File"
-        VPN_OPTS+="\n🔑 Generate Keypair"
+        VPN_OPTS+="\n󰏫 Import Config File"
+        VPN_OPTS+="\n󰌆 Generate Keypair"
     fi
 
     VPN_OPTS+="\n󰌍 Back"
 
-    VP_CHOICE=$(echo -e "$VPN_OPTS" | tfuzzel -d -p " 🔒 VPN | ")
+    VP_CHOICE=$(echo -e "$VPN_OPTS" | tfuzzel -d -p " 󰌾 VPN | ")
 
+    [ -n "$VP_CHOICE" ] || menu_close
     if is_back "$VP_CHOICE"; then return; fi
 
     if [[ "$VP_CHOICE" =~ "Install WireGuard" ]]; then
@@ -1180,25 +1193,26 @@ tlink_network_menu() {
         TS_IP=$(tailscale ip -4 2>/dev/null)
         
         if [ "$TS_STATUS" == "Active" ]; then
-            TL_LABEL="✅ Tailscale Active ($TS_IP)"
-            TL_ACTION="🛑 Disconnect"
+            TL_LABEL="󰄬 Tailscale Active ($TS_IP)"
+            TL_ACTION="󰅖 Disconnect"
         else
-            TL_LABEL="⚠️ Tailscale Inactive"
-            TL_ACTION="🚀 Connect"
+            TL_LABEL="󰄰 Tailscale Inactive"
+            TL_ACTION="󰐊 Connect"
         fi
         
         TL_OPTS="$TL_LABEL
 $TL_ACTION
-🏰 Connect to Headscale (Self-Hosted)
-📋 Show Network Status
+󰌄 Connect to Headscale (Self-Hosted)
+󰋜 Show Network Status
 󰌍 Back"
     else
-        TL_OPTS="📦 Install Tailscale
+        TL_OPTS="󰏗 Install Tailscale
 󰌍 Back"
     fi
 
-    TL_CHOICE=$(echo -e "$TL_OPTS" | tfuzzel -d -p " 🌐 Network | ")
+    TL_CHOICE=$(echo -e "$TL_OPTS" | tfuzzel -d -p " 󰖟 Network | ")
 
+    [ -n "$TL_CHOICE" ] || menu_close
     if is_back "$TL_CHOICE"; then return; fi
 
     if [[ "$TL_CHOICE" =~ "Install Tailscale" ]]; then
@@ -1235,7 +1249,7 @@ $TL_ACTION
     elif [[ "$TL_CHOICE" =~ "Connect" ]] && ! [[ "$TL_CHOICE" =~ "Headscale" ]]; then
         $TERM_CMD bash -c "sudo tailscale up && echo '✅ Connected.' || echo '❌ Not connected — see above.'; read -p 'Press Enter...'"
     elif [[ "$TL_CHOICE" =~ "Headscale" ]]; then
-        SERVER_URL=$(echo "" | tfuzzel -d -p " 🏰 Headscale URL: ")
+        SERVER_URL=$(echo "" | tfuzzel -d -p " 󰌄 Headscale URL: ")
         if [ -n "$SERVER_URL" ]; then
             HEADSCALE_URL="$SERVER_URL" $TERM_CMD bash -c 'sudo tailscale up --login-server "$HEADSCALE_URL" && echo "✅ Connected." || echo "❌ Not connected — see above."; read -p "Press Enter..."'
         fi
@@ -1254,7 +1268,7 @@ tlink_status() {
 Network:"
     
     if command -v tailscale >/dev/null; then
-        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' && echo "✅ Connected" || echo "⚠️ Inactive")
+        TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' && echo "Connected" || echo "Inactive")
         TS_IP=$(tailscale ip -4 2>/dev/null)
         STATUS+="
   Tailscale: $TS_STATUS"
@@ -1290,8 +1304,7 @@ Servers:"
 󰌍 Back"
     
     CHOICE=$(echo -e "$STATUS" | tfuzzel -d -p "" --width 40 --lines 15)
-    
-    # Back returns to tlink_menu's while loop
-    return
+    [ -n "$CHOICE" ] || menu_close
+    # Back (or any line) returns to tlink_menu's while loop
 }
 

@@ -132,7 +132,7 @@ apps_pick() {
         done
         printf '%s\n' "󰌍 Back"
     } | tfuzzel -d -p " $prompt | " --width 60) || return 1
-    is_back "$choice" && return 1
+    if [ -z "$choice" ] || is_back "$choice"; then return 1; fi
     for i in "${!labels[@]}"; do
         if [ "${labels[$i]}" = "$choice" ]; then
             echo "${ids[$i]}"
@@ -153,7 +153,7 @@ apps_need_xdg() {
     local c
     c=$(printf '%s\n' "󰏗 Install xdg-utils (sets default apps)" "󰌍 Back" \
         | tfuzzel -d -p " xdg-utils not installed | ")
-    is_back "$c" && return 1
+    if [ -z "$c" ] || is_back "$c"; then return 1; fi
     if tebian_term_apt_install xdg-utils; then
         tnotify "Default Apps" "xdg-utils installed"
         return 0
@@ -193,6 +193,7 @@ default_apps_menu() {
             "󰷊 File Manager (Current: $fm)" \
             "󰆍 Terminal (Current: $(apps_current_terminal))" "󰌍 Back" \
             | tfuzzel -d -p " Default Apps | " --width 60)
+        [ -n "$choice" ] || menu_close
         if is_back "$choice"; then return; fi
         # Matched from the start, after the glyph (none in text mode): the
         # current app's name is in the label and could contain another's words
@@ -216,7 +217,7 @@ default_browser_menu() {
     if [ "$n" -eq 0 ]; then
         local c
         c=$(printf '%s\n' "󰖟 Get a Web Browser" "󰌍 Back" | tfuzzel -d -p " No web browser installed | ")
-        is_back "$c" && return
+        if [ -z "$c" ] || is_back "$c"; then return; fi
         declare -F browser_menu >/dev/null && browser_menu
         return
     fi
@@ -248,7 +249,7 @@ default_file_manager_menu() {
     if [ "$n" -eq 0 ]; then
         local c
         c=$(printf '%s\n' "󰏗 Install Thunar" "󰌍 Back" | tfuzzel -d -p " No file manager installed | ")
-        is_back "$c" && return
+        if [ -z "$c" ] || is_back "$c"; then return; fi
         if tebian_term_apt_install thunar; then
             tnotify "Default Apps" "Thunar installed"
         else
@@ -325,6 +326,7 @@ startup_apps_menu() {
             [ ${#labels[@]} -gt 0 ] && printf '%s\n' "${labels[@]}"
             printf '%s\n' "󰋅 Changes take effect at next login" "󰌍 Back"
         } | tfuzzel -d -p " Startup Apps | " --width 60)
+        [ -n "$choice" ] || menu_close
         if is_back "$choice"; then return; fi
 
         # App entries first: an app could be called "Add a Startup App"
@@ -373,7 +375,7 @@ startup_remove() {
     local line="$1" label="$2" c l
     c=$(printf '%s\n' "󰆴 Remove $label from Startup" "󰌍 Back" \
         | tfuzzel -d -p " Startup Apps | " --width 60)
-    is_back "$c" && return
+    if [ -z "$c" ] || is_back "$c"; then return; fi
     [[ "$c" == *"Remove "* ]] || return
     local -a keep=()
     local dropped=0

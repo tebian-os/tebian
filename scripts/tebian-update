@@ -435,7 +435,7 @@ if dpkg-query -W minecraft-launcher >/dev/null 2>&1 && ! apt-get -s check >/dev/
         sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1 || true
         if sudo dpkg --purge minecraft-launcher; then
             info "Minecraft package removed (your worlds in ~/.minecraft are kept)."
-            info "Reinstall it from Settings → Software & Gaming."
+            info "Reinstall it from Settings → Software → Software & Gaming."
         else
             warn "Could not remove minecraft-launcher — apt stays blocked until it is: sudo dpkg --purge minecraft-launcher"
         fi
@@ -536,7 +536,7 @@ fi
 if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
         "$LOCAL_BIN/tebian-install-swayfx" --check ||
-            warn "SwayFX needs rebuilding (window snapping or library fixes): Settings → UI → Window Snapping"
+            warn "SwayFX needs rebuilding (window snapping or library fixes): Settings → More → Desktop & UI → Window Snapping"
     elif ! "$LOCAL_BIN/tebian-build-sway" --check; then
         info "Sway: adding window snapping (rebuilding Debian's sway, about a minute)"
         if sudo -v; then
@@ -576,6 +576,38 @@ if [ -f "$SWAY_NEW" ] && [ -f "$SWAY_CUR" ]; then
         file_sum "$SWAY_CUR" > "$SWAY_REC"
         rm -f "$SWAY_CUR.tebian-new"
     fi
+fi
+
+# --- 3c. Do Not Disturb in mako's config -----------------------------------------
+# The bar's bell and Settings switch mako to a do-not-disturb mode, which hides
+# nothing unless mako's config says so. ~/.config/mako/config is a copy of the
+# theme's file taken when the theme was applied, so installs from before the
+# mode existed keep a copy without it. The section is appended rather than the
+# theme file copied over: the file may hold the user's own edits, and appending
+# keeps every line of them. An untouched copy ends up identical to what the
+# theme ships now. Done once (the mark), so a user who deletes the section
+# keeps it deleted; a symlinked config belongs to the user's dotfiles.
+MAKO_CUR="$HOME/.config/mako/config"
+MAKO_MARK="$STATE_DIR/mako-dnd-added"
+MAKO_DND=$(sed -n '/^# Do Not Disturb/,$p' "$TEBIAN_DIR/configs/mako/config" 2>/dev/null) || MAKO_DND=""
+if [ -f "$MAKO_CUR" ] && [ ! -f "$MAKO_MARK" ] && [ -n "$MAKO_DND" ]; then
+    if grep -qs '^\[.*mode=do-not-disturb' "$MAKO_CUR"; then
+        :
+    elif [ -L "$MAKO_CUR" ]; then
+        warn "Your mako config is a symlink, so Do Not Disturb was not added to it. To silence"
+        warn "notifications from the bar's bell, add the end of $TEBIAN_DIR/configs/mako/config to it."
+    else
+        cp -p "$MAKO_CUR" "$MAKO_CUR.before-update"
+        # A last line without a newline would swallow the blank line
+        { [ -z "$(tail -c1 "$MAKO_CUR")" ] || echo; printf '\n%s\n' "$MAKO_DND"; } >> "$MAKO_CUR"
+        info "Do Not Disturb added to ~/.config/mako/config (previous copy: config.before-update)"
+        # reload keeps the current mode, so a bell already on starts working now
+        if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v makoctl >/dev/null; then
+            makoctl reload >/dev/null 2>&1 || true
+        fi
+    fi
+    mkdir -p "$STATE_DIR"
+    touch "$MAKO_MARK"
 fi
 
 # --- 4. Apply ---------------------------------------------------------------------

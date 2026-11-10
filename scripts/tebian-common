@@ -90,13 +90,36 @@ confirm() {
     fi
 }
 
-# True if a tfuzzel selection is empty (Esc) or the Back entry.
-# Must match both icon mode ("󰌍 Back...") and no_icons mode, where tfuzzel
-# strips the glyph and leading space so the entry comes back as "Back...".
-# "Back " prefix (not bare "Back*") so labels like "Backup Configs" don't match.
+# Escape closes the menus; the Back entry goes up one level.
+# An empty answer from tfuzzel means Escape (or Enter on an empty prompt):
+# tfuzzel never returns a separator line. What Escape does depends on where
+# it is pressed, and each call site says which:
+#
+#   A menu (a list of settings or of other menus, with a Back entry):
+#       [ -n "$CHOICE" ] || menu_close      # Escape: close every menu
+#       is_back "$CHOICE" && return         # Back: one level up
+#
+#   A step inside an operation (typed text, a yes/no, a second picker that
+#   needs what the first one chose, an action on one picked item):
+#       [ -n "$X" ] || return               # Escape: cancel this step only
+#   Closing there would drop the operation halfway; the user lands back on
+#   the menu it started from.
+#
+# Back matches icon mode ("󰌍 Back...") and Text Mode, where tfuzzel strips
+# the glyph so the entry comes back as "Back...". "Back " prefix (not bare
+# "Back*") so labels like "Backup Configs" don't match.
 is_back() {
     local c="$1"
-    [[ -z "$c" || "$c" == *"󰌍 Back"* || "$c" == "Back" || "$c" == "Back "* ]]
+    [[ "$c" == *"󰌍 Back"* || "$c" == "Back" || "$c" == "Back "* ]]
+}
+
+# Escape in a menu: leave the script, which takes its EXIT trap (Settings'
+# lock) with it. exit inside $(...) or a pipe would only end that subshell
+# and leave the caller carrying on with an empty answer; menus run in the
+# main shell, but if one ever doesn't, the main shell is asked to stop too.
+menu_close() {
+    [ "$BASHPID" = "$$" ] || kill -TERM "$$" 2>/dev/null
+    exit 0
 }
 
 # Add an apt repo whose key must match a pinned fingerprint. A repo key is
@@ -419,34 +442,44 @@ tfuzzel() {
     # A drop-down is also sized to its items: themes fix fuzzel at 15
     # lines, which left short menus as a tall box hanging off the bar.
     local -a anchor=()
+    # The menu is kept in a file so it can be shown again; a file, not a
+    # variable: entries with their own icon carry a NUL ("name\0icon\x1fkitty"),
+    # which bash variables drop — fuzzel then printed the icon spec as text.
+    # In the user's own runtime dir it is named by PID: one fork fewer on
+    # every menu. A name anyone can guess is not safe in a shared /tmp.
+    local buf n
+    local -a src
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ]; then
+        buf="$XDG_RUNTIME_DIR/tfuzzel.$BASHPID"
+    else
+        buf=$(mktemp) || return 1
+    fi
     if [ -n "${TEBIAN_MENU_ANCHOR:-}" ]; then
-        # Buffered in a file, not a variable: entries with their own icon
-        # carry a NUL ("name\0icon\x1fkitty"), which bash variables drop —
-        # fuzzel then printed the icon spec as text
-        local buf n
-        buf=$(mktemp)
-        cat > "$buf"
+        cat > "$buf" || return 1
         n=$(grep -ac . "$buf")
         [ "$n" -gt 15 ] && n=15
         [ "$n" -lt 1 ] && n=1
         anchor=(--anchor "$TEBIAN_MENU_ANCHOR" --x-margin 8 --y-margin 6 --lines "$n")
-        exec 3< "$buf"
-        rm -f "$buf"
+        src=(cat "$buf")
     else
-        exec 3<&0
+        # Copied on the way through, so fuzzel starts drawing at once
+        src=(tee "$buf")
     fi
-    if [ -f "$HOME/.config/tebian/no_icons" ]; then
-        # Text Mode: Strip Nerd Fonts (PUA: E000-F8FF, F0000-FFFFD) and Emoji (1F300-1FAFF)
-        RESULT=$(perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' <&3 | fuzzel "${anchor[@]}" "$@")
-    else
-        # Icon Mode (Default): Pass through
-        RESULT=$(fuzzel "${anchor[@]}" "$@" <&3)
-    fi
-    exec 3<&-
-    # Filter out separator lines — treat as no selection
-    if [[ "$RESULT" =~ ^─+$ ]]; then
-        return 1
-    fi
+    while true; do
+        if [ -f "$HOME/.config/tebian/no_icons" ]; then
+            # Text Mode: Strip Nerd Fonts (PUA: E000-F8FF, F0000-FFFFD) and Emoji (1F300-1FAFF)
+            RESULT=$("${src[@]}" | perl -CS -pe 's/[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}\x{1F300}-\x{1FAFF}]//g; s/^\s+//' | fuzzel "${anchor[@]}" "$@")
+        else
+            # Icon Mode (Default): Pass through
+            RESULT=$("${src[@]}" | fuzzel "${anchor[@]}" "$@")
+        fi
+        # A separator or heading line ("─────", "── Desktop Apps") isn't a
+        # choice: show the menu again rather than return nothing, which
+        # callers read as Escape
+        [[ "$RESULT" == ─* ]] || break
+        src=(cat "$buf")
+    done
+    rm -f "$buf"
     echo "$RESULT"
 }
 

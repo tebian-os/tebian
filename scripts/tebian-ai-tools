@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN AI TOOLS
-# Settings > More > Software > AI Tools. Installs AI coding tools from their
+# Settings > Software > AI Tools. Installs AI coding tools from their
 # publishers' official sources, and nowhere else.
 #
 #   tebian-ai-tools list            ids, in menu order

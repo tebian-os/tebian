@@ -180,8 +180,8 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         echo "  Timezone: $CURRENT_TZ"
         echo "  Hostname: $CURRENT_HOST"
         echo "  Keyboard: $CURRENT_LAYOUT"
-        echo "  (Change these anytime: Super+S > More > System for timezone and name,"
-        echo "   Super+S > More > Desktop & UI > Input Devices for the keyboard)"
+        echo "  (Change these anytime: Super+S > System for timezone and name,"
+        echo "   Super+S > Keyboard & Mouse for the keyboard, or type it in Super+S)"
         echo ""
 
         # === DETECT HARDWARE ===
@@ -251,7 +251,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         if ! tebian-build-sway --check 2>/dev/null; then
             echo "Adding window snapping to Sway..."
             tebian-build-sway --install --clean --output "$HOME/.cache/tebian" ||
-                echo "  ⚠ Window snapping was not built. Settings > UI > Window Snapping tries again."
+                echo "  ⚠ Window snapping was not built. Settings > More > Desktop & UI > Window Snapping tries again."
         fi
 
         # === HARDWARE-SPECIFIC PACKAGES ===

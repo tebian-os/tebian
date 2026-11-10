@@ -203,8 +203,12 @@ CSSEOF
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then
         swaymsg reload 2>/dev/null
-        pkill mako 2>/dev/null; sleep 0.1
-        setsid -f mako </dev/null >/dev/null 2>&1
+        # A reload keeps mako's modes; a restart would quietly switch Do Not
+        # Disturb off while the bar's bell still shows it on
+        if ! { pgrep -x mako >/dev/null && makoctl reload >/dev/null 2>&1; }; then
+            pkill mako 2>/dev/null; sleep 0.1
+            setsid -f mako </dev/null >/dev/null 2>&1
+        fi
         notify-send "Tebian Theme" "$theme theme applied"
     fi
 

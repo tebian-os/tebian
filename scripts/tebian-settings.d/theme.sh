@@ -26,6 +26,7 @@ $(_tm "Rose Pine" "Soft Pink")
 
     T_CHOICE=$(echo -e "$THEME_OPTS" | tfuzzel -d -p " 󰏘 Themes | ")
 
+    [ -n "$T_CHOICE" ] || menu_close
     if is_back "$T_CHOICE"; then return; fi
 
     if [[ "$T_CHOICE" =~ "Custom Wallpaper" ]]; then
@@ -71,7 +72,7 @@ custom_wallpaper_menu() {
         SHIPPED=$(find "$SHIPPED_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) 2>/dev/null | sort)
         CUSTOM=$(find "$WALLPAPER_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.gif" \) 2>/dev/null | sort)
         
-        W_OPTS="📂 Open Wallpaper Folder
+        W_OPTS="󰷊 Open Wallpaper Folder
 󰏘 Tebian Wallpapers
 󰌍 Back"
         
@@ -88,6 +89,7 @@ custom_wallpaper_menu() {
         
         W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰋩 Wallpaper | ")
         
+        [ -n "$W_CHOICE" ] || menu_close
         if is_back "$W_CHOICE"; then return; fi
         
         if [[ "$W_CHOICE" =~ "Open Wallpaper Folder" ]]; then
@@ -127,6 +129,7 @@ Current: $CURRENT_FEEL
 
     F_CHOICE=$(echo -e "$FEEL_OPTS" | tfuzzel -d -p " 󰇄 Feel | ")
 
+    [ -n "$F_CHOICE" ] || menu_close
     if is_back "$F_CHOICE"; then return; fi
 
     # Match on the "<name> - " label prefix — descriptions reuse the words
@@ -202,11 +205,12 @@ font_menu() {
 󰛖 Terminus (Retro/Pixel)
 󰛖 Inter (Modern/Clean)
 󰛖 Hack (Classic Terminal)
-⚠️  Applies to Sway, Kitty, & Fuzzel
+󰋽 Applies to Sway, Kitty, & Fuzzel
 󰌍 Back"
 
     F_CHOICE=$(echo -e "$F_OPTS" | tfuzzel -d -p " 󰛖 Fonts | ")
 
+    [ -n "$F_CHOICE" ] || menu_close
     if is_back "$F_CHOICE"; then return; fi
 
     # Helper to apply font
