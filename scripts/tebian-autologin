@@ -14,8 +14,9 @@
 #        print base + the autologin section from live (tebian-update uses
 #        this so refreshing greetd's config keeps the user's choice)
 #
-# Installer-only flags: --file <config.toml> (a target being installed) and
-# --assume-encrypted (it knows; the target root isn't mounted at /).
+# Installer-only flags: --file <config.toml> and --home <dir> (a target being
+# installed) and --assume-encrypted (it knows; the target root isn't mounted
+# at /).
 #
 # Refuses to enable on an unencrypted root: autologin there would hand the
 # desktop to anyone who powers the machine on.
@@ -34,6 +35,31 @@ root_encrypted() {
     lsblk -snro TYPE "$src" 2>/dev/null | grep -qx crypt
 }
 
+# Skipping the login screen means no password is typed that could unlock the
+# keyring, so the first browser start would ask the user to invent a keyring
+# password — and ask for it again every boot. Give an account that has no
+# keyring yet one without a password of its own: the encrypted disk is what
+# protects it, exactly as it protects everything else in the home directory.
+# An existing keyring is never touched.
+seed_keyring() {
+    local home="$1" dir owner
+    [ -d "$home" ] || return 0
+    dir="$home/.local/share/keyrings"
+    compgen -G "$dir/*.keyring" >/dev/null && return 0
+    [ -e "$dir/default" ] && return 0
+    owner=$(stat -c '%u:%g' "$home")
+    local d
+    for d in "$home/.local" "$home/.local/share" "$dir"; do
+        [ -d "$d" ] || { mkdir "$d" && chown "$owner" "$d"; }
+    done
+    chmod 700 "$dir"
+    printf '%s\n' '[keyring]' 'display-name=Default keyring' 'ctime=0' 'mtime=0' \
+        'lock-on-idle=false' 'lock-after=false' > "$dir/Default_keyring.keyring"
+    printf 'Default_keyring' > "$dir/default"
+    chown "$owner" "$dir/Default_keyring.keyring" "$dir/default"
+    chmod 600 "$dir/Default_keyring.keyring" "$dir/default"
+}
+
 # The config without our section
 strip_block() {
     awk -v b="$BEGIN" -v e="$END" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$1"
@@ -45,11 +71,12 @@ get_block() {
 }
 
 cmd="${1:-status}"; shift || true
-user="" file="$CONF" assume=""
+user="" file="$CONF" assume="" home=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --user) user="$2"; shift 2 ;;
         --file) file="$2"; shift 2 ;;
+        --home) home="$2"; shift 2 ;;
         --assume-encrypted) assume=1; shift ;;
         *) break ;;
     esac
@@ -92,6 +119,10 @@ TOML
     fi
     chmod 644 "$tmp"
     mv -f "$tmp" "$file"
+    if [ "$cmd" = enable ]; then
+        [ -n "$home" ] || home=$(getent passwd "$user" | cut -d: -f6)
+        seed_keyring "$home" || echo "Note: couldn't prepare a keyring; a browser may ask to create one." >&2
+    fi
     echo "Login screen skip after disk unlock: $([ "$cmd" = enable ] && echo on || echo off)"
     ;;
 render)

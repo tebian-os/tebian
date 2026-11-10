@@ -351,10 +351,8 @@ NWGFIX
         sudo tee /etc/apt/apt.conf.d/80-tebian-nwg-hello >/dev/null
     sudo /usr/local/sbin/tebian-nwg-hello-fix
 
-    # Clean greetd PAM config (remove gnome-keyring/kwallet which cause auth failures)
-    if [ -f /etc/pam.d/greetd ]; then
-        sudo sed -i '/pam_gnome_keyring/d; /pam_kwallet/d' /etc/pam.d/greetd
-    fi
+    # Login unlocks the keyring (see the comments in the file)
+    sudo install -m 644 "$TEBIAN_DIR/configs/greetd/pam" /etc/pam.d/greetd
 
     # Enable greetd (replaces getty on tty7). The old login screen is only
     # disabled, not stopped — the user may be sitting in its session right now;

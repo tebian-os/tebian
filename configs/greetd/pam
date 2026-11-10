@@ -1,0 +1,11 @@
+#%PAM-1.0
+# Installed as /etc/pam.d/greetd.
+@include login
+
+# Unlock the keyring with the password typed at the login screen. Without
+# this, the first app that stores a password (a browser, mostly) pops up
+# "Choose password for new keyring" and asks again every session.
+# The leading "-" makes PAM skip these lines quietly when gnome-keyring isn't
+# installed (Base installs), so they can never get in the way of a login.
+-auth     optional pam_gnome_keyring.so
+-session  optional pam_gnome_keyring.so auto_start

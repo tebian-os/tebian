@@ -399,6 +399,9 @@ if grep -qs "nwg-hello" /etc/greetd/config.toml; then
         queue_root configs/greetd/config.toml /etc/greetd/config.toml            644 no
     fi
     queue_root configs/greetd/environments    /etc/greetd/environments           644 no
+    # Installs from before 3.5 had the keyring lines stripped from this file,
+    # so browsers asked to create a keyring on first start
+    queue_root configs/greetd/pam             /etc/pam.d/greetd                  644 no
     for f in nwg-hello.json nwg-hello.css tebian.glade sway-config; do
         queue_root "configs/nwg-hello/$f"     "/etc/nwg-hello/$f"                644 no
     done

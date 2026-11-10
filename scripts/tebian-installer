@@ -1728,7 +1728,8 @@ KBEOF
             # this is. A separate passphrase keeps the normal login screen.
             if $AUTOLOGIN; then
                 bash "$TEBIAN_SRC/scripts/tebian-autologin" enable --user "$USERNAME" \
-                    --file "$TARGET/etc/greetd/config.toml" --assume-encrypted >> "$INSTALL_LOG" 2>&1
+                    --file "$TARGET/etc/greetd/config.toml" --home "$TARGET/home/$USERNAME" \
+                    --assume-encrypted >> "$INSTALL_LOG" 2>&1
             fi
 
             # Copy nwg-hello configs
@@ -1760,10 +1761,8 @@ NWGFIX
                 > "$TARGET/etc/apt/apt.conf.d/80-tebian-nwg-hello"
             chroot "$TARGET" /usr/local/sbin/tebian-nwg-hello-fix
 
-            # Clean greetd PAM (remove gnome-keyring/kwallet which cause auth failures)
-            if [ -f "$TARGET/etc/pam.d/greetd" ]; then
-                sed -i '/pam_gnome_keyring/d; /pam_kwallet/d' "$TARGET/etc/pam.d/greetd"
-            fi
+            # Login unlocks the keyring (see the comments in the file)
+            install -m 644 "$TEBIAN_SRC/configs/greetd/pam" "$TARGET/etc/pam.d/greetd"
 
             # Pre-populate greeter cache so hidden combos have correct defaults
             mkdir -p "$TARGET/var/cache/nwg-hello"
