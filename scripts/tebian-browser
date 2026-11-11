@@ -428,7 +428,7 @@ do_install() {
             ;;
     esac
     claim_default "$id"
-    echo "$name is installed. Find it in Mod+D."
+    echo "$name is installed. Find it in Super+D."
 }
 
 do_remove() {

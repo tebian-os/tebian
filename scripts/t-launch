@@ -31,10 +31,11 @@ SESSIONS_DIR="$HOME/Sessions"
 DATE=$(date +%Y-%m-%d)
 
 # 1. Generate the list of options
+# A "─" line is a separator: tfuzzel shows the menu again if it is picked
 OPTIONS="󰋜 Home
 󰐊 New Daily Session
 󰷊 Scratchpad
-----------------"
+────────────────"
 RECENT_SESSIONS=$(find "$SESSIONS_DIR/Daily" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r | head -n 5)
 PROJECTS=$(find "$SESSIONS_DIR/Projects" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null)
 
@@ -43,7 +44,7 @@ $RECENT_SESSIONS
 $PROJECTS")
 
 # 2. Show the popup and get the choice
-CHOICE=$(echo -e "$FULL_LIST" | tfuzzel -d)
+CHOICE=$(echo -e "$FULL_LIST" | tfuzzel -d -p " 󰆍 Open a terminal in | ")
 
 # Esc/no selection — abort instead of falling through to a $HOME terminal
 [ -z "$CHOICE" ] && exit 0
@@ -56,8 +57,10 @@ case "${CHOICE#"${CHOICE%%[[:alnum:]-]*}"}" in
         TARGET="$HOME"
         ;;
     "New Daily Session")
-        NAME=$(echo "" | tfuzzel -d)
-        if [ -z "$NAME" ]; then exit 1; fi
+        NAME=$(tfuzzel -d --prompt-only " 󰐊 Session name: " < /dev/null)
+        # A "/" would make it a path: "a/b" nested folders, "../x" left Daily
+        NAME="${NAME//\//-}"
+        [ -n "$NAME" ] || exit 0
         TARGET="$SESSIONS_DIR/Daily/$DATE-$NAME"
         mkdir -p "$TARGET"
         echo "# Session: $NAME ($DATE)" > "$TARGET/README.md"
@@ -65,17 +68,16 @@ case "${CHOICE#"${CHOICE%%[[:alnum:]-]*}"}" in
     "Scratchpad")
         TARGET="$SESSIONS_DIR/Scratchpad"
         ;;
-    "----------------")
-        exit 0
-        ;;
     *)
-        # Search if it's a Project or a Daily session
-        if [ -d "$SESSIONS_DIR/Daily/$CHOICE" ]; then
+        # Search if it's a Project or a Daily session. Anything else is
+        # typed text that matched nothing: it used to open a terminal in
+        # $HOME as if Home had been picked.
+        if [ -n "$CHOICE" ] && [[ "$CHOICE" != */* ]] && [ -d "$SESSIONS_DIR/Daily/$CHOICE" ]; then
             TARGET="$SESSIONS_DIR/Daily/$CHOICE"
-        elif [ -d "$SESSIONS_DIR/Projects/$CHOICE" ]; then
+        elif [ -n "$CHOICE" ] && [[ "$CHOICE" != */* ]] && [ -d "$SESSIONS_DIR/Projects/$CHOICE" ]; then
             TARGET="$SESSIONS_DIR/Projects/$CHOICE"
         else
-            TARGET="$HOME"
+            exit 0
         fi
         ;;
 esac

@@ -2,69 +2,59 @@
 # tebian-settings module: ui.sh
 # Sourced by tebian-settings — do not run directly
 
+# Desktop & UI. One line per setting, its state in brackets: (ON)/(OFF) for
+# switches, (Current: X) for a choice. Ordered bar, then windows, then look,
+# so related settings sit together.
 ui_menu() {
     while true; do
-    # Detect icon state
-    if [ -f "$HOME/.config/tebian/no_icons" ]; then
-        ICON_LABEL="󰇄 Enable UI Icons (Text Mode: ON)"
+    local bar_mode bar_pos modern=0 w_state w_place
+    local STYLE_LABEL POS_LABEL VIS_LABEL CLOCK_LABEL STATS_LABEL WEATHER_LABEL
+    local DOCK_LABEL LAYOUT_LABEL TITLE_LABEL SNAP_LABEL FX_LABEL ICON_LABEL
+
+    # Bar style: Modern (Waybar: hover buttons, drop-down menus) or Classic
+    if tebian_block_has bar-style; then
+        modern=1
+        STYLE_LABEL="󰕮 Bar Style (Current: Modern)"
     else
-        ICON_LABEL="󰇄 Disable UI Icons (Text Mode: OFF)"
+        STYLE_LABEL="󰕮 Bar Style (Current: Classic)"
     fi
 
-    # Detect bar state
-    BAR_MODE=$(swaymsg -r -t get_bar_config bar-0 2>/dev/null | grep '"mode"' | head -1 | cut -d'"' -f4)
-    if [[ "$BAR_MODE" == "hide" ]]; then
-        BAR_LABEL="󰆪 Show Bar Always (Current: Auto-hide)"
-    elif [[ "$BAR_MODE" == "invisible" ]]; then
-        BAR_LABEL="󰆪 Show Bar Always (Current: Hidden)"
-    else
-        BAR_LABEL="󰆪 Hide Bar (Current: Always Visible)"
-    fi
-
-    # Detect bar position
-    BAR_POS=$(swaymsg -r -t get_bar_config bar-0 2>/dev/null | grep '"position"' | head -1 | cut -d'"' -f4)
-    if [[ "$BAR_POS" == "top" ]]; then
-        POS_LABEL="󰞑 Bar Position (Current: Top)"
-    else
+    bar_pos=$(bar_get position)
+    if [ "$bar_pos" = bottom ]; then
         POS_LABEL="󰞒 Bar Position (Current: Bottom)"
+    else
+        POS_LABEL="󰞑 Bar Position (Current: Top)"
     fi
 
-    # Detect floating mode
-    if tebian_block_has floating-mode; then
-        FLOAT_LABEL="󰀻 Switch to Tiling (Current: Floating)"
+    bar_mode=$(bar_get mode)
+    case "$bar_mode" in
+        hide)      VIS_LABEL="󰆪 Bar Visibility (Current: Auto-hide)" ;;
+        invisible) VIS_LABEL="󰆪 Bar Visibility (Current: Hidden)" ;;
+        *)         VIS_LABEL="󰆪 Bar Visibility (Current: Always Shown)" ;;
+    esac
+
+    if [ -f "$HOME/.config/tebian/clock-12h" ]; then
+        CLOCK_LABEL="󰥔 Clock (Current: 12-hour)"
     else
-        FLOAT_LABEL="󰖲 Switch to Floating (Current: Tiling)"
+        CLOCK_LABEL="󰥔 Clock (Current: 24-hour)"
     fi
 
-    # Detect title bars (theme sets pixel 2 = OFF by default)
-    if tebian_block_has titlebars; then
-        TITLE_LABEL="󰘖 Title Bars (ON)"
+    if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
+        STATS_LABEL="󰍛 Bar Stats (OFF)"
     else
-        TITLE_LABEL="󰘕 Title Bars (OFF)"
+        STATS_LABEL="󰍛 Bar Stats (ON)"
     fi
 
-    # Window snapping: drag a floating window to an edge or corner. Built
-    # into Tebian's sway (and patched SwayFX); on by default there, so only
-    # "off" is written down. Shown in tiling mode too: dialogs float.
-    if tebian_snap_supported; then
-        if tebian_block_has snap-off; then
-            SNAP_LABEL="󰖳 Window Snapping (OFF)"
-        else
-            SNAP_LABEL="󰖲 Window Snapping (ON)"
-        fi
+    # Weather is a Modern bar module (tebian-weather; off until a place is
+    # set). The Classic bar has nowhere to show it, and says so rather than
+    # offering a switch that changes nothing.
+    IFS=$'\t' read -r w_state w_place < <(tebian-weather status 2>/dev/null)
+    if [ "$modern" = 0 ]; then
+        WEATHER_LABEL="󰖐 Weather in Bar (Modern Bar Only)"
+    elif [ "$w_state" = on ]; then
+        WEATHER_LABEL="󰖐 Weather in Bar (ON: $w_place)"
     else
-        SNAP_LABEL="󰖲 Window Snapping (Not Installed)"
-    fi
-    # Snap Assist: after a window takes half the screen, offer the others
-    # for the free half. Only the current sway build can do it, so the
-    # entry is left out (not shown dead) until sway is rebuilt.
-    ASSIST_LABEL=""
-    if tebian_snap_rev2; then
-        if tebian_snap_assist_enabled; then
-            ASSIST_LABEL="󰖲 Snap Assist (ON)"
-        else
-            ASSIST_LABEL="󰖳 Snap Assist (OFF)"
-        fi
+        WEATHER_LABEL="󰖐 Weather in Bar (OFF)"
     fi
 
     if tebian-dock status >/dev/null 2>&1; then
@@ -73,132 +63,206 @@ ui_menu() {
         DOCK_LABEL="󰀻 Dock (OFF)"
     fi
 
-    # Detect window effects (swayfx)
-    if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
-        if [ "$(fx_get blur)" = enable ]; then
-            FX_LABEL="󰖲 Window Effects (ON)"
-        else
-            FX_LABEL="󰖲 Window Effects (OFF)"
-        fi
+    if tebian_block_has floating-mode; then
+        LAYOUT_LABEL="󰖲 Window Layout (Current: Floating)"
     else
-        FX_LABEL="󰖲 Window Effects (Not Installed)"
+        LAYOUT_LABEL="󰕰 Window Layout (Current: Tiling)"
     fi
 
-    # Bar style: Modern (Waybar: hover buttons, drop-down menus) or Classic
-    if tebian_block_has bar-style; then
-        STYLE_LABEL="󰕮 Bar Style (Current: Modern)"
+    # Title bars (the theme sets pixel 2 = OFF by default)
+    if tebian_block_has titlebars; then
+        TITLE_LABEL="󰘖 Title Bars (ON)"
     else
-        STYLE_LABEL="󰕮 Bar Style (Current: Classic)"
+        TITLE_LABEL="󰘕 Title Bars (OFF)"
     fi
 
-    # Weather in the Modern bar (tebian-weather; off until a place is set)
-    local w_state w_place
-    IFS=$'\t' read -r w_state w_place < <(tebian-weather status 2>/dev/null)
-    if [ "$w_state" = on ]; then
-        WEATHER_LABEL="󰖐 Weather in Bar (ON: $w_place)"
+    # Window snapping: drag a floating window to an edge or corner. Built
+    # into Tebian's sway (and patched SwayFX); on by default there, so only
+    # "off" is written down. Shown in tiling mode too: dialogs float. A
+    # build from before thirds and Snap Assist says an update is waiting.
+    if ! tebian_snap_supported; then
+        SNAP_LABEL="󰖲 Window Snapping (Not Installed)"
+    elif tebian_block_has snap-off; then
+        SNAP_LABEL="󰖳 Window Snapping (OFF)"
+    elif tebian_snap_rev2; then
+        SNAP_LABEL="󰖲 Window Snapping (ON)"
     else
-        WEATHER_LABEL="󰖐 Weather in Bar (OFF)"
-    fi
-    if [ -f "$HOME/.config/tebian/clock-12h" ]; then
-        CLOCK_LABEL="󰥔 Clock (Current: 12-hour)"
-    else
-        CLOCK_LABEL="󰥔 Clock (Current: 24-hour)"
+        SNAP_LABEL="󰖲 Window Snapping (ON, Update Available)"
     fi
 
-    UI_OPTS="$ICON_LABEL
-$STYLE_LABEL
-$BAR_LABEL
-$POS_LABEL
-$CLOCK_LABEL
-$WEATHER_LABEL
-$FLOAT_LABEL
-$TITLE_LABEL
-$SNAP_LABEL${ASSIST_LABEL:+
-$ASSIST_LABEL}
-$DOCK_LABEL
-$FX_LABEL
-󰛖 Font Rendering
-󰌌 Keybinds (Mod+S: settings, Mod+D: apps)
-󰌍 Back"
-    
-    U_CHOICE=$(echo -e "$UI_OPTS" | tfuzzel -d -p " 󰇄 UI | ")
+    # Window effects (SwayFX)
+    if [ ! -f "$HOME/.config/tebian/swayfx-installed" ]; then
+        FX_LABEL="󰂵 Window Effects (Not Installed)"
+    elif [ "$(fx_get blur)" = enable ]; then
+        FX_LABEL="󰂵 Window Effects (ON)"
+    else
+        FX_LABEL="󰂵 Window Effects (OFF)"
+    fi
+
+    if [ -f "$HOME/.config/tebian/no_icons" ]; then
+        ICON_LABEL="󰇄 Menu Icons (OFF)"
+    else
+        ICON_LABEL="󰇄 Menu Icons (ON)"
+    fi
+
+    U_CHOICE=$(printf '%s\n' "$STYLE_LABEL" "$POS_LABEL" "$VIS_LABEL" "$CLOCK_LABEL" \
+        "$STATS_LABEL" "$WEATHER_LABEL" "$DOCK_LABEL" "$LAYOUT_LABEL" "$TITLE_LABEL" \
+        "$SNAP_LABEL" "$FX_LABEL" "$ICON_LABEL" "󰛖 Font Rendering" \
+        "󰌌 Keyboard Shortcuts" "󰌍 Back" | tfuzzel -d -p " 󰇄 Desktop & UI | " --width 44)
 
     [ -n "$U_CHOICE" ] || menu_close
     if is_back "$U_CHOICE"; then return; fi
 
-    if [[ "$U_CHOICE" =~ "UI Icons" ]]; then
-        ui_icons_toggle
-    elif [[ "$U_CHOICE" =~ "Bar Style" ]]; then
-        bar_style_toggle
-    elif [[ "$U_CHOICE" =~ "Show Bar Always" ]]; then
-        bar_set_mode dock
-        tnotify "UI" "Bar set to always visible"
-    elif [[ "$U_CHOICE" =~ "Hide Bar" ]]; then
-        bar_set_mode hide
-        tnotify "UI" "Bar hidden (press Super to show)"
-    elif [[ "$U_CHOICE" =~ "Bar Position" ]]; then
-        if [[ "$BAR_POS" == "top" ]]; then
-            bar_set_position bottom
-            tnotify "UI" "Bar moved to bottom"
-        else
-            bar_set_position top
-            tnotify "UI" "Bar moved to top"
-        fi
-    elif [[ "$U_CHOICE" =~ "Switch to Floating" ]]; then
+    # Matched on the words: Text Mode strips the icons
+    case "$U_CHOICE" in
+        *"Bar Style"*)      bar_style_toggle ;;
+        *"Bar Position"*)
+            if [ "$bar_pos" = bottom ]; then
+                bar_set_position top
+                tnotify "UI" "Bar moved to the top"
+            else
+                bar_set_position bottom
+                tnotify "UI" "Bar moved to the bottom"
+            fi ;;
+        *"Bar Visibility"*) bar_visibility_menu ;;
+        *"Clock ("*)        clock_format_toggle ;;
+        *"Bar Stats"*)      bar_stats_toggle ;;
+        *"Weather in Bar"*)
+            if [ "$modern" = 1 ]; then
+                weather_menu
+            else
+                tnotify "Weather" "Weather shows in the Modern bar — switch Bar Style to Modern first"
+            fi ;;
+        *"Dock ("*)         dock_menu ;;
+        *"Window Layout"*)  window_layout_toggle ;;
+        *"Title Bars"*)
+            if tebian_block_has titlebars; then
+                titlebars_set off
+                tnotify "UI" "Title bars off"
+            else
+                titlebars_set on
+                tnotify "UI" "Title bars on"
+            fi ;;
+        *"Window Snapping"*) window_snapping_menu ;;
+        *"Window Effects"*"Not Installed"*) window_effects_install ;;
+        *"Window Effects"*) window_effects_menu ;;
+        *"Menu Icons"*)     ui_icons_toggle ;;
+        *"Font Rendering"*) font_rendering_menu ;;
+        *"Keyboard Shortcuts"*) keybinds_list ;;
+    esac
+    done
+}
+
+# One bar setting, mode or position. The config.user block is the truth: it
+# is written at once, while sway applies the change a moment later, so asking
+# sway straight after a change still gave the old answer. Sway is asked only
+# when nothing was ever chosen.
+bar_get() {
+    local v
+    v=$(tebian_block_get "bar-$1" 2>/dev/null | awk '$1 == "bar" { print $4; exit }')
+    [ -n "$v" ] || v=$(swaymsg -r -t get_bar_config bar-0 2>/dev/null |
+        sed -n "s/.*\"$1\": *\"\([a-z]*\)\".*/\1/p" | head -1)
+    echo "$v"
+}
+
+# Always shown, shown while Super is held, or gone. Three states, so a list
+# rather than a switch (Desktop Feel's Minimal uses the third).
+bar_visibility_menu() {
+    local cur V m_dock="" m_hide="" m_inv=""
+    cur=$(bar_get mode)
+    case "$cur" in
+        hide)      m_hide="  ● current" ;;
+        invisible) m_inv="  ● current" ;;
+        *)         m_dock="  ● current" ;;
+    esac
+    V=$(printf '%s\n' "󰆪 Always Shown$m_dock" "󰆪 Auto-hide: shows while Super is held$m_hide" \
+        "󰆪 Hidden: no bar at all$m_inv" "󰌍 Back" | tfuzzel -d -p " 󰆪 Bar Visibility | ")
+    [ -n "$V" ] || menu_close
+    case "$V" in
+        *"Always Shown"*) bar_set_mode dock;      tnotify "UI" "Bar always shown" ;;
+        *"Auto-hide"*)    bar_set_mode hide;      tnotify "UI" "Bar auto-hides — hold Super to see it" ;;
+        *"Hidden"*)       bar_set_mode invisible; tnotify "UI" "Bar hidden — Settings (Super+S) brings it back" ;;
+    esac
+}
+
+# Floating (windows open free, like Windows or macOS) or tiling (windows
+# share the screen)
+window_layout_toggle() {
+    if tebian_block_has floating-mode; then
+        remove_floating_mode
+        swaymsg '[app_id=".*"] floating disable' >/dev/null 2>&1
+        swaymsg '[class=".*"] floating disable' >/dev/null 2>&1
+        tnotify "UI" "Tiling windows"
+        swaymsg reload >/dev/null 2>&1 &
+    else
         setup_floating_mode
-        tnotify "UI" "Floating mode enabled"
+        tnotify "UI" "Floating windows"
         # for_window rules only reach windows opened later; convert the open
         # ones too, or tiled and floating windows end up mixed together
         ( swaymsg reload && swaymsg '[tiling] floating enable' ) >/dev/null 2>&1 &
-    elif [[ "$U_CHOICE" =~ "Switch to Tiling" ]]; then
-        remove_floating_mode
-        swaymsg '[app_id=".*"] floating disable' 2>/dev/null
-        swaymsg '[class=".*"] floating disable' 2>/dev/null
-        tnotify "UI" "Tiling mode enabled"
-        swaymsg reload 2>/dev/null &
-    elif [[ "$U_CHOICE" =~ "Title Bars" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
-        # Turn OFF title bars — remove override, theme's pixel 2 takes effect
-        tebian_block_remove titlebars
-        swaymsg "default_border pixel 2" 2>/dev/null
-        swaymsg "default_floating_border pixel 2" 2>/dev/null
-        swaymsg '[app_id=".*"] border pixel 2' 2>/dev/null
-        swaymsg '[class=".*"] border pixel 2' 2>/dev/null
-        tnotify "UI" "Title bars disabled"
-    elif [[ "$U_CHOICE" =~ "Title Bars" ]]; then
-        # Turn ON title bars — write explicit override to beat theme's pixel 2
-        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
-        swaymsg "default_border normal 2" 2>/dev/null
-        swaymsg "default_floating_border normal 2" 2>/dev/null
-        swaymsg '[app_id=".*"] border normal 2' 2>/dev/null
-        swaymsg '[class=".*"] border normal 2' 2>/dev/null
-        tnotify "UI" "Title bars enabled"
-    elif [[ "$U_CHOICE" == *"Clock (Current"* ]]; then
-        clock_format_toggle
-    elif [[ "$U_CHOICE" == *"Weather in Bar"* ]]; then
-        weather_menu
-    elif [[ "$U_CHOICE" =~ "Snap Assist" ]]; then
-        snap_assist_toggle
-    elif [[ "$U_CHOICE" == *"Dock ("* ]]; then
-        dock_menu
-    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
-        window_snapping_install
-    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
-        tebian_block_set snap-off "floating_snap disable"
-        swaymsg floating_snap disable >/dev/null 2>&1
-        tnotify "UI" "Window snapping disabled"
-    elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "OFF" ]]; then
-        tebian_block_remove snap-off
-        swaymsg floating_snap enable >/dev/null 2>&1
-        tnotify "UI" "Window snapping enabled"
-    elif [[ "$U_CHOICE" =~ "Window Effects" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
-        window_effects_install
-    elif [[ "$U_CHOICE" =~ "Window Effects" ]]; then
-        window_effects_menu
-    elif [[ "$U_CHOICE" =~ "Font Rendering" ]]; then
-        font_rendering_menu
-    elif [[ "$U_CHOICE" =~ "Keybinds" ]]; then
-        keybinds_list
     fi
+}
+
+# titlebars_set on|off — for windows opened from now on (the config.user
+# block, which beats the theme's pixel 2) and for the ones already open,
+# which keep whatever border they were given when they appeared
+titlebars_set() {
+    local b="pixel 2"
+    if [ "$1" = on ]; then
+        b="normal 2"
+        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
+    else
+        tebian_block_remove titlebars
+    fi
+    swaymsg "default_border $b" >/dev/null 2>&1
+    swaymsg "default_floating_border $b" >/dev/null 2>&1
+    swaymsg "[app_id=\".*\"] border $b" >/dev/null 2>&1
+    swaymsg "[class=\".*\"] border $b" >/dev/null 2>&1
+}
+
+# Snapping itself, Snap Assist, and the rebuild that brings a build from
+# before thirds and Snap Assist up to date. tebian-update points here when
+# SwayFX needs rebuilding, so the rebuild has to be reachable while
+# snapping is on, not only when it is missing.
+window_snapping_menu() {
+    local S_CHOICE
+    while true; do
+        if ! tebian_snap_supported; then
+            window_snapping_install
+            return
+        fi
+        local -a opts=()
+        if tebian_block_has snap-off; then
+            opts+=("󰖳 Snapping (OFF)")
+        else
+            opts+=("󰖲 Snapping (ON): drag a window to an edge or corner")
+        fi
+        if tebian_snap_rev2; then
+            if tebian_snap_assist_enabled; then
+                opts+=("󰖲 Snap Assist (ON): offers a window for the other half")
+            else
+                opts+=("󰖳 Snap Assist (OFF)")
+            fi
+        else
+            opts+=("󰚰 Update Snapping (adds thirds and Snap Assist)")
+        fi
+        opts+=("󰌍 Back")
+        S_CHOICE=$(printf '%s\n' "${opts[@]}" | tfuzzel -d -p " 󰖲 Window Snapping | " --width 52)
+        [ -n "$S_CHOICE" ] || menu_close
+        is_back "$S_CHOICE" && return
+        case "$S_CHOICE" in
+            # First: its label mentions Snap Assist too
+            *"Update Snapping"*) window_snapping_install ;;
+            *"Snap Assist"*)     snap_assist_toggle ;;
+            *"Snapping (ON)"*)
+                tebian_block_set snap-off "floating_snap disable"
+                swaymsg floating_snap disable >/dev/null 2>&1
+                tnotify "UI" "Window snapping off" ;;
+            *"Snapping (OFF)"*)
+                tebian_block_remove snap-off
+                swaymsg floating_snap enable >/dev/null 2>&1
+                tnotify "UI" "Window snapping on" ;;
+        esac
     done
 }
 
@@ -206,11 +270,11 @@ $FX_LABEL
 ui_icons_toggle() {
     if [ -f "$HOME/.config/tebian/no_icons" ]; then
         rm -f "$HOME/.config/tebian/no_icons"
-        tnotify "Tebian UI" "Icon Mode Enabled"
+        tnotify "UI" "Menu icons on"
     else
         mkdir -p "$HOME/.config/tebian"
         touch "$HOME/.config/tebian/no_icons"
-        tnotify "Tebian UI" "Text Mode Enabled (Icons Hidden)"
+        tnotify "UI" "Menu icons off (Text Mode)"
     fi
 }
 
@@ -246,6 +310,7 @@ weather_menu() {
         return
     fi
     W_CHOICE=$(echo -e "󰖐 Change Place\n󰖪 Turn Off Weather\n󰌍 Back" | tfuzzel -d -p " 󰖐 Weather | ")
+    [ -n "$W_CHOICE" ] || menu_close
     if [[ "$W_CHOICE" =~ "Change Place" ]]; then
         tebian-weather setup
     elif [[ "$W_CHOICE" =~ "Turn Off" ]]; then
@@ -254,33 +319,59 @@ weather_menu() {
     fi
 }
 
+# A reference list (the key helper, Super+Shift+?, runs things). Snapping
+# keys are listed only when they are bound: floating mode writes them, and
+# an older sway build has halves but no thirds.
 keybinds_list() {
-    local KEY_LIST="Mod+D ··· App Launcher
-Mod+A ··· All Apps (Drawer)
-Mod+S ··· Settings
-Mod+Return ··· Terminal
-Mod+Shift+Q ··· Close Window
-Mod+F ··· Fullscreen
-Mod+Space ··· Toggle Float/Tile
-Mod+Ctrl+Arrows ··· Snap Window: halves, thirds, corners (Floating Mode)
-Mod+Ctrl+Return / BackSpace ··· Maximize / Restore Window
-Mod+Ctrl+1 2 3 ··· Snap to Left / Middle / Right Third
-Mod+Ctrl+Shift+Left/Right ··· Move Window to Other Monitor
-Mod+R ··· Resize Mode
-Mod+L ··· Lock Screen
-Mod+Tab ··· Switch Workspace
-Mod+1-9 ··· Go to Workspace
-Mod+Shift+? ··· Show Key Helper
+    local snap="" c
+    if grep -q '^bindsym \$mod+Ctrl+Left snap left' "$HOME/.config/sway/config.user" 2>/dev/null; then
+        if tebian_snap_rev2; then
+            snap="Super+Ctrl+Left/Right ··· Snap Window: half, third, two thirds
+Super+Ctrl+Up/Down ··· Maximize or Top Quarter / Restore or Bottom Quarter
+Super+Ctrl+Return / BackSpace ··· Maximize / Restore Window
+Super+Ctrl+1 2 3 ··· Snap to Left / Middle / Right Third
+Super+Ctrl+Shift+Left/Right ··· Move Window to Other Monitor
+"
+        else
+            snap="Super+Ctrl+Left/Right ··· Snap Window to Half
+Super+Ctrl+Up/Down ··· Maximize / Restore Window
+"
+        fi
+    fi
+    local lock=""
+    grep -q "bindsym.*exec gtklock" "$HOME/.config/sway/config.user" 2>/dev/null &&
+        lock="Super+L ··· Lock Screen
+"
+    local cu="$HOME/.config/sway/config.user" ws="" wsmenu=""
+    grep -q '^bindsym \$mod+Tab ' "$cu" 2>/dev/null && ws="Super+Tab ··· Switch Workspace
+"
+    grep -q '^bindsym \$mod+Alt+Left ' "$cu" 2>/dev/null && ws+="Super+Alt+Left/Right ··· Previous/Next Workspace
+"
+    grep -q '^bindsym \$mod+w ' "$cu" 2>/dev/null && wsmenu="Super+W ··· Workspace Menu
+"
+    local KEY_LIST="Super+D ··· App Launcher
+Super+A ··· All Apps (Drawer)
+Super+S ··· Settings
+Super+Return ··· Terminal
+Super+Shift+Q ··· Close Window
+Super+F ··· Fullscreen
+Super+Space ··· Toggle Float/Tile
+${snap}Super+R ··· Resize Mode
+Super+Arrows ··· Move Focus
+Super+Shift+Arrows ··· Move Window
+Super+Shift+Tab ··· Switch Window
+${lock}${ws}Super+1-9 ··· Go to Workspace
+Super+Shift+1-9 ··· Move Window to Workspace
+${wsmenu}Super+V ··· Clipboard History
+Super+. ··· Emoji Picker
 Print ··· Screenshot (Region)
 Shift+Print ··· Screenshot (Full)
-Mod+Print ··· Capture Menu (record, copy text, QR)
+Super+Print ··· Capture Menu (record, copy text, QR)
 Ctrl+Print ··· Record Screen (again to stop)
-Mod+. ··· Emoji Picker
-Mod+V ··· Clipboard History
-Mod+Alt+Left/Right ··· Previous/Next Workspace
+Super+Shift+? ··· Key Helper
+Super+Shift+E ··· Log Out (Exit Sway)
 󰌍 Back"
-    local c
-    c=$(echo -e "$KEY_LIST" | tfuzzel -d -p " 󰌌 Keybinds | ")
+    c=$(echo "$KEY_LIST" | tfuzzel -d -p " 󰌌 Keyboard Shortcuts | " --width 64)
     [ -n "$c" ] || menu_close
 }
 
@@ -321,7 +412,7 @@ for i in json.load(sys.stdin):
 
     INPUT_OPTS="$INPUT_OPTS
 󰌌 Keyboard Layout
-󰌌 Emoji Picker (Mod+.)
+󰌌 Emoji Picker (Super+.)
 󰍽 Mouse Speed
 󰌍 Back"
 
@@ -554,10 +645,10 @@ bar_set_position() {
 window_snapping_install() {
     local what cmd
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
-        what="󰖲 Rebuild SwayFX with snapping (~5 min)"
+        what="󰖲 Rebuild SwayFX with snapping (about 5 minutes)"
         cmd="tebian-install-swayfx"
     else
-        what="󰖲 Build sway with snapping (~1 min)"
+        what="󰖲 Build sway with snapping (a few minutes)"
         cmd="tebian-build-sway --install --clean"
     fi
     INSTALL_CHOICE=$(echo -e "$what\n󰌍 Back" | tfuzzel -d -p " 󰖲 Snapping | ")
@@ -607,9 +698,9 @@ window_effects_menu() {
       "${cur_shadows:=enable}" "${cur_shadow:=20}" "${cur_dim:=0.1}"
 
     if [ "$cur_blur" = enable ]; then
-        TOGGLE_LABEL="󰖲 Effects: ON (click to disable)"
+        TOGGLE_LABEL="󰂵 Window Effects (ON)"
     else
-        TOGGLE_LABEL="󰖲 Effects: OFF (click to enable)"
+        TOGGLE_LABEL="󰂵 Window Effects (OFF)"
     fi
 
     FX_OPTS="$TOGGLE_LABEL
@@ -624,14 +715,14 @@ window_effects_menu() {
     [ -n "$FX_CHOICE" ] || menu_close
     if is_back "$FX_CHOICE"; then return; fi
 
-    if [[ "$FX_CHOICE" =~ "Effects:" ]]; then
+    if [[ "$FX_CHOICE" =~ "Window Effects" ]]; then
         if [ "$cur_blur" = enable ]; then
             # Disabling zeroes corners and dim; remember them so re-enabling
             # restores the user's values rather than the defaults
             mkdir -p "$HOME/.config/tebian"
             printf 'corner=%s\ndim=%s\n' "$cur_corner" "$cur_dim" > "$HOME/.config/tebian/fx-saved"
             fx_write disable "$cur_passes" "$cur_radius" 0 disable "$cur_shadow" 0
-            tnotify "Effects" "Window effects disabled"
+            tnotify "Effects" "Window effects off"
         else
             local saved
             if [ -f "$HOME/.config/tebian/fx-saved" ]; then
@@ -643,7 +734,7 @@ window_effects_menu() {
             [ "$cur_corner" = "0" ] && cur_corner=8
             [ "$cur_dim" = "0" ] && cur_dim=0.1
             fx_write enable "$cur_passes" "$cur_radius" "$cur_corner" enable "$cur_shadow" "$cur_dim"
-            tnotify "Effects" "Window effects enabled"
+            tnotify "Effects" "Window effects on"
         fi
 
     elif [[ "$FX_CHOICE" =~ "Blur Strength" ]]; then

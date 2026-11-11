@@ -103,13 +103,24 @@ if [ -f "$PROGRESS_FILE" ]; then
     RESUME=$(printf '%s\n' "Resume Desktop setup" "Switch to Base (Minimal)" |
         tfuzzel -d -p "  Setup was interrupted | " --lines=2 --width 45)
     case "$RESUME" in
-        *Resume*) CHOICE="Desktop (Familiar)" ;;
-        *Base*)   CHOICE="Base (Minimal)" ;;
-        *)        CHOICE="" ;;
+        "Resume Desktop setup"*)     CHOICE="Desktop (Familiar)" ;;
+        "Switch to Base (Minimal)"*) CHOICE="Base (Minimal)" ;;
+        *)                           CHOICE="" ;;
     esac
 else
     log "Starting onboarding"
-    CHOICE=$(echo -e "Base (Minimal)\nDesktop (Familiar)" | tfuzzel -d -p "  Welcome to Tebian | " --lines=2)
+    # Each says what it gives: the two names alone told a newcomer nothing.
+    # Matched on the start of the line, so typed text that matched nothing
+    # counts as a dismissal (it used to do nothing and count for nothing).
+    CHOICE=$(printf '%s\n' \
+        "Base (Minimal) — just the essentials; add more later in Settings" \
+        "Desktop (Familiar) — floating windows, full bar, file manager, apps" |
+        tfuzzel -d -p "  Welcome to Tebian | " --lines=2 --width 72)
+    case "$CHOICE" in
+        "Desktop (Familiar)"*) CHOICE="Desktop (Familiar)" ;;
+        "Base (Minimal)"*)     CHOICE="Base (Minimal)" ;;
+        *)                     CHOICE="" ;;
+    esac
 fi
 
 if [[ "$CHOICE" =~ "Desktop" ]]; then
@@ -167,7 +178,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         esac
         if [ -z "$NET_OK" ]; then
             echo "⚠️  No network connection detected."
-            echo "   Connect to WiFi first (Super+D > WiFi)."
+            echo "   Connect to WiFi first (Super+S > WiFi)."
             read -p "Press Enter to exit..."
             exit 1
         fi
@@ -435,7 +446,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
                 BROWSER_DONE=$(tebian-browser name "$BROWSER_ID")
             else
                 echo "  ⚠ Browser not installed. Setup will continue."
-                echo "    Try again from Mod+D > Get a Web Browser."
+                echo "    Try again from Super+D > Get a Web Browser."
             fi
         fi
         rm -f "$HOME/.config/tebian/.onboard_browser"
@@ -483,14 +494,14 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
         log "Desktop setup complete"
     else
         log "Desktop setup did not complete — will resume next boot"
-        notify-send "Tebian" "Desktop setup was interrupted — it'll resume on next login." 2>/dev/null || true
+        notify-send "Tebian" "Desktop setup did not finish — at next login you can resume it or switch to Base." 2>/dev/null || true
     fi
     
 elif [[ "$CHOICE" =~ "Base" ]]; then
     log "User chose Base mode"
     echo "base" > "$ONBOARD_FILE"
     rm -f "$PROGRESS_FILE"
-    notify-send "Tebian" "Base mode selected. No web browser yet: press Mod+D and choose Get a Web Browser." 2>/dev/null || true
+    notify-send "Tebian" "Base mode selected. No web browser yet: press Super+D and choose Get a Web Browser." 2>/dev/null || true
     
 elif [ -z "$CHOICE" ]; then
     # Track dismissals - after 3, stop asking

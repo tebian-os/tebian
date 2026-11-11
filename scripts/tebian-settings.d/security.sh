@@ -27,24 +27,24 @@ security_menu() {
     SEC_LABEL="󰒃 Security Profile (Current: ${cur_profile^})"
 
     if [[ "$SSH_ACTIVE" == "ON" ]]; then
-        SSH_LABEL="󰆍 Disable Remote Access (SSH)"
+        SSH_LABEL="󰆍 Remote Access / SSH (ON)"
     else
-        SSH_LABEL="󰆍 Enable Remote Access (SSH)"
+        SSH_LABEL="󰆍 Remote Access / SSH (OFF)"
     fi
 
     # Detect SSH key-only mode — check our specific file (00- now; 99- on
     # older installs), not all of sshd_config.d
     if [ -f /etc/ssh/sshd_config.d/00-tebian-keyonly.conf ] || [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
-        SSH_KEY_LABEL="󰌆 Revert SSH to Password Auth (Current: Key-Only)"
+        SSH_KEY_LABEL="󰌆 SSH Key-Only Login (ON)"
     else
-        SSH_KEY_LABEL="󰌆 Harden SSH (Key-Only Mode)"
+        SSH_KEY_LABEL="󰌆 SSH Key-Only Login (OFF)"
     fi
 
     # Detect kernel hardening sysctl
     if [ -f /etc/sysctl.d/99-tebian-hardening.conf ]; then
-        KERN_LABEL="󰍛 Remove Kernel Hardening (Current: Hardened)"
+        KERN_LABEL="󰍛 Kernel Hardening (ON)"
     else
-        KERN_LABEL="󰍛 Enable Kernel Hardening"
+        KERN_LABEL="󰍛 Kernel Hardening (OFF)"
     fi
 
     # AppArmor: the kernel decides whether it can run at all (some Pi
@@ -58,12 +58,9 @@ security_menu() {
     fi
 
     # Detect Firejail sandbox (browsers + networked apps)
-    FJ_COUNT=0
-    for _fj_bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
-        [ -L /usr/local/bin/$_fj_bin ] && FJ_COUNT=$((FJ_COUNT + 1))
-    done
+    FJ_COUNT=$(firejail_link_count)
     if [ "$FJ_COUNT" -gt 0 ]; then
-        FJ_LABEL="󰈡 Firejail App Sandbox (ON — $FJ_COUNT apps)"
+        FJ_LABEL="󰈡 Firejail App Sandbox (ON — $FJ_COUNT app$([ "$FJ_COUNT" = 1 ] || echo s))"
     else
         FJ_LABEL="󰈡 Firejail App Sandbox (OFF)"
     fi
@@ -108,17 +105,17 @@ security_menu() {
     # readable): -k ignores cached credentials, so this only succeeds when a
     # NOPASSWD rule applies
     if sudo -k -n true 2>/dev/null; then
-        SUDO_LABEL="󰌆 Passwordless sudo (Current: On)"
+        SUDO_LABEL="󰌆 Passwordless sudo (ON)"
     else
-        SUDO_LABEL="󰌆 Passwordless sudo (Current: Off)"
+        SUDO_LABEL="󰌆 Passwordless sudo (OFF)"
     fi
 
     # Skip the login screen after the disk passphrase — only offered when the
     # system disk really is encrypted (tebian-autologin decides)
     AUTOLOGIN_LABEL=""
     case "$(tebian-autologin status 2>/dev/null)" in
-        on)  AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (Current: On)" ;;
-        off) AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (Current: Off)" ;;
+        on)  AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (ON)" ;;
+        off) AUTOLOGIN_LABEL="󰌾 Skip Login After Disk Unlock (OFF)" ;;
     esac
 
     SEC_OPTS="$PARANOID_LABEL
@@ -144,7 +141,7 @@ $AUTOUPDATE_LABEL
     [ -n "$S_CHOICE" ] || menu_close
     if is_back "$S_CHOICE"; then return; fi
 
-    if [[ "$S_CHOICE" =~ "Paranoid Mode" ]] && [[ "$S_CHOICE" =~ "ON"|"FAILED" ]]; then
+    if [[ "$S_CHOICE" == *"Paranoid Mode (ON)"* || "$S_CHOICE" == *"Paranoid Mode (FAILED"* ]]; then
         local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
         $TERM_CMD bash -c "echo '=== Disabling Paranoid Mode ===';
         echo '';
@@ -165,8 +162,13 @@ $AUTOUPDATE_LABEL
         echo '';
         echo 'Normal networking restored.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "Paranoid Mode disabled"
-    elif [[ "$S_CHOICE" =~ "Paranoid Mode" ]]; then
+        # The terminal step can fail (sudo refused); report what is there now
+        if [ -f /etc/systemd/system/tebian-tor-iptables.service ]; then
+            tnotify "Security" "Paranoid Mode is still on — see the terminal output"
+        else
+            tnotify "Security" "Paranoid Mode off"
+        fi
+    elif [[ "$S_CHOICE" == *"Paranoid Mode (OFF)"* ]]; then
         local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
         $TERM_CMD bash -c "echo '=== PARANOID MODE ===';
         echo '';
@@ -192,19 +194,27 @@ $AUTOUPDATE_LABEL
             echo 'Cancelled.';
         fi;
         read -p 'Press Enter to close...'"
-    elif [[ "$S_CHOICE" =~ "Security Profile" ]]; then
+        # Silent when cancelled inside the terminal
+        if [ -f /etc/systemd/system/tebian-tor-iptables.service ]; then
+            if systemctl is-active --quiet tebian-tor-iptables 2>/dev/null; then
+                tnotify "Security" "Paranoid Mode on"
+            else
+                tnotify "Security" "Paranoid Mode FAILED — traffic is not going through Tor"
+            fi
+        fi
+    elif [[ "$S_CHOICE" == *"Security Profile"* ]]; then
         security_profile_menu "$cur_profile"
-    elif [[ "$S_CHOICE" =~ "Passwordless sudo" ]]; then
+    elif [[ "$S_CHOICE" == *"Passwordless sudo"* ]]; then
         passwordless_sudo_toggle "$S_CHOICE"
-    elif [[ "$S_CHOICE" =~ "Change Password" ]]; then
+    elif [[ "$S_CHOICE" == *"Change Password"* ]]; then
         change_password_flow
-    elif [[ "$S_CHOICE" =~ "Skip Login After Disk Unlock" ]]; then
+    elif [[ "$S_CHOICE" == *"Skip Login After Disk Unlock"* ]]; then
         autologin_toggle
-    elif [[ "$S_CHOICE" =~ "Remote Access" ]]; then
+    elif [[ "$S_CHOICE" == *"Remote Access"* ]]; then
         ssh_toggle
-    elif [[ "$S_CHOICE" =~ "Key-Only Mode" ]]; then
+    elif [[ "$S_CHOICE" == *"Key-Only Login (OFF)"* ]]; then
         if [[ "$SSH_ACTIVE" != "ON" ]]; then
-            tnotify "Security" "SSH is not enabled. Enable SSH first."
+            tnotify "Security" "Turn on Remote Access / SSH first"
         else
             SECMOD="$(security_module)" $TERM_CMD bash -c '
             echo "Hardening SSH to Key-Only Mode..."
@@ -224,13 +234,17 @@ $AUTOUPDATE_LABEL
                 tnotify "Security" "SSH set to key-only"
             fi
         fi
-    elif [[ "$S_CHOICE" =~ "Revert SSH to Password" ]]; then
+    elif [[ "$S_CHOICE" == *"Key-Only Login (ON)"* ]]; then
         SECMOD="$(security_module)" $TERM_CMD bash -c '
         echo "Reverting SSH to allow password auth..."
         bash "$SECMOD" ssh-password
         read -p "Press Enter to close..."'
-        tnotify "Security" "SSH password auth restored"
-    elif [[ "$S_CHOICE" =~ "Enable Kernel Hardening" ]]; then
+        if [ -f /etc/ssh/sshd_config.d/00-tebian-keyonly.conf ] || [ -f /etc/ssh/sshd_config.d/99-tebian-keyonly.conf ]; then
+            tnotify "Security" "SSH key-only login is still on — see the terminal output"
+        else
+            tnotify "Security" "SSH key-only login off (passwords work again)"
+        fi
+    elif [[ "$S_CHOICE" == *"Kernel Hardening (OFF)"* ]]; then
         $TERM_CMD bash -c "echo 'Applying kernel hardening...';
         cat <<'SYSEOF' | sudo tee /etc/sysctl.d/99-tebian-hardening.conf
 kernel.kptr_restrict=2
@@ -242,21 +256,30 @@ SYSEOF
         echo '';
         echo 'Done! Kernel hardening applied.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "Kernel hardening enabled"
-    elif [[ "$S_CHOICE" =~ "Remove Kernel Hardening" ]]; then
+        if [ -f /etc/sysctl.d/99-tebian-hardening.conf ]; then
+            tnotify "Security" "Kernel hardening on"
+        else
+            tnotify "Security" "Kernel hardening not turned on — see the terminal output"
+        fi
+    elif [[ "$S_CHOICE" == *"Kernel Hardening (ON)"* ]]; then
         $TERM_CMD bash -c "echo 'Removing kernel hardening...';
         sudo rm -f /etc/sysctl.d/99-tebian-hardening.conf;
         echo '';
         echo 'Done. The hardened values stay in effect until you reboot;';
         echo 'after that the kernel starts with its defaults again.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "Kernel hardening removed (defaults return after a reboot)"
-    elif [[ "$S_CHOICE" =~ "AppArmor" ]]; then
+        if [ -f /etc/sysctl.d/99-tebian-hardening.conf ]; then
+            tnotify "Security" "Kernel hardening is still on — see the terminal output"
+        else
+            tnotify "Security" "Kernel hardening off (defaults return after a reboot)"
+        fi
+    elif [[ "$S_CHOICE" == *"AppArmor"* ]]; then
         apparmor_menu
-    elif [[ "$S_CHOICE" =~ "Firejail" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
-        FJ_ACT=$(echo -e "󰈡 Disable Sandboxing (keep Firejail)\n󰆴 Disable & Uninstall Firejail\n󰌍 Back" | tfuzzel -d -p " 󰈡 Firejail | ")
-        if [ -z "$FJ_ACT" ] || is_back "$FJ_ACT"; then continue; fi
-        if [[ "$FJ_ACT" =~ "Disable Sandboxing" ]] || [[ "$FJ_ACT" =~ "Uninstall" ]]; then
+    elif [[ "$S_CHOICE" == *"Firejail App Sandbox (ON"* ]]; then
+        FJ_ACT=$(echo -e "󰈡 Turn Off Sandboxing (keep Firejail installed)\n󰆴 Turn Off & Uninstall Firejail\n󰌍 Back" | tfuzzel -d -p " 󰈡 Firejail | ")
+        [ -n "$FJ_ACT" ] || menu_close
+        is_back "$FJ_ACT" && continue
+        if [[ "$FJ_ACT" == *"Turn Off"* ]]; then
             $TERM_CMD bash -c "echo 'Removing Firejail sandboxing...';
             for bin in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
                 if [ -L /usr/local/bin/\$bin ] && readlink /usr/local/bin/\$bin | grep -q firejail; then
@@ -272,10 +295,19 @@ SYSEOF
             echo '';
             echo 'Done!';
             read -p 'Press Enter to close...'"
+            # Drop the menu overrides, then put back those of apps whose
+            # sandbox link is still there (sudo refused in the terminal):
+            # without them their menu launches would run unsandboxed
             firejail_desktop_overrides remove
-            tnotify "Security" "Firejail sandboxing disabled"
+            FJ_COUNT=$(firejail_link_count)
+            if [ "$FJ_COUNT" -gt 0 ]; then
+                firejail_desktop_overrides add
+                tnotify "Security" "Firejail sandbox is still on for $FJ_COUNT app$([ "$FJ_COUNT" = 1 ] || echo s) — see the terminal output"
+            else
+                tnotify "Security" "Firejail sandbox off"
+            fi
         fi
-    elif [[ "$S_CHOICE" =~ "Firejail" ]]; then
+    elif [[ "$S_CHOICE" == *"Firejail App Sandbox (OFF)"* ]]; then
         $TERM_CMD bash -c "echo 'Enabling Firejail sandboxing...';
         echo '';
         echo 'This sandboxes browsers AND networked apps:';
@@ -297,12 +329,18 @@ SYSEOF
         echo 'Done! Networked apps will launch in Firejail sandbox.';
         read -p 'Press Enter to close...'"
         firejail_desktop_overrides add
-        tnotify "Security" "Firejail sandboxing enabled (menu launches included)"
-    elif [[ "$S_CHOICE" =~ "Tor Routing" ]] && [[ "$S_CHOICE" =~ "via Paranoid" ]]; then
+        FJ_COUNT=$(firejail_link_count)
+        if [ "$FJ_COUNT" -gt 0 ]; then
+            tnotify "Security" "Firejail sandbox on for $FJ_COUNT app$([ "$FJ_COUNT" = 1 ] || echo s) (menu launches included)"
+        else
+            tnotify "Security" "Firejail sandbox not turned on — no supported app found, or see the terminal output"
+        fi
+    elif [[ "$S_CHOICE" == *"Tor Routing (ON — via Paranoid)"* ]]; then
         tnotify "Security" "In Paranoid Mode all traffic goes through Tor — turn Paranoid Mode off to stop it"
-    elif [[ "$S_CHOICE" =~ "Tor Routing" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
-        TOR_ACT=$(echo -e "󰗹 Disable Tor Service\n󰆴 Disable & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
-        if [ -z "$TOR_ACT" ] || is_back "$TOR_ACT"; then continue; fi
+    elif [[ "$S_CHOICE" == *"Tor Routing (ON)"* ]]; then
+        TOR_ACT=$(echo -e "󰗹 Turn Off Tor (keep it installed)\n󰆴 Turn Off & Uninstall Tor\n󰌍 Back" | tfuzzel -d -p " 󰗹 Tor | ")
+        [ -n "$TOR_ACT" ] || menu_close
+        is_back "$TOR_ACT" && continue
         local tor_purge=""
         [[ "$TOR_ACT" =~ "Uninstall" ]] && tor_purge=1
         SECMOD="$(security_module)" TOR_PURGE="$tor_purge" $TERM_CMD bash -c '
@@ -314,19 +352,21 @@ SYSEOF
             sudo apt autoremove -y
         fi
         read -p "Press Enter to close..."'
-        if ! systemctl is-active --quiet tor 2>/dev/null; then
-            tnotify "Security" "Tor routing disabled"
+        if systemctl is-active --quiet tor 2>/dev/null; then
+            tnotify "Security" "Tor is still running — see the terminal output"
+        else
+            tnotify "Security" "Tor routing off"
         fi
-    elif [[ "$S_CHOICE" =~ "Tor Routing" ]]; then
+    elif [[ "$S_CHOICE" == *"Tor Routing (OFF)"* ]]; then
         SECMOD="$(security_module)" $TERM_CMD bash -c '
         bash "$SECMOD" tor-on
         echo ""
         echo "Example: proxychains4 curl https://check.torproject.org"
         read -p "Press Enter to close..."'
         if systemctl is-active --quiet tor 2>/dev/null; then
-            tnotify "Security" "Tor routing enabled"
+            tnotify "Security" "Tor routing on"
         fi
-    elif [[ "$S_CHOICE" =~ "DNS Privacy" ]] && [[ "$S_CHOICE" =~ "ON" ]]; then
+    elif [[ "$S_CHOICE" == *"DNS Privacy (ON)"* ]]; then
         SECMOD="$(security_module)" $TERM_CMD bash -c '
             source "$TEBIAN_COMMON"
             bash "$SECMOD" dns-off
@@ -339,8 +379,12 @@ SYSEOF
             fi
             read -p "Press Enter to close..."
         '
-        tnotify "Security" "DNS Privacy disabled"
-    elif [[ "$S_CHOICE" =~ "DNS Privacy" ]]; then
+        if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
+            tnotify "Security" "DNS Privacy is still on — see the terminal output"
+        else
+            tnotify "Security" "DNS Privacy off"
+        fi
+    elif [[ "$S_CHOICE" == *"DNS Privacy (OFF)"* ]]; then
         DNS_PROVIDER=$(echo -e "󰇖 Quad9 (privacy + malware blocking)\n󰇖 Cloudflare (fast + privacy)\n󰌍 Back" | tfuzzel -d -p " 󰇖 DNS Provider | ")
         if [ -z "$DNS_PROVIDER" ] || is_back "$DNS_PROVIDER"; then continue; fi
         local dns_provider
@@ -356,17 +400,17 @@ SYSEOF
             read -p "Press Enter to close..."
         '
         if [ -f /etc/systemd/resolved.conf.d/99-tebian-dns.conf ]; then
-            tnotify "Security" "DNS Privacy enabled"
+            tnotify "Security" "DNS Privacy on"
         else
             tnotify "Security" "DNS Privacy not enabled — see the terminal output"
         fi
-    elif [[ "$S_CHOICE" =~ "Auto Security Updates" ]]; then
+    elif [[ "$S_CHOICE" == *"Auto Security Updates"* ]]; then
         auto_updates_toggle
-    elif [[ "$S_CHOICE" =~ "Security Tools" ]]; then
+    elif [[ "$S_CHOICE" == *"Security Tools"* ]]; then
         security_tools_menu
-    elif [[ "$S_CHOICE" =~ "View Open Ports" ]]; then
+    elif [[ "$S_CHOICE" == *"View Open Ports"* ]]; then
         $TERM_CMD bash -c "echo '=== Open Ports ==='; echo ''; sudo ss -tulnp; echo ''; read -p 'Press Enter to close...'"
-    elif [[ "$S_CHOICE" =~ "View Security Logs" ]]; then
+    elif [[ "$S_CHOICE" == *"View Security Logs"* ]]; then
         security_logs_menu
     fi
     security_record_profile
@@ -384,18 +428,24 @@ autologin_toggle() {
     fi
     if [ "$state" = on ]; then
         $TERM_CMD bash -c 'tebian-autologin disable; echo; read -rp "Press Enter to close. "'
-        tnotify "Security" "Login screen shown after disk unlock"
     else
         $TERM_CMD bash -c 'tebian-autologin enable; echo; read -rp "Press Enter to close. "'
-        tnotify "Security" "Desktop opens after disk unlock (applies next boot)"
     fi
+    # Read back: the terminal step can be refused (sudo)
+    case "$(tebian-autologin status 2>/dev/null)" in
+        "$state") tnotify "Security" "Skip Login After Disk Unlock unchanged — see the terminal output" ;;
+        on)       tnotify "Security" "Skip Login After Disk Unlock on (applies next boot)" ;;
+        off)      tnotify "Security" "Skip Login After Disk Unlock off: login screen shown after disk unlock" ;;
+    esac
 }
 
 # Remote access over SSH, on or off. The firewall opens the port(s) sshd
 # really listens on — "ufw allow ssh" is port 22 only, which locks out a
 # custom Port.
 ssh_toggle() {
-    if ! systemctl is-active --quiet ssh; then
+    local was=off
+    systemctl is-active --quiet ssh && was=on
+    if [ "$was" = off ]; then
         $TERM_CMD bash -c '
         echo "Enabling SSH Server..."
         sudo apt update && sudo apt install -y openssh-server
@@ -410,7 +460,6 @@ ssh_toggle() {
         echo "Your IP addresses:"
         ip -4 a | grep inet | grep -v 127.0.0.1 | awk "{ print \"  \" \$2 }"
         read -p "Press Enter to close..."'
-        tnotify "Security" "SSH enabled"
     else
         $TERM_CMD bash -c '
         echo "Disabling SSH Server..."
@@ -421,13 +470,22 @@ ssh_toggle() {
         for p in $ports; do sudo ufw delete allow "$p/tcp" >/dev/null 2>&1; done
         echo "Done! SSH access disabled."
         read -p "Press Enter to close..."'
-        tnotify "Security" "SSH disabled"
+    fi
+    # Read back: the install or sudo can fail inside the terminal
+    local now=off
+    systemctl is-active --quiet ssh && now=on
+    if [ "$now" = "$was" ]; then
+        tnotify "Security" "Remote Access / SSH unchanged (${now^^}) — see the terminal output"
+    else
+        tnotify "Security" "Remote Access / SSH ${now}"
     fi
 }
 
 # unattended-upgrades on or off; turning it off asks first
 auto_updates_toggle() {
-    if dpkg -l unattended-upgrades 2>/dev/null | grep -q '^ii'; then
+    local was=off
+    dpkg -l unattended-upgrades 2>/dev/null | grep -q '^ii' && was=on
+    if [ "$was" = on ]; then
         CONFIRM=$(echo -e "No, keep auto-updates\nYes, disable auto-updates" | tfuzzel -d --match-mode=exact -p " Disable auto security updates? | ")
         if [[ "$CONFIRM" =~ "Yes" ]]; then
             $TERM_CMD bash -c "echo 'Disabling automatic security updates...';
@@ -435,7 +493,7 @@ auto_updates_toggle() {
             echo '';
             echo 'Auto-updates disabled. Run System Update manually.';
             read -p 'Press Enter to close...'"
-            tnotify "Security" "Auto security updates disabled"
+            auto_updates_notify "$was"
         fi
     else
         $TERM_CMD bash -c "echo 'Enabling automatic security updates...';
@@ -447,7 +505,18 @@ auto_updates_toggle() {
         echo '';
         echo 'Auto-updates enabled! Security patches will install automatically.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "Auto security updates enabled"
+        auto_updates_notify "$was"
+    fi
+}
+
+# Read back after the terminal step; $1 is the state before it
+auto_updates_notify() {
+    local now=off
+    dpkg -l unattended-upgrades 2>/dev/null | grep -q '^ii' && now=on
+    if [ "$now" = "$1" ]; then
+        tnotify "Security" "Auto security updates unchanged (${now^^}) — see the terminal output"
+    else
+        tnotify "Security" "Auto security updates ${now}"
     fi
 }
 
@@ -462,13 +531,13 @@ passwordless_sudo_toggle() {
     # The menu passes its label; opened on its own, the state is read here
     local choice="${1:-}"
     if [ -z "$choice" ]; then
-        if sudo -k -n true 2>/dev/null; then choice="Current: On"; else choice="Current: Off"; fi
+        if sudo -k -n true 2>/dev/null; then choice="(ON)"; else choice="(OFF)"; fi
     fi
     if [[ ! "$USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
         tnotify "Security" "Unexpected username '$USER' — not touching sudoers"
         return
     fi
-    if [[ "$choice" =~ "Current: On" ]]; then
+    if [[ "$choice" == *"(ON)"* ]]; then
         CONFIRM=$(echo -e "No, keep it\nYes, require my password for sudo" | tfuzzel -d --match-mode=exact -p " Require password for sudo? | ")
         [[ "$CONFIRM" =~ "Yes" ]] || return
         TUSER="$USER" $TERM_CMD bash -c '
@@ -523,6 +592,25 @@ passwordless_sudo_toggle() {
             read -p "Press Enter to close..."
         '
     fi
+    # Read back: the terminal step can be cancelled or refused
+    local now="(OFF)"
+    sudo -k -n true 2>/dev/null && now="(ON)"
+    if [[ "$choice" == *"$now"* ]]; then
+        tnotify "Security" "Passwordless sudo unchanged $now"
+    elif [ "$now" = "(ON)" ]; then
+        tnotify "Security" "Passwordless sudo on"
+    else
+        tnotify "Security" "Passwordless sudo off: sudo asks for your password"
+    fi
+}
+
+# How many apps the Firejail sandbox covers: its /usr/local/bin links
+firejail_link_count() {
+    local n=0 b
+    for b in firefox firefox-esr chromium chromium-browser google-chrome-stable thunderbird evolution signal-desktop telegram-desktop discord; do
+        [ -L "/usr/local/bin/$b" ] && n=$((n + 1))
+    done
+    echo "$n"
 }
 
 # The /usr/local/bin symlinks only catch launches by bare name. Menu entries
@@ -580,16 +668,17 @@ security_profile_menu() {
     )
     local menu="" row
     for row in "${rows[@]}"; do
-        mark="○"; [ "${row%%|*}" = "$cur" ] && mark="●"
-        menu+="$mark ${row#*|}\n"
+        mark=""; [ "${row%%|*}" = "$cur" ] && mark="  ● current"
+        menu+="${row#*|}$mark\n"
     done
     choice=$(echo -e "${menu}󰌍 Back" | tfuzzel -d -p " Profile | " --width 62)
     [ -n "$choice" ] || menu_close
     is_back "$choice" && return
+    # By the leading name: the Hardened row mentions "Standard" too
     case "$choice" in
-        *Minimal*)  profile=minimal ;;
-        *Standard*) profile=standard ;;
-        *Hardened*) profile=hardened ;;
+        "Minimal —"*)  profile=minimal ;;
+        "Standard —"*) profile=standard ;;
+        "Hardened —"*) profile=hardened ;;
         *) return ;;
     esac
     [ "$profile" = "$cur" ] && { tnotify "Security" "Already on the ${profile^} profile"; return; }
@@ -606,7 +695,9 @@ security_profile_menu() {
         bash "$SECMOD" "$PROFILE"
         echo ""
         read -p "Press Enter to close..."'
-    tnotify "Security" "Security profile: $(security_current_profile)"
+    local now
+    now=$(security_current_profile)
+    tnotify "Security" "Security profile: ${now^}"
     # Opened from the search the Security menu isn't there to record it
     security_record_profile
 }
@@ -656,9 +747,9 @@ apparmor_menu() {
     fi
     local AA_OPTS=""
     if systemctl is-active --quiet apparmor 2>/dev/null; then
-        AA_OPTS="󰒃 Disable AppArmor\n󰌍 Back"
+        AA_OPTS="󰒃 Turn Off AppArmor\n󰌍 Back"
     else
-        AA_OPTS="󰒃 Enable AppArmor (Debian's profiles)\n󰌍 Back"
+        AA_OPTS="󰒃 Turn On AppArmor (Debian's profiles)\n󰌍 Back"
     fi
 
     local AA_CHOICE
@@ -666,7 +757,7 @@ apparmor_menu() {
     [ -n "$AA_CHOICE" ] || menu_close
     if is_back "$AA_CHOICE"; then return; fi
 
-    if [[ "$AA_CHOICE" =~ "Enable" ]]; then
+    if [[ "$AA_CHOICE" == *"Turn On"* ]]; then
         $TERM_CMD bash -c "echo 'Enabling AppArmor...';
         sudo apt install -y apparmor apparmor-utils;
         if sudo systemctl enable --now apparmor; then
@@ -675,15 +766,23 @@ apparmor_menu() {
             echo 'AppArmor could not be started — see: systemctl status apparmor';
         fi;
         read -p 'Press Enter to close...'"
-        systemctl is-active --quiet apparmor 2>/dev/null && tnotify "Security" "AppArmor enabled"
-    elif [[ "$AA_CHOICE" =~ "Disable" ]]; then
+        if systemctl is-active --quiet apparmor 2>/dev/null; then
+            tnotify "Security" "AppArmor on"
+        else
+            tnotify "Security" "AppArmor not turned on — see the terminal output"
+        fi
+    elif [[ "$AA_CHOICE" == *"Turn Off"* ]]; then
         $TERM_CMD bash -c "echo 'Disabling AppArmor...';
         sudo systemctl stop apparmor;
         sudo systemctl disable apparmor;
         echo 'Done! AppArmor disabled.';
         echo 'Reboot may be needed for full effect.';
         read -p 'Press Enter to close...'"
-        tnotify "Security" "AppArmor disabled"
+        if systemctl is-active --quiet apparmor 2>/dev/null; then
+            tnotify "Security" "AppArmor is still on — see the terminal output"
+        else
+            tnotify "Security" "AppArmor off"
+        fi
     fi
 }
 
@@ -691,7 +790,8 @@ security_logs_menu() {
     local LOG_OPTS=""
     # Build list of available log sources
     systemctl is-active --quiet fail2ban 2>/dev/null && LOG_OPTS+="󰍉 Fail2Ban Logs\n"
-    systemctl is-active --quiet ufw 2>/dev/null && LOG_OPTS+="󰍉 Firewall (UFW) Logs\n"
+    # ufw.service is oneshot and "active" even with the firewall off
+    grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null && LOG_OPTS+="󰍉 Firewall (UFW) Logs\n"
     systemctl is-active --quiet ssh 2>/dev/null && LOG_OPTS+="󰍉 SSH Auth Logs\n"
     LOG_OPTS+="󰍉 All Auth Logs\n"
     systemctl is-active --quiet apparmor 2>/dev/null && LOG_OPTS+="󰒃 AppArmor Denials\n"
@@ -717,6 +817,10 @@ security_logs_menu() {
 
 security_tools_menu() {
     while true; do
+    local boxes kali_label parrot_label
+    boxes=$(distrobox list 2>/dev/null | awk -F'|' 'NR > 1 { gsub(/ /, "", $2); print $2 }')
+    if grep -qx kali <<< "$boxes"; then kali_label="󰣖 Kali Linux Container (Installed)"; else kali_label="󰣖 Kali Linux Container (Not Installed)"; fi
+    if grep -qx parrot <<< "$boxes"; then parrot_label="󰣖 Parrot OS Container (Installed)"; else parrot_label="󰣖 Parrot OS Container (Not Installed)"; fi
     ST_OPTS="󰍉 Recon & Scanning
 󰖟 Web Application Testing
 󰚑 Exploitation Frameworks
@@ -724,8 +828,8 @@ security_tools_menu() {
 󰌆 Password Cracking
 󰈈 Forensics & Recovery
 󰛃 Sniffing & Spoofing
-󰣖 Install Kali Container
-󰣖 Install Parrot Container
+$kali_label
+$parrot_label
 󰌍 Back"
 
     ST_CHOICE=$(echo -e "$ST_OPTS" | tfuzzel -d -p " 󰒃 Security Tools | ")
@@ -733,7 +837,7 @@ security_tools_menu() {
     [ -n "$ST_CHOICE" ] || menu_close
     if is_back "$ST_CHOICE"; then return; fi
 
-    if [[ "$ST_CHOICE" =~ "Recon" ]]; then
+    if [[ "$ST_CHOICE" == *"Recon"* ]]; then
         sec_tool_install_menu "Recon & Scanning" \
             "nmap|Nmap - Network Scanner|apt" \
             "masscan|Masscan - Fast Port Scanner|apt" \
@@ -741,7 +845,7 @@ security_tools_menu() {
             "bind9-dnsutils|DNS Utils (dig, nslookup)|apt" \
             "netdiscover|Netdiscover - ARP Scanner|apt" \
             "recon-ng|Recon-ng - OSINT Framework|apt"
-    elif [[ "$ST_CHOICE" =~ "Web" ]]; then
+    elif [[ "$ST_CHOICE" == *"Web"* ]]; then
         sec_tool_install_menu "Web Application Testing" \
             "nikto|Nikto - Web Scanner|apt" \
             "sqlmap|SQLMap - SQL Injection|apt" \
@@ -749,35 +853,39 @@ security_tools_menu() {
             "dirb|Dirb - Web Content Scanner|apt" \
             "burpsuite|Burp Suite (Kali Container)|distrobox" \
             "zaproxy|ZAP Proxy - Web App Scanner (Kali Container)|distrobox"
-    elif [[ "$ST_CHOICE" =~ "Exploitation" ]]; then
+    elif [[ "$ST_CHOICE" == *"Exploitation"* ]]; then
         sec_tool_install_menu "Exploitation Frameworks" \
             "metasploit-framework|Metasploit (Kali Container)|distrobox" \
             "exploitdb|ExploitDB - Exploit Archive (Kali Container)|distrobox" \
             "set|Social Engineering Toolkit (Kali Container)|distrobox"
-    elif [[ "$ST_CHOICE" =~ "Wireless" ]]; then
+    elif [[ "$ST_CHOICE" == *"Wireless"* ]]; then
         sec_tool_install_menu "Wireless Attacks" \
             "aircrack-ng|Aircrack-ng - WiFi Cracking|apt" \
             "wifite|Wifite - Automated WiFi Attacks|apt" \
             "kismet|Kismet - Wireless Sniffer (Kali Container)|distrobox"
-    elif [[ "$ST_CHOICE" =~ "Password" ]]; then
+    elif [[ "$ST_CHOICE" == *"Password"* ]]; then
         sec_tool_install_menu "Password Cracking" \
             "john|John the Ripper|apt" \
             "hashcat|Hashcat - GPU Cracker|apt" \
             "hydra|Hydra - Login Brute Forcer|apt" \
             "medusa|Medusa - Parallel Brute Forcer|apt"
-    elif [[ "$ST_CHOICE" =~ "Forensics" ]]; then
+    elif [[ "$ST_CHOICE" == *"Forensics"* ]]; then
         sec_tool_install_menu "Forensics & Recovery" \
             "autopsy|Autopsy - Digital Forensics|apt" \
             "binwalk|Binwalk - Firmware Analysis|apt" \
             "foremost|Foremost - File Carver|apt" \
             "sleuthkit|Sleuth Kit - Disk Analysis|apt"
-    elif [[ "$ST_CHOICE" =~ "Sniffing" ]]; then
+    elif [[ "$ST_CHOICE" == *"Sniffing"* ]]; then
         sec_tool_install_menu "Sniffing & Spoofing" \
             "wireshark|Wireshark - Packet Analyzer|apt" \
             "tcpdump|Tcpdump - CLI Packet Capture|apt" \
             "ngrep|Ngrep - Network Grep|apt" \
             "ettercap-text-only|Ettercap - MITM Framework|apt"
-    elif [[ "$ST_CHOICE" =~ "Kali Container" ]]; then
+    elif [[ "$ST_CHOICE" == *"Kali Linux Container (Installed)"* ]]; then
+        tnotify "Security Tools" "Kali container is set up — open it with: distrobox enter kali"
+    elif [[ "$ST_CHOICE" == *"Parrot OS Container (Installed)"* ]]; then
+        tnotify "Security Tools" "Parrot container is set up — open it with: distrobox enter parrot"
+    elif [[ "$ST_CHOICE" == *"Kali Linux Container"* ]]; then
         $TERM_CMD bash -c "
             echo '=== Install Kali Linux Container ==='
             echo ''
@@ -792,7 +900,7 @@ security_tools_menu() {
             echo 'Then install tools: sudo apt install -y kali-linux-headless'
             read -p 'Press Enter to close...'
         "
-    elif [[ "$ST_CHOICE" =~ "Parrot Container" ]]; then
+    elif [[ "$ST_CHOICE" == *"Parrot OS Container"* ]]; then
         $TERM_CMD bash -c "
             echo '=== Install Parrot OS Container ==='
             echo ''
@@ -827,18 +935,14 @@ sec_tool_install_menu() {
 
         local PREFIX="\n"
         [ -z "$MENU_ITEMS" ] && PREFIX=""
+        # State in words: Text Mode strips the glyphs. Container tools get
+        # none — whether the tool is inside the container isn't cheap to ask
         if [[ "$METHOD" == "distrobox" ]]; then
-            if distrobox list 2>/dev/null | grep -q "kali"; then
-                MENU_ITEMS+="${PREFIX}󰄬 $DISPLAY"
-            else
-                MENU_ITEMS+="${PREFIX}󰄰 $DISPLAY"
-            fi
+            MENU_ITEMS+="${PREFIX}󰣖 $DISPLAY"
+        elif dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then
+            MENU_ITEMS+="${PREFIX}󰄬 $DISPLAY (Installed)"
         else
-            if dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then
-                MENU_ITEMS+="${PREFIX}󰄬 $DISPLAY"
-            else
-                MENU_ITEMS+="${PREFIX}󰄰 $DISPLAY"
-            fi
+            MENU_ITEMS+="${PREFIX}󰄰 $DISPLAY (Not Installed)"
         fi
     done
     MENU_ITEMS+="\n󰌍 Back"
@@ -856,7 +960,7 @@ sec_tool_install_menu() {
         local DISPLAY="${REST%%|*}"
         local METHOD="${REST##*|}"
 
-        if [[ "$CHOICE" =~ "$DISPLAY" ]]; then
+        if [[ "$CHOICE" == *"$DISPLAY"* ]]; then
             if [[ "$METHOD" == "distrobox" ]]; then
                 $TERM_CMD bash -c "
                     echo '=== $DISPLAY ==='
@@ -913,12 +1017,16 @@ sec_tool_install_menu() {
     done
 }
 
+# The VMs live in the system libvirt (tebian-isolated-workspace sets
+# qemu:///system); a plain virsh as the user asks qemu:///session, finds
+# nothing, and the menu offered Setup for a workspace that exists.
 secure_workspace_menu() {
+    local -a VIRSH=(virsh -c qemu:///system)
     while true; do
     # Detect state
-    if command -v virsh &>/dev/null && virsh dominfo tebian-workstation &>/dev/null 2>&1; then
-        WS_STATE=$(virsh domstate tebian-workstation 2>/dev/null || echo "unknown")
-        GW_STATE=$(virsh domstate tebian-gateway 2>/dev/null || echo "unknown")
+    if command -v virsh &>/dev/null && "${VIRSH[@]}" dominfo tebian-workstation &>/dev/null; then
+        WS_STATE=$("${VIRSH[@]}" domstate tebian-workstation 2>/dev/null || echo "unknown")
+        GW_STATE=$("${VIRSH[@]}" domstate tebian-gateway 2>/dev/null || echo "unknown")
 
         SW_OPTS="󰋽 Gateway: $GW_STATE
 󰋽 Workstation: $WS_STATE"
@@ -944,24 +1052,25 @@ Architecture:
     [ -n "$SW_CHOICE" ] || menu_close
     if is_back "$SW_CHOICE"; then return; fi
 
-    if [[ "$SW_CHOICE" =~ "Setup Secure Workspace" ]]; then
+    if [[ "$SW_CHOICE" == *"Setup Secure Workspace"* ]]; then
         $TERM_CMD bash -c "
             tebian-isolated-workspace setup
             read -p 'Press Enter to close...'
         "
-    elif [[ "$SW_CHOICE" =~ "Start Workspace" ]]; then
+    elif [[ "$SW_CHOICE" == *"Start Workspace"* ]]; then
         $TERM_CMD bash -c "
             tebian-isolated-workspace start
             read -p 'Press Enter to close...'
         "
-    elif [[ "$SW_CHOICE" =~ "Stop Workspace" ]]; then
+    elif [[ "$SW_CHOICE" == *"Stop Workspace"* ]]; then
         $TERM_CMD bash -c "
             tebian-isolated-workspace stop
             read -p 'Press Enter to close...'
         "
-    elif [[ "$SW_CHOICE" =~ "Open Workstation" ]]; then
-        virt-viewer tebian-workstation &>/dev/null &
-    elif [[ "$SW_CHOICE" =~ "Destroy Workspace" ]]; then
+    elif [[ "$SW_CHOICE" == *"Open Workstation"* ]]; then
+        tebian_term_apt_install virt-viewer || continue
+        virt-viewer -c qemu:///system tebian-workstation &>/dev/null &
+    elif [[ "$SW_CHOICE" == *"Destroy Workspace"* ]]; then
         $TERM_CMD bash -c "
             tebian-isolated-workspace destroy
             read -p 'Press Enter to close...'

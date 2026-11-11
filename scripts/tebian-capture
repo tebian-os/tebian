@@ -212,6 +212,8 @@ menu() {
         rec_label="󰑋 Stop Recording (REC)"
     else
         rec_label="󰑋 Record Screen..."
+        # tebian-record offers the install when it is picked
+        command -v wf-recorder >/dev/null 2>&1 || rec_label="󰑋 Record Screen (Not Installed)"
     fi
     ocr_label="󰅍 Copy Text from Screen"
     command -v tesseract >/dev/null 2>&1 || ocr_label+=" (Not Installed)"

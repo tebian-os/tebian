@@ -127,7 +127,7 @@ show_main_menu() {
         "󰒓 System"                       system_menu
         "󰐥 Power"                        power_menu
         "󰇄 More"                         more_menu
-        "󰌍 Back (Mod+D: app launcher)"   back
+        "󰌍 Back (Super+D: app launcher)" back
     )
     local -a labels=() actions=() ids=()
     local i id label pick n

@@ -75,7 +75,7 @@ apps_candidates() {
 # A name to show for a desktop-id, even one that is no longer installed
 apps_name_of() {
     local id="$1" name
-    [ -n "$id" ] || { echo "None"; return; }
+    [ -n "$id" ] || { echo "Not Set"; return; }
     if declare -F tebian_app_name >/dev/null && name=$(tebian_app_name "$id"); then
         echo "$name"
     else
@@ -87,7 +87,7 @@ apps_name_of() {
 # Debian and from Flatpak), so "Current: Firefox" says which one
 apps_label_of() {
     local id="$1" name n=0
-    [ -n "$id" ] || { echo "None"; return; }
+    [ -n "$id" ] || { echo "Not Set"; return; }
     name=$(apps_name_of "$id")
     if declare -F tebian_apps_list >/dev/null; then
         n=$(tebian_apps_list | N="$name" awk -F'\t' '$2 == ENVIRON["N"] { n++ } END { print n + 0 }')
@@ -97,7 +97,7 @@ apps_label_of() {
 }
 
 # Pick one app from id<TAB>name<TAB>icon lines on stdin; prints its id.
-# Args: prompt, id to mark "(Current)". Names shared by two apps get the
+# Args: prompt, id to mark "● current". Names shared by two apps get the
 # id added so both can be told apart and each label maps to one id. The
 # labels carry no glyph (the icon goes to fuzzel out of band), so icon and
 # text mode return the same text. Returns 1 on Back or Escape.
@@ -117,7 +117,7 @@ apps_pick() {
     for i in "${!ids[@]}"; do
         labels[i]="${names[$i]}"
         [ "${count[${names[$i]}]}" -gt 1 ] && labels[i]+=" (${ids[$i]%.desktop})"
-        [ "${ids[$i]}" = "$current" ] && labels[i]+=" (Current)"
+        [ "${ids[$i]}" = "$current" ] && labels[i]+="  ● current"
     done
 
     # Piped straight in, never held in a variable: the "\0icon\x1f"
@@ -132,7 +132,9 @@ apps_pick() {
         done
         printf '%s\n' "󰌍 Back"
     } | tfuzzel -d -p " $prompt | " --width 60) || return 1
-    if [ -z "$choice" ] || is_back "$choice"; then return 1; fi
+    [ -n "$choice" ] || return 1
+    # Apps before Back: "Back In Time" is a real app, and is_back takes
+    # anything starting "Back " for the Back row
     for i in "${!labels[@]}"; do
         if [ "${labels[$i]}" = "$choice" ]; then
             echo "${ids[$i]}"
@@ -187,10 +189,12 @@ default_apps_menu() {
             br=$(apps_label_of "$(apps_current_browser)")
             fm=$(apps_label_of "$(apps_current_file_manager)")
         else
-            br="xdg-utils not installed"; fm="$br"
+            br=""; fm=""
         fi
-        choice=$(printf '%s\n' "󰖟 Web Browser (Current: $br)" \
-            "󰷊 File Manager (Current: $fm)" \
+        # Without xdg-utils there is no current choice to show; picking
+        # the row offers to install it
+        choice=$(printf '%s\n' "󰖟 Web Browser (${br:+Current: }${br:-xdg-utils Not Installed})" \
+            "󰷊 File Manager (${fm:+Current: }${fm:-xdg-utils Not Installed})" \
             "󰆍 Terminal (Current: $(apps_current_terminal))" "󰌍 Back" \
             | tfuzzel -d -p " Default Apps | " --width 60)
         [ -n "$choice" ] || menu_close
@@ -321,25 +325,27 @@ startup_apps_menu() {
             lines+=("$line"); labels+=("$label")
         done < <(tebian_block_get "$STARTUP_BLOCK")
 
+        # When changes apply is said in the prompt, not in a row of its own
         choice=$( {
             printf '%s\n' "󰐊 Add a Startup App"
             [ ${#labels[@]} -gt 0 ] && printf '%s\n' "${labels[@]}"
-            printf '%s\n' "󰋅 Changes take effect at next login" "󰌍 Back"
-        } | tfuzzel -d -p " Startup Apps | " --width 60)
+            printf '%s\n' "󰌍 Back"
+        } | tfuzzel -d -p " Startup Apps (from next login) | " --width 60)
         [ -n "$choice" ] || menu_close
-        if is_back "$choice"; then return; fi
 
-        # App entries first: an app could be called "Add a Startup App"
+        # App entries first: an app could be called "Add a Startup App", or
+        # "Back In Time", which is_back would take for Back
         local picked=""
         for i in "${!labels[@]}"; do
             [ "${labels[$i]}" = "$choice" ] && { picked="$i"; break; }
         done
         if [ -n "$picked" ]; then
             startup_remove "${lines[$picked]}" "${labels[$picked]}"
+        elif is_back "$choice"; then
+            return
         elif [[ "$choice" == *"Add a Startup App"* ]]; then
             startup_add
         fi
-        # The info line just redraws the menu
     done
 }
 

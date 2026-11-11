@@ -56,9 +56,10 @@ system_menu() {
     now=$(date '+%H:%M')
     lang=$(sysprefs_system_lang)
     case "$(sysprefs_dnd_state)" in
-        on)  dnd="Do Not Disturb: ON" ;;
-        off) dnd="Do Not Disturb: OFF" ;;
-        *)   dnd="" ;;
+        on)      dnd="Do Not Disturb: ON" ;;
+        off)     dnd="Do Not Disturb: OFF" ;;
+        missing) dnd="Not Installed" ;;
+        *)       dnd="" ;;
     esac
     if sysprefs_printing_installed; then
         printers="󰈔 Printers"
@@ -67,9 +68,9 @@ system_menu() {
     fi
 
     local OPTS="󰋅 About This Computer
-󰌢 Computer Name: ${host:-unknown}
-󰥔 Date & Time: ${zone:-unknown}, $now
-󰖟 Language & Region: ${lang:-not set}
+󰌢 Computer Name (Current: ${host:-unknown})
+󰥔 Date & Time (${zone:-unknown}, $now)
+󰖟 Language & Region (Current: ${lang:-Not Set})
 $printers
 󰍡 Notifications${dnd:+ ($dnd)}
 󰌍 Back"
@@ -224,9 +225,9 @@ datetime_menu() {
     fi
 
     local OPTS="󰥔 Now: $now
-󰥔 Time Zone: ${zone:-unknown}
+󰥔 Time Zone (Current: ${zone:-unknown})
 $ntp_label
-󰥔 Clock Format: $clock_fmt
+󰥔 Clock Format (Current: $clock_fmt)
 󰌍 Back"
 
     local CHOICE
@@ -255,13 +256,13 @@ timezone_menu() {
     local CHOICE
     CHOICE=$({
         echo "󰌍 Back"
-        [ -n "$cur" ] && echo "$cur (current)"
+        [ -n "$cur" ] && echo "$cur  ● current"
         grep -vxF -- "${cur:-//}" <<< "$zones"
     } | tfuzzel -d -p " 󰥔 Time Zone (type a city) | " --width 50)
     [ -n "$CHOICE" ] || menu_close
     if is_back "$CHOICE"; then return; fi
 
-    local zone="${CHOICE% (current)}"
+    local zone="${CHOICE%  ● current}"
     # Only a name from the list: it ends up in a root-owned symlink
     if ! grep -qxF -- "$zone" <<< "$zones"; then
         tnotify "Time Zone" "Not a time zone: $zone"
@@ -370,7 +371,7 @@ locale_menu() {
     local CHOICE
     CHOICE=$({
         echo "󰌍 Back"
-        awk -v c="$cur" '$1 == c { print $0 " (current)"; exit }' <<< "$list"
+        awk -v c="$cur" '$1 == c { print $0 "  ● current"; exit }' <<< "$list"
         awk -v c="$cur" '$1 != c' <<< "$list"
     } | tfuzzel -d -p " 󰖟 Language & Region (now: ${cur:-not set}) | " --width 70)
     [ -n "$CHOICE" ] || menu_close
@@ -472,8 +473,8 @@ notifications_menu() {
     case "$(sysprefs_dnd_state)" in
         on)      dnd_label="󰂛 Do Not Disturb (ON)" ;;
         off)     dnd_label="󰂛 Do Not Disturb (OFF)" ;;
-        missing) dnd_label="󰂛 Do Not Disturb (mako not installed)" ;;
-        *)       dnd_label="󰂛 Do Not Disturb (mako not running)" ;;
+        missing) dnd_label="󰂛 Do Not Disturb (Not Installed)" ;;
+        *)       dnd_label="󰂛 Do Not Disturb (Unavailable: notifications not running)" ;;
     esac
     local CHOICE
     CHOICE=$(echo -e "$dnd_label\n󰍡 Notification History\n󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 45)
@@ -486,6 +487,23 @@ notifications_menu() {
     done
 }
 
+# Notifications need mako, and without it no notification can say so: the
+# install is offered in a menu instead. The same as Software > Install
+# Essentials > Notifications, plus starting it, so it works at once.
+sysprefs_offer_mako() {
+    local confirm conf="${XDG_CONFIG_HOME:-$HOME/.config}/mako/config"
+    confirm=$(echo -e "No, cancel\nYes, install notifications (mako)" | tfuzzel -d --match-mode=exact -p " Notifications need mako, which is not installed. Install it? | " --width 70)
+    [[ "$confirm" =~ "Yes" ]] || return
+    tebian_term_apt_install mako-notifier || return
+    # The shipped config, not mako's default: it defines do-not-disturb
+    if [ ! -f "$conf" ]; then
+        mkdir -p "${conf%/*}"
+        cp "${TEBIAN_DIR:-$HOME/Tebian}/configs/mako/config" "$conf" 2>/dev/null
+    fi
+    pgrep -x mako >/dev/null || setsid -f mako >/dev/null 2>&1
+    tnotify "Notifications" "Installed and on"
+}
+
 # The same switch as the Modern bar's bell (configs/waybar/config.jsonc):
 # mako's do-not-disturb mode, then signal 9 so the bar's indicator follows
 dnd_toggle() {
@@ -493,7 +511,7 @@ dnd_toggle() {
     state=$(sysprefs_dnd_state)
     case "$state" in
         missing)
-            tnotify "Do Not Disturb" "Needs mako — Settings > Software > Install Essentials > Notifications"
+            sysprefs_offer_mako
             return ;;
         stopped)
             tnotify "Do Not Disturb" "mako (the notification daemon) is not running"

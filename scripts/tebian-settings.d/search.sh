@@ -26,12 +26,12 @@ bluetooth|Bluetooth|Headphones, Earbuds, Pair a Device, Wireless Mouse, BT||blue
 audio|Audio|Sound, Volume||audio_menu
 audio-output|Output Device|Speakers, Headphones, Sound Output, HDMI Audio|Audio|audio_output_menu
 audio-input|Input Device|Microphone, Mic, Recording, Headset|Audio|audio_input_menu
-mic-mute|Mute Microphone|Mic Mute, Unmute Microphone|Audio|mic_mute_toggle
+mic-mute|Microphone Mute|Mute Microphone, Mic Mute, Unmute Microphone|Audio|mic_mute_toggle
 audio-mixer|Audio Mixer|Volume Mixer, App Volume, Pulsemixer, Pavucontrol|Audio|audio_mixer
 screen|Screen|Display||screen_all_menu
 brightness|Brightness|Backlight, Dim the Screen|Screen|screen_menu
 displays|Displays|Monitor, External Monitor, Second Screen, Multiple Monitors, Turn Off a Screen|Screen|display_output_menu
-display-layout|Display Layout|Resolution, Refresh Rate, Scale, Arrange Monitors, wdisplays|Screen > Brightness|display_layout_gui
+display-layout|Resolution, Scale & Arrangement|Display Layout, Resolution, Refresh Rate, Scale, Arrange Monitors, wdisplays|Screen > Displays|display_layout_gui
 night-light|Night Light|Blue Light, Warm Screen, Color Temperature, Redshift, Eye Strain|Screen|night_light_menu
 capture|Capture|Screenshot, Screenshots, Print Screen, Screen Capture, Snip, Snipping Tool|Screen|capture_menu
 screen-recording|Record Screen|Screen Recording, Screen Recorder, Record Video, Screencast|Screen > Capture|capture_record
@@ -40,7 +40,7 @@ scan-qr|Scan QR Code|QR, Barcode|Screen > Capture|capture_qr
 emoji|Emoji Picker|Emoticons, Smiley, Special Characters|Keyboard & Mouse|capture_emoji
 lock|Lock & Idle|Lock Screen, Auto-Lock, Screen Lock, Idle, Screensaver|Screen|lock_menu
 lock-timeout|Lock Timeout|Auto-Lock Time, Idle Time, Lock After|Screen > Lock & Idle|lock_timeout_menu
-bar-stats|Bar Stats|CPU in Bar, RAM in Bar, System Monitor in Bar|Screen|bar_stats_toggle
+bar-stats|Bar Stats|CPU in Bar, RAM in Bar, System Monitor in Bar|More > Desktop & UI|bar_stats_toggle
 themes|Themes|Dark Mode, Light Mode, Colors, Appearance, Look, Nord, Dracula, Gruvbox, Tokyo Night, Rose Pine, Everforest||theme_menu
 wallpaper|Wallpaper|Background, Desktop Picture, Desktop Background|Themes|custom_wallpaper_menu
 desktop-feel|Desktop Feel|Windows Style, macOS Style, Window Layout Style|Themes|feel_menu
@@ -66,7 +66,7 @@ security-profile|Security Profile|Firewall, UFW, fail2ban, Hardened|Security|sec
 password|Change Password|Password, Login Password, passwd, Disk Passphrase|Security|change_password_flow
 autologin|Skip Login After Disk Unlock|Autologin, Automatic Login, Log In Automatically|Security|autologin_toggle
 sudo-password|Passwordless sudo|sudo, Admin Password|Security|passwordless_sudo_toggle
-ssh|Remote Access (SSH)|SSH, Remote Login, sshd|Security|ssh_toggle
+ssh|Remote Access / SSH|SSH, Remote Login, sshd|Security|ssh_toggle
 auto-updates|Auto Security Updates|Automatic Updates, Unattended Upgrades|Security|auto_updates_toggle
 apparmor|AppArmor|Mandatory Access Control|Security|apparmor_menu
 paranoid|Paranoid Mode|Route Everything Through Tor, MAC Randomization|Security|security_menu
@@ -94,12 +94,14 @@ power-mode|Power Mode|Battery Saver, Power Saver, Performance Mode, Battery Life
 more|More|Advanced||more_menu
 desktop-ui|Desktop & UI|Bar, Taskbar, Panel, Title Bars, Floating Windows, Tiling, Window Snapping, Window Effects, Blur, Rounded Corners, Hide Bar, Bar Position|More|ui_menu
 dock|Dock|Taskbar, App Dock, Running Apps, Mac Dock, Auto-hide Dock|More > Desktop & UI|dock_menu
-snap-assist|Snap Assist|Fill Other Half, Window Picker, Snap Thirds, Side by Side|More > Desktop & UI|snap_assist_toggle
-text-mode|UI Icons|Text Mode, Icons in Menus, Nerd Font Icons|More > Desktop & UI|ui_icons_toggle
+window-snapping|Window Snapping|Snap Windows, Snap to Edge, Halves, Thirds, Quarters, Rebuild Sway, Aero Snap|More > Desktop & UI|window_snapping_menu
+snap-assist|Snap Assist|Fill Other Half, Window Picker, Side by Side|More > Desktop & UI > Window Snapping|snap_assist_toggle
+text-mode|Menu Icons|Text Mode, UI Icons, Icons in Menus, Nerd Font Icons|More > Desktop & UI|ui_icons_toggle
 bar-style|Bar Style|Modern Bar, Classic Bar, Waybar|More > Desktop & UI|bar_style_toggle
+bar-visibility|Bar Visibility|Hide Bar, Auto-hide Bar, Show Bar, No Bar|More > Desktop & UI|bar_visibility_menu
 weather|Weather in Bar|Weather, Forecast, Temperature|More > Desktop & UI|weather_menu
 font-rendering|Font Rendering|Blurry Text, Font Smoothing, Hinting, Subpixel, ClearType|More > Desktop & UI|font_rendering_menu
-keybinds|Keybinds|Keyboard Shortcuts, Shortcuts, Hotkeys, Key Bindings|More > Desktop & UI|keybinds_list
+keybinds|Keyboard Shortcuts|Keybinds, Shortcuts, Hotkeys, Key Bindings|More > Desktop & UI|keybinds_list
 default-apps|Default Apps|Default Programs, Open With|More|default_apps_menu
 default-browser|Default Web Browser|Default Browser, Open Links With|More > Default Apps|default_browser_menu
 default-file-manager|Default File Manager|Files App, Thunar|More > Default Apps|default_file_manager_menu

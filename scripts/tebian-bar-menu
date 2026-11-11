@@ -23,10 +23,34 @@ case "${1:-}" in
     drives)    tebian-panels toggle drives && exit 0 ;;
 esac
 
+# This month as a grid, for the calendar notification. cal comes with
+# ncal, which a minimal install lacks: the notification then had a title
+# and nothing under it.
+month_view() {
+    if command -v cal >/dev/null 2>&1; then
+        cal
+        return
+    fi
+    local first days dow d line
+    first=$(date +%Y-%m-01)
+    days=$(date -d "$first +1 month -1 day" +%-d)
+    dow=$(date -d "$first" +%u)
+    echo "Mo Tu We Th Fr Sa Su"
+    line=$(printf '%*s' $(( (dow - 1) * 3 )) '')
+    for ((d = 1; d <= days; d++)); do
+        line+=$(printf '%2d ' "$d")
+        if (( (dow - 1 + d) % 7 == 0 )); then
+            echo "${line% }"
+            line=""
+        fi
+    done
+    [ -z "$line" ] || echo "${line% }"
+}
+
 case "${1:-settings}" in
     launcher) exec tebian-menu ;;
     display)  exec tebian-settings --menu screen ;;
     # No fuzzel calendar: a plain month view in a notification instead
-    calendar) exec notify-send -a Calendar "$(date '+%A %d %B %Y')" "$(cal 2>/dev/null)" ;;
+    calendar) exec notify-send -a Calendar "$(date '+%A %d %B %Y')" "$(month_view 2>/dev/null)" ;;
     *)        exec tebian-settings --menu "${1:-settings}" ;;
 esac

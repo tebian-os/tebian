@@ -180,7 +180,7 @@ install_config() {  # <src> <dst>
     cp "$1" "$2"
 }
 
-# Default bar stats to OFF (user can enable in Settings > Screen > Bar Stats)
+# Default bar stats to OFF (user can enable in Settings > More > Desktop & UI > Bar Stats)
 mkdir -p "$CONFIG_DIR/tebian"
 touch "$CONFIG_DIR/tebian/bar_perf_off"
 

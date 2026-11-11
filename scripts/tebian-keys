@@ -1,5 +1,11 @@
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN KEY HELPER (Super+Shift+?)
+# The keyboard shortcuts; picking one does what its key does. Worded like
+# Settings > Desktop & UI > Keyboard Shortcuts (keybinds_list in ui.sh), so
+# the two lists read the same.
+# ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/tebian-common" ]; then
@@ -8,46 +14,119 @@ elif [ -f "$HOME/.local/bin/tebian-common" ]; then
     source "$HOME/.local/bin/tebian-common"
 fi
 
-KEYBINDS="󰘔 Super+Enter → Terminal
-󰀻 Super+D → App Menu
-󰍉 Super+A → App Drawer
-󰖲 Super+Shift+Tab → Switch Window
-󰅍 Super+V → Clipboard
-󰘋 Super+Shift+Q → Kill Window
-󰘕 Super+F → Fullscreen
-󰘖 Super+Space → Float Toggle
-󰘒 Super+R → Resize Mode
-󰚰 Super+S → Settings
-󰎤 Super+1-9 → Workspace
-󰎤 Super+Shift+1-9 → Move to Workspace"
+USER_CONF="$HOME/.config/sway/config.user"
 
-# Floating mode's keyboard snaps (sway's own snap command)
-if grep -q '^bindsym \$mod+Ctrl+Left snap left' ~/.config/sway/config.user 2>/dev/null; then
-    KEYBINDS+="
-󰕴 Super+Ctrl+Arrows → Snap Window (again: thirds)"
+# Keys that only exist when config.user binds them (Settings can add or
+# remove them, and an old config.user may predate them)
+has_bind() {
+    grep -qF "bindsym $1 " "$USER_CONF" 2>/dev/null
+}
+
+# What fuzzel shows and what picking it does, side by side. Picked by
+# position (--index): "Switch Window" and "Switch Workspace", or "Screenshot
+# (Region)" and "Capture Menu", share words, and Text Mode strips the glyph.
+# An empty action is a reference row: there is nothing useful to run from a
+# menu (a snap needs the window, not the menu, focused).
+LABELS=() ACTIONS=()
+row() { LABELS+=("$1"); ACTIONS+=("$2"); }
+
+row "󰀻 Super+D → App Launcher"               menu
+row "󰍉 Super+A → All Apps (Drawer)"          drawer
+row "󰚰 Super+S → Settings"                   settings
+row "󰘔 Super+Return → Terminal"              terminal
+row "󰘋 Super+Shift+Q → Close Window"         close
+row "󰘕 Super+F → Fullscreen"                 fullscreen
+row "󰘖 Super+Space → Toggle Float/Tile"      float
+# Floating mode's keyboard snaps (sway's own snap command). Thirds, other
+# screens and the stepping arrows need the rebuilt sway (rev 2): offering
+# them on the first build listed keys that do nothing.
+if grep -q '^bindsym \$mod+Ctrl+Left snap left' "$USER_CONF" 2>/dev/null; then
+    if tebian_snap_rev2; then
+        row "󰕴 Super+Ctrl+Left/Right → Snap Window: half, third, two thirds" ""
+        row "󰕴 Super+Ctrl+Up/Down → Maximize or Top Quarter / Restore or Bottom Quarter" ""
+        row "󰕴 Super+Ctrl+Return / BackSpace → Maximize / Restore Window" ""
+        row "󰕴 Super+Ctrl+1 2 3 → Snap to Left / Middle / Right Third" ""
+        row "󰕴 Super+Ctrl+Shift+Left/Right → Move Window to Other Monitor" ""
+    else
+        row "󰕴 Super+Ctrl+Left/Right → Snap Window to Half" ""
+        row "󰕴 Super+Ctrl+Up/Down → Maximize / Restore Window" ""
+    fi
+fi
+row "󰘒 Super+R → Resize Mode"                resize
+grep -q "bindsym.*exec gtklock" "$USER_CONF" 2>/dev/null &&
+    row "󰌾 Super+L → Lock Screen"            lock
+row "󰖲 Super+Shift+Tab → Switch Window"      windows
+has_bind '$mod+Tab' &&
+    row "󰎤 Super+Tab → Switch Workspace"     back_and_forth
+row "󰎤 Super+1-9 → Go to Workspace"          ""
+row "󰎤 Super+Shift+1-9 → Move Window to Workspace" ""
+has_bind '$mod+Alt+Left' &&
+    row "󰎤 Super+Alt+Left/Right → Previous/Next Workspace" ""
+has_bind '$mod+w' &&
+    row "󰎤 Super+W → Workspace Menu"         workspaces
+row "󰁮 Super+Arrows → Move Focus"            ""
+row "󰁮 Super+Shift+Arrows → Move Window"     ""
+row "󰅍 Super+V → Clipboard History"          clipboard
+row "󰌌 Super+. → Emoji Picker"               emoji
+row "󰄀 Print → Screenshot (Region)"          shot_region
+row "󰄀 Shift+Print → Screenshot (Full)"      shot_screen
+row "󰄀 Super+Print → Capture Menu (record, copy text, QR)" capture
+row "󰄀 Ctrl+Print → Record Screen (again to stop)" record
+row "󰐥 Super+Shift+E → Log Out (Exit Sway)"  logout
+
+say() {  # title message
+    notify-send "$1" "$2" 2>/dev/null || true
+}
+
+# Super+V's list. A pick is checked against the list: Enter on typed text
+# that matched nothing hands back that text, cliphist cannot decode it, and
+# wl-copy then put an empty clipboard over what was on it. fuzzel itself,
+# not tfuzzel: the entries are the user's text, which Text Mode would strip
+# of its emoji (and then match nothing) and a leading "─" would hide.
+clipboard() {
+    local list entry pick
+    if ! command -v cliphist >/dev/null 2>&1; then
+        pick=$(printf '%s\n' "Install Clipboard History (cliphist)" "Cancel" |
+            tfuzzel -d -p " 󰅍 Clipboard history is not installed | " --lines 2 --width 55)
+        [[ "$pick" == *Install* ]] || return 0
+        TERM_CMD="${TERM_CMD:-$(tebian_term_cmd)}" tebian_term_apt_install cliphist || {
+            say "Clipboard" "cliphist could not be installed"
+            return 1
+        }
+        # sway starts the recorder at login; start it now so this session's
+        # copies are kept too
+        command -v wl-paste >/dev/null 2>&1 &&
+            swaymsg exec 'wl-paste --watch cliphist store' >/dev/null 2>&1
+        say "Clipboard history on" "What you copy from now on is listed here (Super+V)"
+        return 0
+    fi
+    list=$(cliphist list 2>/dev/null)
+    if [ -z "$list" ]; then
+        say "Clipboard" "Nothing copied yet"
+        return 0
+    fi
+    entry=$(printf '%s\n' "$list" | fuzzel -d -p " 󰅍 Clipboard | ")
+    [ -n "$entry" ] || return 0
+    grep -qxF -- "$entry" <<< "$list" || return 0
+    cliphist decode <<< "$entry" | wl-copy
+}
+
+# Super+V itself (configs/sway/config): the same checked list, without the
+# key helper in front of it
+if [ "${1:-}" = --clipboard ]; then
+    clipboard
+    exit 0
 fi
 
-if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
-    KEYBINDS+="
-󰌾 Super+L → Lock Screen"
-fi
+LINES_N=${#LABELS[@]}
+[ "$LINES_N" -gt 15 ] && LINES_N=15
+PICK=$(printf '%s\n' "${LABELS[@]}" | tfuzzel -d --index -p " 󰌌 Keys | " --width 76 --lines "$LINES_N")
 
-KEYBINDS+="
-󰁮 Super+Arrows → Focus
-󰁮 Super+Shift+Arrows → Move
-󰄀 Print → Screenshot Region
-󰄀 Shift+Print → Screenshot Save
-󰄀 Super+Print → Capture Menu
-󰄀 Ctrl+Print → Record Screen
-󰌌 Super+. → Emoji Picker
-󰐥 Super+Shift+E → Exit Sway"
+# Escape, or typed text that matched nothing (-1)
+[[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#ACTIONS[@]}" ] || exit 0
 
-CHOICE=$(echo -e "$KEYBINDS" | tfuzzel -d -p " 󰌌 Keys | " --width 35)
-
-[ -z "$CHOICE" ] && exit 0
-
-case "$CHOICE" in
-    *"Terminal"*)
+case "${ACTIONS[$PICK]}" in
+    terminal)
         # sway doesn't expand config variables like $term in IPC commands —
         # resolve the real terminal: the one picked in Settings (config.user's
         # "terminal" block), then the base config, then detection
@@ -59,20 +138,25 @@ case "$CHOICE" in
             done
         fi
         [ -n "$term" ] && swaymsg exec -- "$term" ;;
-    *"App Menu"*) tebian-menu & ;;
-    *"App Drawer"*) tebian-drawer & ;;
-    *"Switch Window"*) tebian-windows & ;;
-    *"Clipboard"*) cliphist list | tfuzzel -d | cliphist decode | wl-copy ;;
-    *"Kill Window"*) swaymsg kill ;;
-    *"Fullscreen"*) swaymsg fullscreen toggle ;;
-    *"Float Toggle"*) swaymsg floating toggle ;;
-    *"Resize Mode"*) swaymsg mode resize ;;
-    *"Settings"*) tebian-settings & ;;
-    *"Lock Screen"*) gtklock -d ;;
-    *"Screenshot Region"*) mkdir -p ~/Pictures/Screenshots && FILE=~/Pictures/Screenshots/screenshot-$(date +%Y%m%d_%H%M%S).png && grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied" ;;
-    *"Screenshot Save"*) mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/$(date +%Y%m%d_%H%M%S).png && notify-send "Screenshot" "Saved" ;;
-    *"Capture Menu"*) tebian-capture & ;;
-    *"Record Screen"*) tebian-record & ;;
-    *"Emoji Picker"*) tebian-emoji & ;;
-    *"Exit Sway"*) swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit" ;;
+    menu)           tebian-menu & ;;
+    drawer)         tebian-drawer & ;;
+    settings)       tebian-settings & ;;
+    close)          swaymsg kill ;;
+    fullscreen)     swaymsg fullscreen toggle ;;
+    float)          swaymsg floating toggle ;;
+    resize)         swaymsg mode resize ;;
+    lock)           gtklock -d ;;
+    windows)        tebian-windows & ;;
+    back_and_forth) swaymsg workspace back_and_forth ;;
+    workspaces)     tebian-workspace & ;;
+    clipboard)      clipboard ;;
+    emoji)          tebian-emoji & ;;
+    # The same as the Print keys (file names, missing-tool offers). The
+    # menu has to be off the screen before the screen is taken.
+    shot_region)    sleep 0.2; tebian-capture region ;;
+    shot_screen)    sleep 0.2; tebian-capture screen ;;
+    capture)        tebian-capture & ;;
+    record)         tebian-record & ;;
+    logout)         swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit" ;;
 esac
+exit 0

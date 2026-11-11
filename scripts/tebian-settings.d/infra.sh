@@ -28,8 +28,8 @@ containers_menu() {
     while true; do
     # If no container engine at all, offer setup
     if ! command -v distrobox &>/dev/null && ! command -v docker &>/dev/null; then
-        C_OPTS="󰏗 Setup Containers (Distrobox + Podman)
-󰡨 Install Docker + Compose (servers)
+        C_OPTS="󰏗 Linux Containers [Distrobox + Podman] (Not Installed)
+󰡨 Docker + Compose, for servers (Not Installed)
 󰌍 Back"
 
         C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰡨 Containers | ")
@@ -37,7 +37,7 @@ containers_menu() {
         [ -n "$C_CHOICE" ] || menu_close
         if is_back "$C_CHOICE"; then return; fi
 
-        if [[ "$C_CHOICE" =~ "Setup Containers" ]]; then
+        if [[ "$C_CHOICE" =~ "Distrobox" ]]; then
             $TERM_CMD bash -c "echo 'Installing Distrobox + Podman...';
             echo '';
             sudo apt update && sudo apt install -y distrobox podman;
@@ -49,10 +49,11 @@ containers_menu() {
             echo '';
             echo 'Container engine ready!';
             read -p 'Press Enter to continue...'"
-        elif [[ "$C_CHOICE" =~ "Install Docker" ]]; then
+        elif [[ "$C_CHOICE" =~ "Docker" ]]; then
             container_install_docker
         fi
-        command -v distrobox &>/dev/null || command -v docker &>/dev/null || return
+        # Installed or not, show the menu again: returning on a failed or
+        # cancelled install dropped the user a level up with no word why
         continue
     fi
 
@@ -76,8 +77,11 @@ containers_menu() {
         done < <(distrobox list --no-color 2>/dev/null | tail -n +2)
     fi
 
-    # Docker containers
-    if command -v docker &>/dev/null && docker info &>/dev/null; then
+    # Docker containers. Unreachable right after the install (the docker
+    # group applies from the next login) or with the service stopped
+    local docker_ok=false
+    command -v docker &>/dev/null && docker info &>/dev/null && docker_ok=true
+    if $docker_ok; then
         while IFS='|' read -r name state image; do
             [ -z "$name" ] && continue
             name=$(echo "$name" | xargs)
@@ -99,13 +103,15 @@ containers_menu() {
     if command -v distrobox &>/dev/null; then
         C_OPTS+="󰐊 New Container\n"
     fi
-    if command -v docker &>/dev/null; then
+    if $docker_ok; then
         C_OPTS+="󰡨 New Docker Container\n"
+    elif command -v docker &>/dev/null; then
+        C_OPTS+="󰡨 Docker (Not Running)\n"
     else
-        C_OPTS+="󰡨 Install Docker + Compose\n"
+        C_OPTS+="󰡨 Docker + Compose (Not Installed)\n"
     fi
     if ! command -v distrobox &>/dev/null; then
-        C_OPTS+="󰏗 Setup Distrobox + Podman\n"
+        C_OPTS+="󰏗 Distrobox + Podman (Not Installed)\n"
     fi
     C_OPTS+="󰌍 Back"
 
@@ -118,9 +124,11 @@ containers_menu() {
         docker_create_menu
     elif [[ "$C_CHOICE" =~ "New Container" ]]; then
         container_create_menu
-    elif [[ "$C_CHOICE" =~ "Install Docker" ]]; then
+    elif [[ "$C_CHOICE" == *"Docker + Compose (Not Installed)"* ]]; then
         container_install_docker
-    elif [[ "$C_CHOICE" =~ "Setup Distrobox" ]]; then
+    elif [[ "$C_CHOICE" == *"Docker (Not Running)"* ]]; then
+        tnotify "Docker" "Docker isn't reachable. Just installed it? Log out and back in. Otherwise start it: sudo systemctl start docker"
+    elif [[ "$C_CHOICE" == *"Distrobox + Podman (Not Installed)"* ]]; then
         $TERM_CMD bash -c "echo 'Installing Distrobox + Podman...';
         sudo apt update && sudo apt install -y distrobox podman;
         if [ -f /etc/apparmor.d/crun ] && ! grep -q 'unconfined' /etc/apparmor.d/crun; then
@@ -467,7 +475,7 @@ docker_create_menu() {
 
     [ -z "$image" ] && return
 
-    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$cname"; then
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qxF "$cname"; then
         tnotify "Docker" "$cname already exists"
         return
     fi
@@ -500,7 +508,17 @@ docker_create_menu() {
         fi
         read -p "Press Enter to close..."
     ' _ "${run_args[@]}"
-    [ -n "$secret" ] && tnotify "Docker" "$cname created — password saved in ~/.config/tebian/docker-credentials"
+    # The terminal waits for docker run, so the container is there by now
+    # if it worked; the terminal already said why if it did not
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qxF "$cname"; then
+        if [ -n "$secret" ]; then
+            tnotify "Docker" "$cname created — password saved in ~/.config/tebian/docker-credentials"
+        else
+            tnotify "Docker" "$cname created"
+        fi
+    else
+        tnotify "Docker" "$cname was not created"
+    fi
 }
 
 # 20 random URL-safe characters
@@ -532,6 +550,19 @@ vm_conf_set() {
     fi
 }
 
+# Pick one of the values after the prompt and current one; the current one
+# is marked. Prints the value, nothing on Escape or Back.
+_infra_pick() {
+    local prompt="$1" cur="$2" v rows="" pick
+    shift 2
+    for v in "$@"; do
+        if [ "$v" = "$cur" ]; then rows+="$v  ● current\n"; else rows+="$v\n"; fi
+    done
+    pick=$(echo -e "${rows}󰌍 Back" | tfuzzel -d -p " $prompt | ")
+    [ -n "$pick" ] && ! is_back "$pick" || return 0
+    echo "${pick%  ● current}"
+}
+
 # Config menu for a VM
 vm_config_menu() {
     local vm_name="$1" conf_file="$2" disk_file="$3"
@@ -545,9 +576,9 @@ vm_config_menu() {
         disk_size=$(qemu-img info --output=json "$disk_file" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('virtual-size',0)//1073741824)" 2>/dev/null)
     fi
 
-    local CFG_OPTS="󰘚 CPU Cores: $cores
-󰍛 RAM: ${ram}GB"
-    [ -n "$disk_size" ] && CFG_OPTS+="\n󰋊 Disk: ${disk_size}GB (resize)"
+    local CFG_OPTS="󰘚 CPU Cores (Current: $cores)
+󰍛 RAM (Current: ${ram} GB)"
+    [ -n "$disk_size" ] && CFG_OPTS+="\n󰋊 Disk Size (Current: ${disk_size} GB)"
     CFG_OPTS+="\n󰌍 Back"
 
     local CFG_CHOICE
@@ -558,30 +589,38 @@ vm_config_menu() {
 
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
         local new_cores
-        new_cores=$(echo -e "1\n2\n4\n6\n8\n12\n16" | tfuzzel -d -p " CPU Cores (now: $cores) | ")
+        new_cores=$(_infra_pick "CPU Cores" "$cores" 1 2 4 6 8 12 16)
         if [ -n "$new_cores" ]; then
             vm_conf_set "$conf_file" "cores" "$new_cores"
             tnotify "$vm_name" "CPU set to $new_cores cores"
         fi
     elif [[ "$CFG_CHOICE" =~ "RAM" ]]; then
         local new_ram
-        new_ram=$(echo -e "2\n4\n6\n8\n12\n16\n32" | tfuzzel -d -p " RAM GB (now: ${ram}GB) | ")
+        new_ram=$(_infra_pick "RAM (GB)" "$ram" 2 4 6 8 12 16 32)
         if [ -n "$new_ram" ]; then
             vm_conf_set "$conf_file" "ram" "$new_ram"
-            tnotify "$vm_name" "RAM set to ${new_ram}GB"
+            tnotify "$vm_name" "RAM set to ${new_ram} GB"
         fi
     elif [[ "$CFG_CHOICE" =~ "Disk" ]]; then
         local new_disk
-        new_disk=$(echo -e "32\n64\n128\n256\n512" | tfuzzel -d -p " Disk GB (now: ${disk_size}GB) | ")
+        # Only sizes it can grow to: a disk image is never shrunk
+        local -a sizes=()
+        local sz
+        for sz in 32 64 128 256 512; do
+            [ "$sz" -gt "$disk_size" ] && sizes+=("$sz")
+        done
+        if [ ${#sizes[@]} -eq 0 ]; then
+            tnotify "$vm_name" "Disk is already ${disk_size} GB, the largest size offered"
+            continue
+        fi
+        new_disk=$(_infra_pick "Grow disk to (GB, now ${disk_size})" "" "${sizes[@]}")
         if [ -n "$new_disk" ] && [ "$new_disk" -gt "$disk_size" ] 2>/dev/null; then
             # Fails on a running VM, whose image qemu holds locked
             if qemu-img resize "$disk_file" "${new_disk}G" >/dev/null 2>&1; then
-                tnotify "$vm_name" "Disk resized to ${new_disk}GB"
+                tnotify "$vm_name" "Disk grown to ${new_disk} GB"
             else
                 tnotify "$vm_name" "Disk not resized — shut the VM down first"
             fi
-        elif [ -n "$new_disk" ] && [ "$new_disk" -le "$disk_size" ] 2>/dev/null; then
-            tnotify "$vm_name" "Can only grow disk (${disk_size}GB -> larger)"
         fi
     fi
     done
@@ -599,10 +638,10 @@ container_config_menu() {
     ram=$(vm_conf_get "$conf_file" "ram" "0")
     local cores_label ram_label
     [ "$cores" = "0" ] && cores_label="No Limit" || cores_label="$cores"
-    [ "$ram" = "0" ] && ram_label="No Limit" || ram_label="${ram}GB"
+    [ "$ram" = "0" ] && ram_label="No Limit" || ram_label="${ram} GB"
 
-    local CFG_OPTS="󰘚 CPU Cores: $cores_label
-󰍛 RAM Limit: $ram_label
+    local CFG_OPTS="󰘚 CPU Cores (Current: $cores_label)
+󰍛 RAM Limit (Current: $ram_label)
 󰌍 Back"
 
     local CFG_CHOICE
@@ -611,29 +650,40 @@ container_config_menu() {
     [ -n "$CFG_CHOICE" ] || menu_close
     if is_back "$CFG_CHOICE"; then return; fi
 
+    # The saved value is only what this menu shows, so it is saved only
+    # once podman has applied it — otherwise the label claimed a limit the
+    # container never got
     if [[ "$CFG_CHOICE" =~ "CPU Cores" ]]; then
         local new_cores
-        new_cores=$(echo -e "No Limit\n1\n2\n4\n6\n8" | tfuzzel -d -p " CPU Cores (now: $cores_label) | ")
-        if [[ "$new_cores" =~ "No Limit" ]]; then
-            vm_conf_set "$conf_file" "cores" "0"
-            podman update --cpus 0 "$name" 2>/dev/null
-            tnotify "$name" "CPU limit removed"
-        elif [ -n "$new_cores" ]; then
+        new_cores=$(_infra_pick "CPU Cores" "$cores_label" "No Limit" 1 2 4 6 8)
+        [ "$new_cores" = "No Limit" ] && new_cores=0
+        if [ -z "$new_cores" ]; then
+            :
+        elif podman update --cpus "$new_cores" "$name" >/dev/null 2>&1; then
             vm_conf_set "$conf_file" "cores" "$new_cores"
-            podman update --cpus "$new_cores" "$name" 2>/dev/null
-            tnotify "$name" "CPU set to $new_cores cores"
+            if [ "$new_cores" = 0 ]; then
+                tnotify "$name" "CPU limit removed"
+            else
+                tnotify "$name" "CPU limited to $new_cores cores"
+            fi
+        else
+            tnotify "$name" "Could not change the CPU limit"
         fi
     elif [[ "$CFG_CHOICE" =~ "RAM" ]]; then
         local new_ram
-        new_ram=$(echo -e "No Limit\n1\n2\n4\n8\n16" | tfuzzel -d -p " RAM GB (now: $ram_label) | ")
-        if [[ "$new_ram" =~ "No Limit" ]]; then
-            vm_conf_set "$conf_file" "ram" "0"
-            podman update --memory 0 "$name" 2>/dev/null
-            tnotify "$name" "RAM limit removed"
-        elif [ -n "$new_ram" ]; then
+        new_ram=$(_infra_pick "RAM Limit (GB)" "${ram_label% GB}" "No Limit" 1 2 4 8 16)
+        [ "$new_ram" = "No Limit" ] && new_ram=0
+        if [ -z "$new_ram" ]; then
+            :
+        elif podman update --memory "$([ "$new_ram" = 0 ] && echo 0 || echo "${new_ram}g")" "$name" >/dev/null 2>&1; then
             vm_conf_set "$conf_file" "ram" "$new_ram"
-            podman update --memory "${new_ram}g" "$name" 2>/dev/null
-            tnotify "$name" "RAM set to ${new_ram}GB"
+            if [ "$new_ram" = 0 ]; then
+                tnotify "$name" "RAM limit removed"
+            else
+                tnotify "$name" "RAM limited to ${new_ram} GB"
+            fi
+        else
+            tnotify "$name" "Could not change the RAM limit"
         fi
     fi
     done
@@ -649,25 +699,20 @@ vm_menu() {
         kvm_ok=true
     fi
 
-    # Detect Windows VM
-    local win_label
-    if [ -f "$VM_DIR/windows/windows.qcow2" ]; then
-        win_label="󰍹 Launch Windows 11"
-    elif [ -f "$VM_DIR/windows/windows.iso" ]; then
-        win_label="󰍹 Install Windows 11 (ISO Ready)"
-    else
-        win_label="󰍹 Setup Windows 11 VM"
-    fi
+    # Setup creates the empty virtual disk along with the installer, so
+    # "disk exists" does not mean "installed": while the installer is there
+    # Install is offered next to Launch. Showing only Launch hid the Install
+    # step that Setup tells you to pick next, and booted an empty disk.
+    local win_label=""
+    [ -f "$VM_DIR/windows/windows.iso" ] && win_label+="󰍹 Install Windows 11 (Installer Ready)\n"
+    [ -f "$VM_DIR/windows/windows.qcow2" ] && win_label+="󰍹 Launch Windows 11\n"
+    [ -n "$win_label" ] || win_label="󰍹 Setup Windows 11 VM\n"
 
-    # Detect macOS VM
-    local mac_label
-    if [ -f "$VM_DIR/macos/mac_hdd.qcow2" ] && [ -f "$VM_DIR/macos/OpenCore.qcow2" ]; then
-        mac_label="󰍹 Launch macOS"
-    elif [ -f "$VM_DIR/macos/BaseSystem.img" ]; then
-        mac_label="󰍹 Install macOS (Base System Ready)"
-    else
-        mac_label="󰍹 Setup macOS VM"
-    fi
+    local mac_label=""
+    [ -f "$VM_DIR/macos/BaseSystem.img" ] && mac_label+="󰍹 Install macOS (Installer Ready)\n"
+    [ -f "$VM_DIR/macos/mac_hdd.qcow2" ] && [ -f "$VM_DIR/macos/OpenCore.qcow2" ] &&
+        mac_label+="󰍹 Launch macOS\n"
+    [ -n "$mac_label" ] || mac_label="󰍹 Setup macOS VM\n"
 
     # Detect isolated workspace state
     local iso_label
@@ -680,17 +725,23 @@ vm_menu() {
             iso_label="󰗹 Secure Workspace (Stopped)"
         fi
     else
-        iso_label="󰗹 Secure Workspace (Not Setup)"
+        iso_label="󰗹 Secure Workspace (Not Set Up)"
     fi
 
     local VM_OPTS=""
     if ! $kvm_ok; then
-        VM_OPTS+="󰚰 Install KVM Core (Required First)\n"
+        VM_OPTS+="󰚰 Virtual Machine Support [KVM/QEMU] (Not Installed)\n"
     fi
-    VM_OPTS+="$win_label\n"
-    [ -f "$VM_DIR/windows/windows.qcow2" ] && VM_OPTS+="  Configure Windows VM\n"
-    VM_OPTS+="$mac_label\n"
-    [ -f "$VM_DIR/macos/mac_hdd.qcow2" ] && VM_OPTS+="  Configure macOS VM\n"
+    # Both guests are x86 only and run on KVM: on an ARM board (a Pi) they
+    # could only fail, so say why instead of offering them
+    if [ "$(uname -m)" = x86_64 ]; then
+        VM_OPTS+="$win_label"
+        [ -f "$VM_DIR/windows/windows.qcow2" ] && VM_OPTS+="  Configure Windows VM\n"
+        VM_OPTS+="$mac_label"
+        [ -f "$VM_DIR/macos/mac_hdd.qcow2" ] && VM_OPTS+="  Configure macOS VM\n"
+    else
+        VM_OPTS+="󰍹 Windows and macOS VMs (Need an x86 PC)\n"
+    fi
     VM_OPTS+="$iso_label\n"
     VM_OPTS+="󰌍 Back"
 
@@ -699,8 +750,10 @@ vm_menu() {
     [ -n "$V_CHOICE" ] || menu_close
     if is_back "$V_CHOICE"; then return; fi
 
-    if [[ "$V_CHOICE" =~ "Install KVM Core" ]]; then
+    if [[ "$V_CHOICE" =~ "Virtual Machine Support" ]]; then
         vm_install_kvm
+    elif [[ "$V_CHOICE" =~ "Need an x86 PC" ]]; then
+        tnotify "VM" "Windows and macOS VMs need an x86-64 PC — this is $(uname -m)"
     elif [[ "$V_CHOICE" =~ "Configure Windows" ]]; then
         vm_config_menu "Windows" "$VM_DIR/windows/vm.conf" "$VM_DIR/windows/windows.qcow2"
     elif [[ "$V_CHOICE" =~ "Configure macOS" ]]; then
@@ -747,11 +800,39 @@ vm_install_kvm() {
     '
 }
 
+# True when qemu can use KVM; says why not otherwise
+vm_kvm_usable() {
+    # No device at all: virtualization is switched off in the firmware
+    # (or the CPU has none) — logging out again would not help
+    if [ ! -e /dev/kvm ]; then
+        tnotify "VM" "Hardware virtualization is off — turn on VT-x / AMD-V (SVM) in your BIOS/UEFI settings"
+        return 1
+    fi
+    # The usual failure right after installing KVM: the kvm group only
+    # applies from the next login, and qemu then died with no message
+    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        tnotify "VM" "No access to /dev/kvm yet — log out and back in, then try again"
+        return 1
+    fi
+}
+
+# Runs the macOS VM with the arguments given; qemu's errors go to a log
+# and a notification instead of nowhere
+vm_run_macos() {
+    local VM_DIR="$HOME/VMs/macos"
+    (
+        if ! qemu-system-x86_64 "$@" 2> "$VM_DIR/qemu.log"; then
+            notify-send -u critical "macOS VM stopped with an error" \
+                "$(tail -n 3 "$VM_DIR/qemu.log") (full log: $VM_DIR/qemu.log)"
+        fi
+    ) >/dev/null 2>&1 < /dev/null &
+}
+
 # ── Windows VM ──
 
 vm_setup_windows() {
     if ! command -v qemu-system-x86_64 &>/dev/null; then
-        tnotify "VM" "Install KVM Core first"
+        tnotify "VM" "Install Virtual Machine Support first (top of this menu)"
         return
     fi
 
@@ -833,12 +914,7 @@ vm_run_windows() {
         tnotify "VM" "swtpm missing (Win11 needs TPM) — sudo apt install swtpm"
         return
     fi
-    # The usual failure right after installing KVM: the kvm group only
-    # applies from the next login, and qemu then died with no message
-    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-        tnotify "VM" "No access to /dev/kvm yet — log out and back in, then try again"
-        return
-    fi
+    vm_kvm_usable || return
     cores=$(vm_conf_get "$conf_file" "cores" "4")
     ram=$(vm_conf_get "$conf_file" "ram" "4")
     # Windows Setup has no virtio disk or network driver, so a virtio disk
@@ -898,7 +974,7 @@ vm_run_windows() {
 
 vm_setup_macos() {
     if ! command -v qemu-system-x86_64 &>/dev/null; then
-        tnotify "VM" "Install KVM Core first"
+        tnotify "VM" "Install Virtual Machine Support first (top of this menu)"
         return
     fi
 
@@ -981,15 +1057,23 @@ vm_install_macos() {
         return
     fi
 
-    [ -f "$VM_DIR/mac_hdd.qcow2" ] || qemu-img create -f qcow2 "$VM_DIR/mac_hdd.qcow2" 64G
-    [ -f "$VM_DIR/OpenCore.qcow2" ] || cp "$VM_DIR/OSX-KVM/OpenCore/OpenCore.qcow2" "$VM_DIR/OpenCore.qcow2"
+    vm_kvm_usable || return
+    # A setup that stopped halfway leaves the base system without the boot
+    # loader or firmware; qemu then failed with nothing on screen
+    [ -f "$VM_DIR/OpenCore.qcow2" ] || cp "$VM_DIR/OSX-KVM/OpenCore/OpenCore.qcow2" "$VM_DIR/OpenCore.qcow2" 2>/dev/null
+    if [ ! -f "$VM_DIR/OpenCore.qcow2" ] || [ ! -f "$VM_DIR/OSX-KVM/OVMF_CODE.fd" ]; then
+        tnotify "VM" "macOS setup is incomplete — finishing it"
+        vm_setup_macos
+        return
+    fi
+    [ -f "$VM_DIR/mac_hdd.qcow2" ] || qemu-img create -f qcow2 "$VM_DIR/mac_hdd.qcow2" 64G >/dev/null
 
     local cores=$(vm_conf_get "$conf_file" "cores" "4")
     local ram=$(vm_conf_get "$conf_file" "ram" "4")
 
     tnotify "VM" "Starting macOS installer..."
 
-    qemu-system-x86_64 \
+    vm_run_macos \
         -name "macOS Installer" \
         -machine q35,accel=kvm \
         -cpu Penryn,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check \
@@ -1012,7 +1096,7 @@ vm_install_macos() {
         -display sdl,gl=on \
         -device qemu-xhci \
         -device usb-tablet \
-        -usb -device usb-kbd &
+        -usb -device usb-kbd
 }
 
 vm_launch_macos() {
@@ -1027,9 +1111,16 @@ vm_launch_macos() {
     local cores=$(vm_conf_get "$conf_file" "cores" "4")
     local ram=$(vm_conf_get "$conf_file" "ram" "4")
 
+    vm_kvm_usable || return
+    if [ ! -f "$VM_DIR/OSX-KVM/OVMF_CODE.fd" ]; then
+        tnotify "VM" "macOS setup is incomplete — finishing it"
+        vm_setup_macos
+        return
+    fi
+
     tnotify "VM" "Launching macOS..."
 
-    qemu-system-x86_64 \
+    vm_run_macos \
         -name "macOS" \
         -machine q35,accel=kvm \
         -cpu Penryn,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check \
@@ -1050,7 +1141,7 @@ vm_launch_macos() {
         -display sdl,gl=on \
         -device qemu-xhci \
         -device usb-tablet \
-        -usb -device usb-kbd &
+        -usb -device usb-kbd
 }
 
 tlink_menu() {
@@ -1082,27 +1173,18 @@ tlink_menu() {
 
 vpn_menu() {
     while true; do
-    # Detect WireGuard state
-    if command -v wg &>/dev/null; then
+    # State shows on the rows themselves: the tunnel that is up is marked
+    # current and has a Disconnect row, rather than an inert status line
+    WG_IFACE=""
+    if ! command -v wg &>/dev/null; then
+        VPN_OPTS="󰏗 WireGuard (Not Installed)"
+    else
         # Detect the active tunnel without root — `sudo -n wg show` fails
         # whenever sudo creds aren't cached (the normal fuzzel-launched case)
         WG_IFACE=$(ip -o link show type wireguard 2>/dev/null | head -1 | awk -F': ' '{print $2}')
+        VPN_OPTS=""
         if [ -n "$WG_IFACE" ]; then
-            WG_LABEL="󰄬 WireGuard Active ($WG_IFACE)"
-        else
-            WG_LABEL="󰄰 WireGuard Installed (No Tunnel)"
-        fi
-    else
-        WG_LABEL="󰄰 WireGuard Not Installed"
-    fi
-
-    VPN_OPTS="$WG_LABEL"
-
-    if ! command -v wg &>/dev/null; then
-        VPN_OPTS+="\n󰏗 Install WireGuard"
-    else
-        if [ -n "$WG_IFACE" ]; then
-            VPN_OPTS+="\n󰅖 Disconnect ($WG_IFACE)"
+            VPN_OPTS+="󰅖 Disconnect ($WG_IFACE)"
         fi
         # List available configs — /etc/wireguard is root-only (0700), so merge
         # a direct listing (if readable), a cached-sudo listing, and the names
@@ -1114,11 +1196,16 @@ vpn_menu() {
         } | sed 's/\.conf$//' | sort -u)
         if [ -n "$WG_CONFIGS" ]; then
             for cfg in $WG_CONFIGS; do
-                VPN_OPTS+="\n󰐊 Connect: $cfg"
+                if [ "$cfg" = "$WG_IFACE" ]; then
+                    VPN_OPTS+="\n󰐊 Connect: $cfg  ● current"
+                else
+                    VPN_OPTS+="\n󰐊 Connect: $cfg"
+                fi
             done
         fi
         VPN_OPTS+="\n󰏫 Import Config File"
         VPN_OPTS+="\n󰌆 Generate Keypair"
+        VPN_OPTS="${VPN_OPTS#\\n}"
     fi
 
     VPN_OPTS+="\n󰌍 Back"
@@ -1128,7 +1215,7 @@ vpn_menu() {
     [ -n "$VP_CHOICE" ] || menu_close
     if is_back "$VP_CHOICE"; then return; fi
 
-    if [[ "$VP_CHOICE" =~ "Install WireGuard" ]]; then
+    if [[ "$VP_CHOICE" == *"WireGuard (Not Installed)"* ]]; then
         $TERM_CMD bash -c "echo 'Installing WireGuard...';
         sudo apt update && sudo apt install -y wireguard wireguard-tools;
         echo '';
@@ -1146,13 +1233,26 @@ vpn_menu() {
         fi
         read -p "Press Enter to close..."'
     elif [[ "$VP_CHOICE" =~ "Connect:" ]]; then
-        TUNNEL=$(echo "$VP_CHOICE" | sed 's/.*Connect: //')
-        $TERM_CMD bash -c "echo 'Connecting to $TUNNEL...';
-        sudo wg-quick up '$TUNNEL';
-        echo '';
+        TUNNEL=$(echo "$VP_CHOICE" | sed 's/.*Connect: //; s/  ● current$//')
+        # The name comes from a file the user can edit and goes to sudo:
+        # only what wg-quick itself accepts as an interface name
+        if [[ ! "$TUNNEL" =~ ^[a-zA-Z0-9_=+.-]{1,15}$ ]]; then
+            tnotify "VPN" "Not a valid tunnel name: $TUNNEL"
+            continue
+        fi
+        if [ "$TUNNEL" = "$WG_IFACE" ]; then
+            tnotify "VPN" "Already connected to $TUNNEL"
+            continue
+        fi
+        TUNNEL="$TUNNEL" $TERM_CMD bash -c 'echo "Connecting to $TUNNEL...";
+        sudo wg-quick up "$TUNNEL";
+        echo "";
         sudo wg show;
-        echo '';
-        read -p 'Press Enter to close...'"
+        echo "";
+        read -p "Press Enter to close..."'
+        if ip -o link show type wireguard 2>/dev/null | grep -q ": $TUNNEL:"; then
+            tnotify "VPN" "Connected to $TUNNEL"
+        fi
     elif [[ "$VP_CHOICE" =~ "Import Config" ]]; then
         $TERM_CMD bash -c "echo '=== Import WireGuard Config ===';
         echo '';
@@ -1192,21 +1292,19 @@ tlink_network_menu() {
         TS_STATUS=$(tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' && echo "Active" || echo "Inactive")
         TS_IP=$(tailscale ip -4 2>/dev/null)
         
+        # One switch row: picking it connects or disconnects
         if [ "$TS_STATUS" == "Active" ]; then
-            TL_LABEL="󰄬 Tailscale Active ($TS_IP)"
-            TL_ACTION="󰅖 Disconnect"
+            TL_LABEL="󰖟 Tailscale (ON${TS_IP:+: $TS_IP})"
         else
-            TL_LABEL="󰄰 Tailscale Inactive"
-            TL_ACTION="󰐊 Connect"
+            TL_LABEL="󰖟 Tailscale (OFF)"
         fi
-        
+
         TL_OPTS="$TL_LABEL
-$TL_ACTION
 󰌄 Connect to Headscale (Self-Hosted)
 󰋜 Show Network Status
 󰌍 Back"
     else
-        TL_OPTS="󰏗 Install Tailscale
+        TL_OPTS="󰏗 Tailscale (Not Installed)
 󰌍 Back"
     fi
 
@@ -1215,7 +1313,7 @@ $TL_ACTION
     [ -n "$TL_CHOICE" ] || menu_close
     if is_back "$TL_CHOICE"; then return; fi
 
-    if [[ "$TL_CHOICE" =~ "Install Tailscale" ]]; then
+    if [[ "$TL_CHOICE" == *"Tailscale (Not Installed)"* ]]; then
         # Same pinned-key path as tebian-browser: the key is checked against
         # Tailscale's published fingerprint, and the deb line is written
         # here rather than taken from their server, so neither a swapped key
@@ -1243,18 +1341,22 @@ $TL_ACTION
                 fail "The Tailscale repository was not added."
             sudo apt update && sudo apt install -y tailscale || fail "Tailscale did not install."
             echo ""
-            echo "✅ Tailscale installed. Pick Connect to sign in."
+            echo "✅ Tailscale installed. Pick \"Tailscale (OFF)\" to sign in."
             read -p "Press Enter..."
         '
-    elif [[ "$TL_CHOICE" =~ "Connect" ]] && ! [[ "$TL_CHOICE" =~ "Headscale" ]]; then
+    elif [[ "$TL_CHOICE" == *"Tailscale (OFF)"* ]]; then
         $TERM_CMD bash -c "sudo tailscale up && echo '✅ Connected.' || echo '❌ Not connected — see above.'; read -p 'Press Enter...'"
+    elif [[ "$TL_CHOICE" == *"Tailscale (ON"* ]]; then
+        $TERM_CMD bash -c "sudo tailscale down && echo 'Disconnected.' || echo '❌ Still connected — see above.'; read -p 'Press Enter...'"
     elif [[ "$TL_CHOICE" =~ "Headscale" ]]; then
-        SERVER_URL=$(echo "" | tfuzzel -d -p " 󰌄 Headscale URL: ")
-        if [ -n "$SERVER_URL" ]; then
+        SERVER_URL=$(echo "" | tfuzzel -d -p " 󰌄 Headscale URL (https://...): ")
+        if [ -z "$SERVER_URL" ]; then
+            :
+        elif [[ ! "$SERVER_URL" =~ ^https?://[^[:space:]]+$ ]]; then
+            tnotify "Tailscale" "Not a server address: $SERVER_URL (it starts with https://)"
+        else
             HEADSCALE_URL="$SERVER_URL" $TERM_CMD bash -c 'sudo tailscale up --login-server "$HEADSCALE_URL" && echo "✅ Connected." || echo "❌ Not connected — see above."; read -p "Press Enter..."'
         fi
-    elif [[ "$TL_CHOICE" =~ "Disconnect" ]]; then
-        $TERM_CMD bash -c "sudo tailscale down && echo 'Disconnected.' || echo '❌ Still connected — see above.'; read -p 'Press Enter...'"
     elif [[ "$TL_CHOICE" =~ "Network Status" ]]; then
         $TERM_CMD bash -c "tailscale status; read -p 'Press Enter...'"
     fi

@@ -75,7 +75,7 @@ awake)
     fi
     ;;
 perf)
-    # Same switch as the Classic bar's stats (Settings > Screen > Bar Stats)
+    # Same switch as the Classic bar's stats (Settings > More > Desktop & UI > Bar Stats)
     if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
         emit "" ""
         exit 0
@@ -97,7 +97,7 @@ perf)
     done < /proc/meminfo
     mem=$(( 100 * (mt - ma) / mt ))
     emit "󰍛 ${cpu}%  󰘚 ${mem}%" "CPU ${cpu}% · RAM ${mem}% used of $((mt / 1024)) MB
-Click for btop · toggle in Settings > Screen > Bar Stats" "perf"
+Click for btop · toggle in Settings > More > Desktop & UI" "perf"
     ;;
 *)
     echo "usage: tebian-bar-status update|drives|dnd|awake|perf" >&2; exit 2 ;;

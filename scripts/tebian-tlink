@@ -25,12 +25,16 @@ TEMPLATES_DIR="$CONFIG_DIR/templates"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$TEMPLATES_DIR"
 
+# A loop, not each action calling the menu again when done: those calls
+# nested, and an action that forgot to make one (Deploy App, a Back inside
+# One-Click Apps) dropped out of T-Link altogether
 tlink_menu() {
     if [ ! -f "$SERVERS_FILE" ]; then
         echo "# Tebian Servers Config" > "$SERVERS_FILE"
         echo "# Format: name=ip" >> "$SERVERS_FILE"
     fi
 
+    while true; do
     SERVERS=$(grep -v "^#" "$SERVERS_FILE" | grep "=" | cut -d= -f1)
 
     MENU="󰌍 Back
@@ -39,7 +43,7 @@ tlink_menu() {
 
     if [ -z "$SERVERS" ]; then
         MENU+="
-  No servers - Add one below"
+  No servers yet: pick to add one"
     else
         # All pinged at once: one after another, each unreachable server
         # held the menu back a second before it appeared
@@ -85,7 +89,11 @@ tlink_menu() {
         exit 0
     fi
 
-    if [[ "$CHOICE" =~ "Add Server" ]]; then
+    # Server rows first and by shape: they hold the server's own name, and
+    # one called "Redeploy" or "One-Click" ran that action instead
+    if [[ "$CHOICE" =~ ^[[:space:]]*[●○][[:space:]] ]]; then
+        server_detail "$CHOICE"
+    elif [[ "$CHOICE" =~ "Add Server" ]]; then
         add_server
     elif [[ "$CHOICE" =~ "Setup Fresh" ]]; then
         setup_server
@@ -103,28 +111,56 @@ tlink_menu() {
         resource_usage
     elif [[ "$CHOICE" =~ "Update All" ]]; then
         update_all_servers
-    elif [[ "$CHOICE" =~ "SERVERS" ]]; then
-        tlink_menu
-    elif [[ "$CHOICE" =~ "No servers" ]]; then
+    elif [[ "$CHOICE" =~ "No servers yet" ]]; then
         add_server
-    elif [[ "$CHOICE" =~ "●" ]] || [[ "$CHOICE" =~ "○" ]]; then
-        server_detail "$CHOICE"
-    else
-        # Separator/header rows — redisplay instead of silently exiting
-        tlink_menu
     fi
+    # Anything else (the SERVERS and Quick Actions headings): show it again
+    done
+}
+
+# The server names on one line: a newline-separated list pasted into the
+# terminal scripts' "for server in ..." was a syntax error with two servers
+tlink_server_words() {
+    echo $SERVERS
+}
+
+# Typed or picked values below go into command lines run here and on the
+# server: hold them to what they can legitimately be
+tlink_valid_port() {
+    [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && return 0
+    notify-send "T-Link" "Not a port number: $1"
+    return 1
+}
+tlink_valid_app() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && return 0
+    notify-send "T-Link" "Can't use \"$1\" as an app name: letters, digits, . _ - only"
+    return 1
 }
 
 add_server() {
-    NAME=$(echo "" | tfuzzel -d -p " Server Name: " --width 30)
-    [ -z "$NAME" ] && { tlink_menu; return; }
+    NAME=$(echo "" | tfuzzel -d -p " Server Name (e.g. web1): " --width 40)
+    [ -z "$NAME" ] && return
+    # Both end up unquoted in ssh command lines and in a name=ip file read
+    # back with grep and word splitting: a space, = or quote broke every
+    # menu after it, and could run a command
+    if [[ ! "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        notify-send "T-Link" "Not added: a server name is letters, digits, . _ - (no spaces)"
+        return
+    fi
+    if grep -q "^$NAME=" "$SERVERS_FILE"; then
+        notify-send "T-Link" "Not added: there is already a server called $NAME"
+        return
+    fi
 
-    IP=$(echo "" | tfuzzel -d -p " IP Address: " --width 30)
-    [ -z "$IP" ] && { tlink_menu; return; }
+    IP=$(echo "" | tfuzzel -d -p " IP Address or Hostname: " --width 40)
+    [ -z "$IP" ] && return
+    if [[ ! "$IP" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ ]]; then
+        notify-send "T-Link" "Not added: $IP is not an IP address or hostname"
+        return
+    fi
 
     echo "$NAME=$IP" >> "$SERVERS_FILE"
     notify-send "T-Link" "Server $NAME added"
-    tlink_menu
 }
 
 setup_server() {
@@ -132,26 +168,24 @@ setup_server() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
 
     CHOICE=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Setup Server | ")
     
-    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$CHOICE" ] || is_back "$CHOICE" && return
 
     IP=$(grep "^$CHOICE=" "$SERVERS_FILE" | cut -d= -f2)
     
     DISTRO=$(echo -e "󰌍 Back\nDebian/Ubuntu\nAlpine" | tfuzzel -d -p " Distro | ")
     
-    [ -z "$DISTRO" ] || [[ "$DISTRO" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$DISTRO" ] || is_back "$DISTRO" && return
 
     if [[ "$DISTRO" =~ "Alpine" ]]; then
         setup_alpine "$CHOICE" "$IP"
     else
         setup_debian "$CHOICE" "$IP"
     fi
-    tlink_menu
 }
 
 setup_debian() {
@@ -296,7 +330,8 @@ server_detail() {
     # Strip the status icon, keep the full name (names may contain - or .)
     SERVER=$(echo "$SERVER_LINE" | sed 's/^[[:space:]]*[●○][[:space:]]*//; s/[[:space:]]*$//')
     IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
-    
+
+    while true; do
     # Get containers
     CONTAINERS=$(ssh root@$IP "docker ps --format '{{.Names}}'" 2>/dev/null)
     CONTAINER_COUNT=$(echo "$CONTAINERS" | wc -w)
@@ -321,39 +356,45 @@ server_detail() {
     CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " $SERVER | " --width 45 --lines 20)
     
     [ -n "$CHOICE" ] || exit 1
-    is_back "$CHOICE" && { tlink_menu; return; }
+    is_back "$CHOICE" && return
 
-    if [[ "$CHOICE" =~ "Shell In" ]]; then
+    # Whole labels: the heading row holds the server's name, and a server
+    # called "Restart" rebooted when its own heading was picked
+    if [[ "$CHOICE" == *"Shell In" ]]; then
         $TERM_CMD ssh root@$IP
-    elif [[ "$CHOICE" =~ "View Logs" ]]; then
+    elif [[ "$CHOICE" == *"View Logs" ]]; then
         container_logs "$IP"
-    elif [[ "$CHOICE" =~ "Resource Usage" ]]; then
+    elif [[ "$CHOICE" == *"View Resource Usage" ]]; then
         $TERM_CMD ssh root@$IP "htop"
-    elif [[ "$CHOICE" =~ "Update System" ]]; then
+    elif [[ "$CHOICE" == *"Update System" ]]; then
         $TERM_CMD ssh root@$IP "apt update && apt upgrade -y && read -p 'Done. Press Enter...'"
-    elif [[ "$CHOICE" =~ "Deploy App Here" ]]; then
+    elif [[ "$CHOICE" == *"Deploy App Here" ]]; then
         deploy_to_server "$IP" "$SERVER"
-    elif [[ "$CHOICE" =~ "One-Click" ]]; then
+    elif [[ "$CHOICE" == *"Install One-Click App" ]]; then
         one_click_to_server "$IP" "$SERVER"
-    elif [[ "$CHOICE" =~ "Setup SSL" ]]; then
+    elif [[ "$CHOICE" == *"Setup SSL (Caddy)" ]]; then
         setup_caddy "$IP" "$SERVER"
-    elif [[ "$CHOICE" =~ "Restart" ]]; then
+    elif [[ "$CHOICE" == *"Restart Server" ]]; then
+        # Everything running on it goes down for a minute: ask first
+        local sure
+        sure=$(echo -e "No, leave it running\nYes, restart $SERVER now" | tfuzzel -d --match-mode=exact -p " Restart $SERVER? | " --width 45)
+        [[ "$sure" == Yes* ]] || continue
         ssh root@$IP "reboot"
         notify-send "T-Link" "$SERVER rebooting"
         # Server is rebooting — don't recurse into a dead detail menu
-        tlink_menu; return
-    elif [[ "$CHOICE" =~ "Remove" ]]; then
+        return
+    elif [[ "$CHOICE" == *"Remove Server" ]]; then
         # Only forgets it here (the server itself is untouched), but its
         # address is gone with it, so ask
         local sure
         sure=$(echo -e "No, keep it\nYes, remove $SERVER from this list" | tfuzzel -d --match-mode=exact -p " Remove $SERVER? | " --width 45)
-        [[ "$sure" == Yes* ]] || { server_detail "$SERVER_LINE"; return; }
+        [[ "$sure" == Yes* ]] || continue
         sed -i "/^$SERVER=/d" "$SERVERS_FILE"
         notify-send "T-Link" "$SERVER removed"
         # Server is gone — back to the main list
-        tlink_menu; return
+        return
     fi
-    server_detail "$SERVER_LINE"
+    done
 }
 
 container_logs() {
@@ -367,7 +408,7 @@ container_logs() {
     
     CONTAINER=$(echo -e "󰌍 Back\n$CONTAINERS" | tfuzzel -d -p " Container | ")
     
-    [ -z "$CONTAINER" ] || [[ "$CONTAINER" =~ "Back" ]] && return
+    [ -z "$CONTAINER" ] || is_back "$CONTAINER" && return
     
     $TERM_CMD ssh root@$IP "docker logs -f --tail 100 $CONTAINER"
 }
@@ -377,13 +418,12 @@ deploy_menu() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
     SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Deploy to | ")
     
-    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$SERVER" ] || is_back "$SERVER" && return
     
     IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
     deploy_to_server "$IP" "$SERVER"
@@ -396,19 +436,26 @@ deploy_to_server() {
     # Ask for project source
     SOURCE_TYPE=$(echo -e "󰌍 Back\nLocal Folder\nGit Repository" | tfuzzel -d -p " Source | ")
     
-    [ -z "$SOURCE_TYPE" ] || [[ "$SOURCE_TYPE" =~ "Back" ]] && return
+    [ -z "$SOURCE_TYPE" ] || is_back "$SOURCE_TYPE" && return
     
     if [[ "$SOURCE_TYPE" =~ "Local" ]]; then
-        FOLDER=$(echo -e "󰌍 Cancel\n$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)" | tfuzzel -d -p " Folder | " --width 50)
-        [ -z "$FOLDER" ] || [[ "$FOLDER" =~ "Cancel" ]] && return
+        FOLDERS=$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)
+        if [ -z "$FOLDERS" ]; then
+            notify-send "T-Link" "No project folders found: put your project in ~/Projects, ~/code or ~/src"
+            return
+        fi
+        FOLDER=$(echo -e "󰌍 Back\n$FOLDERS" | tfuzzel -d -p " Folder | " --width 50)
+        [ -z "$FOLDER" ] || is_back "$FOLDER" && return
         
         APP_NAME=$(basename "$FOLDER")
+        tlink_valid_app "$APP_NAME" || return
         
     elif [[ "$SOURCE_TYPE" =~ "Git" ]]; then
         REPO=$(echo "" | tfuzzel -d -p " Git URL: " --width 50)
         [ -z "$REPO" ] && return
         
         APP_NAME=$(basename "$REPO" | sed 's/.git$//')
+        tlink_valid_app "$APP_NAME" || return
         FOLDER="/tmp/tlink-$APP_NAME"
         
         rm -rf "$FOLDER"
@@ -434,9 +481,10 @@ deploy_to_server() {
         return
     fi
     
-    # Ask for port
-    PORT=$(echo -e "3000\n8080\n8000\n5000" | tfuzzel -d -p " Port | ")
-    [ -z "$PORT" ] && PORT=3000
+    # Ask for port. Escape cancels: it used to deploy on 3000 anyway
+    PORT=$(echo -e "3000\n8080\n8000\n5000" | tfuzzel -d -p " Port (pick or type) | ")
+    [ -z "$PORT" ] && return
+    tlink_valid_port "$PORT" || return
     
     $TERM_CMD bash -c "
         echo '════════════════════════════════════════'
@@ -488,13 +536,12 @@ zero_downtime_deploy() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
     SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Deploy to | ")
     
-    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$SERVER" ] || is_back "$SERVER" && return
     
     IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
     
@@ -503,22 +550,26 @@ zero_downtime_deploy() {
     
     if [ -z "$APPS" ]; then
         notify-send "T-Link" "No apps running on $SERVER"
-        tlink_menu
         return
     fi
     
     APP=$(echo -e "󰌍 Back\n$APPS" | tfuzzel -d -p " Update App | ")
     
-    [ -z "$APP" ] || [[ "$APP" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$APP" ] || is_back "$APP" && return
     
     # Get source
     SOURCE_TYPE=$(echo -e "󰌍 Back\nLocal Folder\nGit Repository" | tfuzzel -d -p " Source | ")
     
-    [ -z "$SOURCE_TYPE" ] || [[ "$SOURCE_TYPE" =~ "Back" ]] && return
+    [ -z "$SOURCE_TYPE" ] || is_back "$SOURCE_TYPE" && return
     
     if [[ "$SOURCE_TYPE" =~ "Local" ]]; then
-        FOLDER=$(echo -e "󰌍 Cancel\n$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)" | tfuzzel -d -p " Folder | " --width 50)
-        [ -z "$FOLDER" ] || [[ "$FOLDER" =~ "Cancel" ]] && return
+        FOLDERS=$(find ~/Projects ~/projects ~/code ~/src -maxdepth 1 -type d 2>/dev/null | head -15)
+        if [ -z "$FOLDERS" ]; then
+            notify-send "T-Link" "No project folders found: put your project in ~/Projects, ~/code or ~/src"
+            return
+        fi
+        FOLDER=$(echo -e "󰌍 Back\n$FOLDERS" | tfuzzel -d -p " Folder | " --width 50)
+        [ -z "$FOLDER" ] || is_back "$FOLDER" && return
     elif [[ "$SOURCE_TYPE" =~ "Git" ]]; then
         REPO=$(echo "" | tfuzzel -d -p " Git URL: " --width 50)
         [ -z "$REPO" ] && return
@@ -599,7 +650,6 @@ zero_downtime_deploy() {
         echo ''
         read -p 'Press Enter...'
     "
-    tlink_menu
 }
 
 one_click_apps() {
@@ -607,13 +657,12 @@ one_click_apps() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
     SERVER=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Install on | ")
     
-    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$SERVER" ] || is_back "$SERVER" && return
     
     IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
     one_click_to_server "$IP" "$SERVER"
@@ -644,7 +693,7 @@ Available Apps:"
     
     CHOICE=$(echo -e "$MENU" | tfuzzel -d -p " Install | " --width 50 --lines 15)
     
-    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && return
+    [ -z "$CHOICE" ] || is_back "$CHOICE" && return
     
     # Extract app name — split on the " - " separator, not bare '-',
     # so hyphenated templates like uptime-kuma survive
@@ -714,9 +763,15 @@ setup_caddy() {
     
     DOMAIN=$(echo "" | tfuzzel -d -p " Domain (e.g., app.example.com): " --width 40)
     [ -z "$DOMAIN" ] && return
-    
-    BACKEND_PORT=$(echo -e "3000\n8080\n8000" | tfuzzel -d -p " Backend Port | ")
-    [ -z "$BACKEND_PORT" ] && BACKEND_PORT=3000
+    # Goes into the Caddyfile and a remote command line as typed
+    if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+        notify-send "T-Link" "Not a domain name: $DOMAIN"
+        return
+    fi
+
+    BACKEND_PORT=$(echo -e "3000\n8080\n8000" | tfuzzel -d -p " Backend Port (pick or type) | ")
+    [ -z "$BACKEND_PORT" ] && return
+    tlink_valid_port "$BACKEND_PORT" || return
     
     $TERM_CMD bash -c "
         echo '════════════════════════════════════════'
@@ -773,17 +828,15 @@ shell_server() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
     CHOICE=$(echo -e "󰌍 Back\n$SERVERS" | tfuzzel -d -p " Shell | ")
     
-    [ -z "$CHOICE" ] || [[ "$CHOICE" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$CHOICE" ] || is_back "$CHOICE" && return
     
     IP=$(grep "^$CHOICE=" "$SERVERS_FILE" | cut -d= -f2)
     $TERM_CMD ssh root@$IP
-    tlink_menu
 }
 
 view_all_containers() {
@@ -791,7 +844,6 @@ view_all_containers() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
@@ -801,8 +853,8 @@ view_all_containers() {
         echo '════════════════════════════════════════'
         echo ''
         
-        for server in $SERVERS; do
-            IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+        for server in $(tlink_server_words); do
+            IP=\$(grep \"^\$server=\" '$SERVERS_FILE' | cut -d= -f2)
             echo \"── \$server (\$IP) ──\"
             ssh root@\$IP 'docker ps --format \"table {{.Names}}\t{{.Status}}\t{{.Ports}}\"' 2>/dev/null || echo '  (unreachable)'
             echo ''
@@ -810,7 +862,6 @@ view_all_containers() {
         
         read -p 'Press Enter...'
     "
-    tlink_menu
 }
 
 resource_usage() {
@@ -818,13 +869,12 @@ resource_usage() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
     SERVER=$(echo -e "󰌍 Back\nAll Servers\n$SERVERS" | tfuzzel -d -p " Resources | ")
     
-    [ -z "$SERVER" ] || [[ "$SERVER" =~ "Back" ]] && { tlink_menu; return; }
+    [ -z "$SERVER" ] || is_back "$SERVER" && return
     
     if [[ "$SERVER" =~ "All" ]]; then
         $TERM_CMD bash -c "
@@ -833,8 +883,8 @@ resource_usage() {
             echo '════════════════════════════════════════'
             echo ''
             
-            for server in $SERVERS; do
-                IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+            for server in $(tlink_server_words); do
+                IP=\$(grep \"^\$server=\" '$SERVERS_FILE' | cut -d= -f2)
                 echo \"── \$server (\$IP) ──\"
                 ssh root@\$IP 'echo \"CPU: \$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\")%\"
                                echo \"RAM: \$(free -m | awk \"/Mem:/ {printf \\\"%s/%s MB (%.1f%%)\\\", \\\$3, \\\$2, \\\$3*100/\\\$2}\")\"
@@ -849,7 +899,6 @@ resource_usage() {
         IP=$(grep "^$SERVER=" "$SERVERS_FILE" | cut -d= -f2)
         $TERM_CMD ssh root@$IP "htop"
     fi
-    tlink_menu
 }
 
 update_all_servers() {
@@ -857,7 +906,6 @@ update_all_servers() {
     
     if [ -z "$SERVERS" ]; then
         notify-send "T-Link" "No servers configured"
-        tlink_menu
         return
     fi
     
@@ -867,19 +915,23 @@ update_all_servers() {
         echo '════════════════════════════════════════'
         echo ''
         
-        for server in $SERVERS; do
-            IP=\$(grep \"^\$server=\" $SERVERS_FILE | cut -d= -f2)
+        failed=0
+        for server in $(tlink_server_words); do
+            IP=\$(grep \"^\$server=\" '$SERVERS_FILE' | cut -d= -f2)
             echo \"Updating \$server (\$IP)...\"
-            ssh root@\$IP 'apt update && apt upgrade -y' 2>/dev/null && echo \"✓ \$server updated\" || echo \"✗ \$server failed\"
+            ssh root@\$IP 'apt update && apt upgrade -y' 2>/dev/null && echo \"✓ \$server updated\" || { echo \"✗ \$server failed\"; failed=1; }
             echo ''
         done
         
         echo '════════════════════════════════════════'
-        echo '  ✓ ALL SERVERS UPDATED'
+        if [ \$failed = 0 ]; then
+            echo '  ✓ ALL SERVERS UPDATED'
+        else
+            echo '  ✗ SOME SERVERS FAILED (see above)'
+        fi
         echo '════════════════════════════════════════'
         read -p 'Press Enter...'
     "
-    tlink_menu
 }
 
 # Start

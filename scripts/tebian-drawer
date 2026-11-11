@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# TEBIAN APP DRAWER (Mod+A)
+# TEBIAN APP DRAWER (Super+A)
 # Browse all installed apps. Pin/unpin apps to the main menu.
 # ==============================================================================
 
@@ -34,7 +34,7 @@ is_pinned() {
 }
 
 # A fuzzel pick by position (--index), so the action never depends on the
-# label: an app named "Back" or "Edit Menu" is still just that app. Prints
+# label: an app named "Back" or "Pin Apps" is still just that app. Prints
 # the index, or nothing for Escape and for typed text that matched nothing.
 pick_index() {
     local n="$1" pick; shift
@@ -42,7 +42,7 @@ pick_index() {
     [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -lt "$n" ] && echo "$pick"
 }
 
-# Edit Pins mode — every app with its pin state; picking one toggles it
+# Pin editor — every app with its pin state; picking one toggles it
 edit_pins() {
     local pick id line
     local -A pinned
@@ -62,7 +62,7 @@ edit_pins() {
                         printf '[     ] %s\n' "${LABEL[$id]}"
                     fi
                 done
-            } | pick_index $(( ${#APP_IDS[@]} + 1 )) -p " 󰏫 Edit Menu | " --width 40
+            } | pick_index $(( ${#APP_IDS[@]} + 1 )) -p " 󰏫 Pin to Super+D | " --width 40
         )
 
         # Escape closes; only Back returns to the drawer
@@ -84,11 +84,11 @@ edit_pins() {
     done
 }
 
-# Main drawer: Edit Menu, the apps, Back. Printed straight into the pipe:
+# Main drawer: pin editor, the apps, Back. Printed straight into the pipe:
 # the icon separator is a NUL, which bash variables drop (see tfuzzel).
 PICK=$(
     {
-        echo "󰏫 Edit Menu"
+        echo "󰏫 Pin Apps to Super+D"
         for id in "${APP_IDS[@]}"; do
             if [ -n "${ICON[$id]}" ]; then
                 printf '%s\0icon\x1f%s\n' "${LABEL[$id]}" "${ICON[$id]}"
@@ -96,11 +96,11 @@ PICK=$(
                 printf '%s\n' "${LABEL[$id]}"
             fi
         done
-        echo "󰌍 Back"
+        echo "󰌍 Back (Super+D: app launcher)"
     } | pick_index $(( ${#APP_IDS[@]} + 2 )) -p " 󰀻 Apps | " --width 40
 )
 
-# Escape closes the drawer; only the Back entry returns to Mod+D
+# Escape closes the drawer; only the Back entry returns to Super+D
 [ -n "$PICK" ] || exit 0
 
 if [ "$PICK" -eq 0 ]; then

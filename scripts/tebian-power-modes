@@ -51,7 +51,7 @@ status)
     else echo none; fi
     ;;
 on)
-    installed tlp || fail "TLP isn't installed — Settings > More > Performance > Install Laptop Power Management first."
+    installed tlp || fail "TLP isn't installed — Settings > More > Performance > Laptop Power Management first."
     installed tlp-pd && { say "Power modes are already on."; exit 0; }
     say "Power modes need TLP 1.10; Debian stable has 1.8. The newer one comes from"
     say "Debian's official backports archive, and TLP updates from there until you"

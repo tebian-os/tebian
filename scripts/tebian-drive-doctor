@@ -245,7 +245,7 @@ handle() {
                 if mnt=$(do_mount "$dev" ro); then
                     announce_mount "$label" "$mnt" "read-only"
                     notify "$label: health check unavailable" \
-                        "Mounted read-only to be safe. Replug the drive to retry, or install the health probe in Settings → More → Drives."
+                        "Mounted read-only to be safe. Replug the drive to retry, or install the Drive Health Check in Settings → More → Drives."
                 else
                     dlog "$dev: mount failed: $mnt"
                     ask_sick "$dev" "$label" "$size"

@@ -2,7 +2,7 @@
 # tebian-settings module: webapps.sh
 # Sourced by tebian-settings — do not run directly
 #
-# Web Apps: a site as its own app in Mod+D and the dock. The work is done by
+# Web Apps: a site as its own app in Super+D and the dock. The work is done by
 # tebian-webapp; this is only its menu. Apps are picked by position
 # (fuzzel --index), never by label: a web app may be called "Back" or
 # "Add Web App" and is still just that app.
@@ -58,9 +58,9 @@ webapps_menu() {
 webapps_need_browser() {
     webapps_run browser >/dev/null 2>&1 && return 0
     local c
-    c=$(printf '%s\n' "󰖟 Get a Chrome-based browser (Helium)" \
-        "󰋅 Web apps need one: Firefox and Zen have no app mode" "󰌍 Back" \
-        | tfuzzel -d -p " 󰖟 Web Apps | " --width 60)
+    # The why is in the prompt: a row of its own was one more thing to pick
+    c=$(printf '%s\n' "󰖟 Get a Chrome-based browser (Helium)" "󰌍 Back" \
+        | tfuzzel -d -p " 󰖟 Web apps need a Chrome-based browser (Firefox and Zen have no app mode) | " --width 90)
     [ -n "$c" ] || return 1
     is_back "$c" && return 1
     [[ "$c" == *"Get a Chrome-based browser"* ]] || return 1
@@ -99,7 +99,7 @@ webapps_add() {
     tnotify "Web Apps" "Adding $name..."
     id=$(webapps_run add "$name" "$url" 2>&1) || rc=$?
     case "$rc" in
-        0) tnotify "Web Apps" "$name added: find it in Mod+D" ;;
+        0) tnotify "Web Apps" "$name added: find it in Super+D" ;;
         3) webapps_need_browser ;;
         *) tnotify "Web Apps" "Could not add $name: $id" ;;
     esac
@@ -112,7 +112,7 @@ webapps_app_menu() {
         if webapps_run pinned "$id" 2>/dev/null; then pin="󰄬 Pinned to Menu (ON)"; else pin="󰄰 Pinned to Menu (OFF)"; fi
         c=$(printf '%s\n' "󰐊 Open" "󰏫 Rename" "󰖟 Change Address" "$pin" "󰆴 Remove" "󰌍 Back" \
             | tfuzzel -d -p " 󰖟 $name | " --width 60)
-        [ -n "$c" ] || return
+        [ -n "$c" ] || menu_close
         is_back "$c" && return
         c="${c#"${c%%[A-Za-z]*}"}"
         case "$c" in
@@ -141,11 +141,15 @@ webapps_app_menu() {
                 fi
                 ;;
             "Pinned to Menu (ON)"*)
-                webapps_run unpin "$id" && tnotify "Web Apps" "$name unpinned from Mod+D"
+                if err=$(webapps_run unpin "$id" 2>&1); then
+                    tnotify "Web Apps" "$name unpinned from Super+D"
+                else
+                    tnotify "Web Apps" "Could not unpin $name: $err"
+                fi
                 ;;
             "Pinned to Menu (OFF)"*)
                 if err=$(webapps_run pin "$id" 2>&1); then
-                    tnotify "Web Apps" "$name pinned to Mod+D"
+                    tnotify "Web Apps" "$name pinned to Super+D"
                 else
                     tnotify "Web Apps" "$err"
                 fi

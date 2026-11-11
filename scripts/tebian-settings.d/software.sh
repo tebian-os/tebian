@@ -1,6 +1,65 @@
 # shellcheck shell=bash
 # tebian-settings module: software.sh
 # Sourced by tebian-settings — do not run directly
+#
+# Everything installable is one row showing its state, "Name (Installed)" or
+# "Name (Not Installed)". Picking one that is missing installs it; picking one
+# that is there opens a small menu of what can be done with it. Installs run
+# in a terminal, whose exit status never reaches us, so whether one worked is
+# read back from the system afterwards, never assumed.
+
+# A pick without its leading glyph (Text Mode has none), so it can be
+# matched from its first word: a name in the label can't hit another branch
+sw_label() {
+    local c="$1"
+    printf '%s\n' "${c#"${c%%[A-Za-z0-9]*}"}"
+}
+
+# Succeeds when every package named is installed
+sw_pkgs_installed() {
+    local p
+    for p in "$@"; do
+        dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "ok installed" || return 1
+    done
+}
+
+# A program on PATH, looked up afresh: bash remembers where it found a
+# command, which would outlive an uninstall done in a terminal
+sw_has() {
+    hash -r
+    command -v "$1" >/dev/null 2>&1
+}
+
+# "󰄬 Name (Installed)" or "󰄰 Name (Not Installed)". Args: name, then a
+# command that succeeds when it is installed
+sw_row() {
+    local name="$1"; shift
+    if "$@"; then
+        printf '%s\n' "󰄬 $name (Installed)"
+    else
+        printf '%s\n' "󰄰 $name (Not Installed)"
+    fi
+}
+
+# After an install or a removal in a terminal: says what really happened.
+# Args: install|remove, title, name, then the installed-check
+sw_report() {
+    local what="$1" title="$2" name="$3"; shift 3
+    if [ "$what" = install ]; then
+        if "$@"; then tnotify "$title" "$name installed"; else tnotify "$title" "$name was not installed"; fi
+    else
+        if "$@"; then tnotify "$title" "$name was not removed"; else tnotify "$title" "$name removed"; fi
+    fi
+}
+
+# The small menu of an installed thing. Prints the picked action without
+# its glyph; fails on Back or Escape (back to the list). Args: title, action...
+sw_actions() {
+    local title="$1" c; shift
+    c=$(printf '%s\n' "$@" "󰌍 Back" | tfuzzel -d -p " $title | ")
+    if [ -z "$c" ] || is_back "$c"; then return 1; fi
+    sw_label "$c"
+}
 
 software_hub() {
     while true; do
@@ -47,11 +106,11 @@ browser_menu() {
         if tebian-browser installed "$BR_ID"; then
             BR_OPTS+="󰄬 $(tebian-browser label "$BR_ID") (Installed)\n"
         else
-            BR_OPTS+="󰄰 $(tebian-browser label "$BR_ID")\n"
+            BR_OPTS+="󰄰 $(tebian-browser label "$BR_ID") (Not Installed)\n"
         fi
     done
 
-    BR_CHOICE=$(echo -e "${BR_OPTS}󰌍 Back" | tfuzzel -d -p " 󰖟 Web Browser | " --width 78)
+    BR_CHOICE=$(echo -e "${BR_OPTS}󰌍 Back" | tfuzzel -d -p " 󰖟 Web Browser | " --width 90)
 
     [ -n "$BR_CHOICE" ] || menu_close
     if is_back "$BR_CHOICE"; then return; fi
@@ -60,20 +119,20 @@ browser_menu() {
     BR_NAME=$(tebian-browser name "$BR_ID")
 
     if tebian-browser installed "$BR_ID"; then
-        BR_ACT=$(echo -e "󰖟 Launch $BR_NAME\n󰆴 Remove $BR_NAME\n󰌍 Back" | tfuzzel -d -p " $BR_NAME | ")
-        if [ -z "$BR_ACT" ] || is_back "$BR_ACT"; then continue; fi
-        if [[ "$BR_ACT" =~ "Launch" ]]; then
-            tebian-browser launch "$BR_ID"
-            return
-        elif [[ "$BR_ACT" =~ "Remove" ]]; then
-            $TERM_CMD bash -c "tebian-browser remove '$BR_ID'; read -p 'Press Enter to close...'"
-            tnotify "Web Browser" "$BR_NAME removed"
-        fi
+        BR_ACT=$(sw_actions "$BR_NAME" "󰖟 Launch $BR_NAME" "󰆴 Remove $BR_NAME") || continue
+        case "$BR_ACT" in
+            Launch*)
+                tebian-browser launch "$BR_ID"
+                return
+                ;;
+            Remove*)
+                $TERM_CMD bash -c "tebian-browser remove '$BR_ID'; read -p 'Press Enter to close...'"
+                sw_report remove "Web Browser" "$BR_NAME" tebian-browser installed "$BR_ID"
+                ;;
+        esac
     else
         $TERM_CMD bash -c "tebian-browser install '$BR_ID'; read -p 'Press Enter to close...'"
-        if tebian-browser installed "$BR_ID"; then
-            tnotify "Web Browser" "$BR_NAME installed"
-        fi
+        sw_report install "Web Browser" "$BR_NAME" tebian-browser installed "$BR_ID"
     fi
     done
 }
@@ -89,7 +148,7 @@ ai_tools_menu() {
     fi
 
     while true; do
-    local AI_OPTS="" AI_ID AI_CHOICE AI_ACT AI_NAME AI_GROUP AI_LAST="" AI_ACTIONS
+    local AI_OPTS="" AI_ID AI_CHOICE AI_ACT AI_NAME AI_GROUP AI_LAST=""
     for AI_ID in $AI_IDS; do
         AI_GROUP=$(tebian-ai-tools group "$AI_ID")
         if [ "$AI_GROUP" != "$AI_LAST" ]; then
@@ -103,11 +162,11 @@ ai_tools_menu() {
         if tebian-ai-tools installed "$AI_ID"; then
             AI_OPTS+="󰄬 $(tebian-ai-tools label "$AI_ID") (Installed)\n"
         else
-            AI_OPTS+="󰄰 $(tebian-ai-tools label "$AI_ID")\n"
+            AI_OPTS+="󰄰 $(tebian-ai-tools label "$AI_ID") (Not Installed)\n"
         fi
     done
 
-    AI_CHOICE=$(echo -e "${AI_OPTS}󰌍 Back" | tfuzzel -d -p " 󰚩 AI Tools | " --width 70)
+    AI_CHOICE=$(echo -e "${AI_OPTS}󰌍 Back" | tfuzzel -d -p " 󰚩 AI Tools | " --width 80)
 
     [ -n "$AI_CHOICE" ] || menu_close
     if is_back "$AI_CHOICE"; then return; fi
@@ -119,87 +178,94 @@ ai_tools_menu() {
     if ! tebian-ai-tools installed "$AI_ID"; then
         # In a terminal because it stops to show the source and ask first
         $TERM_CMD bash -c "tebian-ai-tools install '$AI_ID'; read -p 'Press Enter to close...'"
-        if tebian-ai-tools installed "$AI_ID"; then
-            tnotify "AI Tools" "$AI_NAME installed"
-        fi
+        sw_report install "AI Tools" "$AI_NAME" tebian-ai-tools installed "$AI_ID"
         continue
     fi
 
-    AI_ACTIONS="󰐊 Open $AI_NAME\n󰚰 Update $AI_NAME"
+    local -a AI_ACTIONS=("󰐊 Open $AI_NAME" "󰚰 Update $AI_NAME")
     if tebian-ai-tools can-remove "$AI_ID"; then
-        AI_ACTIONS+="\n󰆴 Remove $AI_NAME"
+        AI_ACTIONS+=("󰆴 Remove $AI_NAME")
     fi
-    AI_ACT=$(echo -e "$AI_ACTIONS\n󰌍 Back" | tfuzzel -d -p " $AI_NAME | ")
-    if [ -z "$AI_ACT" ] || is_back "$AI_ACT"; then continue; fi
+    AI_ACT=$(sw_actions "$AI_NAME" "${AI_ACTIONS[@]}") || continue
 
-    if [[ "$AI_ACT" =~ "Open" ]]; then
-        if [ "$(tebian-ai-tools group "$AI_ID")" = app ]; then
-            tebian-ai-tools run "$AI_ID"
-        else
-            $TERM_CMD tebian-ai-tools run "$AI_ID" &
-        fi
-        return
-    elif [[ "$AI_ACT" =~ "Update" ]]; then
-        $TERM_CMD bash -c "tebian-ai-tools update '$AI_ID'; read -p 'Press Enter to close...'"
-    elif [[ "$AI_ACT" =~ "Remove" ]]; then
-        $TERM_CMD bash -c "tebian-ai-tools remove '$AI_ID'; read -p 'Press Enter to close...'"
-    fi
+    case "$AI_ACT" in
+        Open*)
+            if [ "$(tebian-ai-tools group "$AI_ID")" = app ]; then
+                tebian-ai-tools run "$AI_ID"
+            else
+                $TERM_CMD tebian-ai-tools run "$AI_ID" &
+            fi
+            return
+            ;;
+        Update*)
+            $TERM_CMD bash -c "tebian-ai-tools update '$AI_ID'; read -p 'Press Enter to close...'"
+            ;;
+        Remove*)
+            $TERM_CMD bash -c "tebian-ai-tools remove '$AI_ID'; read -p 'Press Enter to close...'"
+            sw_report remove "AI Tools" "$AI_NAME" tebian-ai-tools installed "$AI_ID"
+            ;;
+    esac
     done
+}
+
+de_report_install() {
+    if sw_pkgs_installed "$2"; then
+        tnotify "Desktop" "$1 installed — select it at login"
+    else
+        tnotify "Desktop" "$1 was not installed"
+    fi
 }
 
 de_menu() {
     while true; do
-    # Detect installed DEs
+    # Extra desktops picked at the login screen; Sway stays the default.
     # NOTE: COSMIC was removed — it isn't in Debian trixie's repos and the only
     # install paths are fragile third-party/Ubuntu-built repos. Re-add here once
     # Debian ships cosmic-session (trixie-backports or Debian 14), no repo needed.
-    local gnome_status kde_status cinnamon_status
+    local DE_CHOICE DE_NAME DE_PKG DE_ACT CONFIRM
 
-    if dpkg -l gnome-shell 2>/dev/null | grep -q '^ii'; then
-        gnome_status="󰄬 GNOME (Installed — Remove)"
-    else
-        gnome_status="󰄰 GNOME (Install)"
-    fi
-
-    if dpkg -l kde-plasma-desktop 2>/dev/null | grep -q '^ii'; then
-        kde_status="󰄬 KDE Plasma (Installed — Remove)"
-    else
-        kde_status="󰄰 KDE Plasma (Install)"
-    fi
-
-    if dpkg -l cinnamon-desktop-environment 2>/dev/null | grep -q '^ii'; then
-        cinnamon_status="󰄬 Cinnamon (Installed — Remove)"
-    else
-        cinnamon_status="󰄰 Cinnamon (Install)"
-    fi
-
-    DE_OPTS="󰍹 Desktop Environments
-$gnome_status
-$kde_status
-$cinnamon_status
- Sway is always available at login
-󰌍 Back"
-
-    DE_CHOICE=$(echo -e "$DE_OPTS" | tfuzzel -d -p " 󰍹 DEs | ")
+    # The marker package of each desktop, the one the install pulls in
+    DE_CHOICE=$( {
+        sw_row "GNOME" sw_pkgs_installed gnome-shell
+        sw_row "KDE Plasma" sw_pkgs_installed kde-plasma-desktop
+        sw_row "Cinnamon" sw_pkgs_installed cinnamon-desktop-environment
+        printf '%s\n' "󰌍 Back"
+    } | tfuzzel -d -p " 󰍹 Desktops (Sway stays at login) | ")
 
     [ -n "$DE_CHOICE" ] || menu_close
     if is_back "$DE_CHOICE"; then return; fi
 
+    DE_CHOICE=$(sw_label "$DE_CHOICE")
+    case "$DE_CHOICE" in
+        GNOME*)      DE_NAME="GNOME";      DE_PKG=gnome-shell ;;
+        "KDE Plasma"*) DE_NAME="KDE Plasma"; DE_PKG=kde-plasma-desktop ;;
+        Cinnamon*)   DE_NAME="Cinnamon";   DE_PKG=cinnamon-desktop-environment ;;
+        *) continue ;;
+    esac
+
+    # Installed: its menu, then the confirmation that was always asked
+    if sw_pkgs_installed "$DE_PKG"; then
+        DE_ACT=$(sw_actions "$DE_NAME (pick it at login)" "󰆴 Remove $DE_NAME") || continue
+        [[ "$DE_ACT" == Remove* ]] || continue
+        CONFIRM=$(echo -e "Yes, remove $DE_NAME\n󰌍 Cancel" | tfuzzel -d -p " Remove $DE_NAME? | ")
+        [[ "$CONFIRM" =~ "Yes" ]] || continue
+        DE_CHOICE="Remove $DE_NAME"
+    else
+        DE_CHOICE="Install $DE_NAME"
+    fi
+
     # GNOME
-    if [[ "$DE_CHOICE" =~ "GNOME" ]] && [[ "$DE_CHOICE" =~ "Remove" ]]; then
-        CONFIRM=$(echo -e "Yes, remove GNOME\n󰌍 Cancel" | tfuzzel -d -p " Remove GNOME? | ")
-        if [[ "$CONFIRM" =~ "Yes" ]]; then
-            $TERM_CMD bash -c "
-                echo 'Removing GNOME...'
-                sudo apt remove -y gnome-shell gnome-session gnome-control-center gnome-terminal nautilus gdm3 2>/dev/null
-                sudo apt autoremove -y 2>/dev/null
-                echo ''
-                echo 'GNOME removed. Your files are untouched.'
-                read -p 'Press Enter to close...'
-            "
-            tnotify "Desktop" "GNOME removed"
-        fi
-    elif [[ "$DE_CHOICE" =~ "GNOME" ]] && [[ "$DE_CHOICE" =~ "Install" ]]; then
+    if [ "$DE_CHOICE" = "Remove GNOME" ]; then
+        $TERM_CMD bash -c "
+            echo 'Removing GNOME...'
+            sudo apt remove -y gnome-shell gnome-session gnome-control-center gnome-terminal nautilus gdm3 2>/dev/null
+            sudo apt autoremove -y 2>/dev/null
+            echo ''
+            echo 'GNOME removed. Your files are untouched.'
+            read -p 'Press Enter to close...'
+        "
+        sw_report remove "Desktop" "GNOME" sw_pkgs_installed "$DE_PKG"
+    elif [ "$DE_CHOICE" = "Install GNOME" ]; then
         $TERM_CMD bash -c "
             echo '========================================='
             echo '  Installing GNOME Desktop'
@@ -221,23 +287,20 @@ $cinnamon_status
             echo 'Done! Select GNOME at the login screen.'
             read -p 'Press Enter to close...'
         "
-        tnotify "Desktop" "GNOME installed — select it at login"
+        de_report_install "GNOME" "$DE_PKG"
 
     # KDE Plasma
-    elif [[ "$DE_CHOICE" =~ "KDE Plasma" ]] && [[ "$DE_CHOICE" =~ "Remove" ]]; then
-        CONFIRM=$(echo -e "Yes, remove KDE Plasma\n󰌍 Cancel" | tfuzzel -d -p " Remove KDE? | ")
-        if [[ "$CONFIRM" =~ "Yes" ]]; then
-            $TERM_CMD bash -c "
-                echo 'Removing KDE Plasma...'
-                sudo apt remove -y kde-plasma-desktop plasma-workspace sddm 2>/dev/null
-                sudo apt autoremove -y 2>/dev/null
-                echo ''
-                echo 'KDE Plasma removed. Your files are untouched.'
-                read -p 'Press Enter to close...'
-            "
-            tnotify "Desktop" "KDE Plasma removed"
-        fi
-    elif [[ "$DE_CHOICE" =~ "KDE Plasma" ]] && [[ "$DE_CHOICE" =~ "Install" ]]; then
+    elif [ "$DE_CHOICE" = "Remove KDE Plasma" ]; then
+        $TERM_CMD bash -c "
+            echo 'Removing KDE Plasma...'
+            sudo apt remove -y kde-plasma-desktop plasma-workspace sddm 2>/dev/null
+            sudo apt autoremove -y 2>/dev/null
+            echo ''
+            echo 'KDE Plasma removed. Your files are untouched.'
+            read -p 'Press Enter to close...'
+        "
+        sw_report remove "Desktop" "KDE Plasma" sw_pkgs_installed "$DE_PKG"
+    elif [ "$DE_CHOICE" = "Install KDE Plasma" ]; then
         $TERM_CMD bash -c "
             echo '========================================='
             echo '  Installing KDE Plasma Desktop'
@@ -258,23 +321,20 @@ $cinnamon_status
             echo 'Done! Select Plasma at the login screen.'
             read -p 'Press Enter to close...'
         "
-        tnotify "Desktop" "KDE Plasma installed — select it at login"
+        de_report_install "KDE Plasma" "$DE_PKG"
 
     # Cinnamon
-    elif [[ "$DE_CHOICE" =~ "Cinnamon" ]] && [[ "$DE_CHOICE" =~ "Remove" ]]; then
-        CONFIRM=$(echo -e "Yes, remove Cinnamon\n󰌍 Cancel" | tfuzzel -d -p " Remove Cinnamon? | ")
-        if [[ "$CONFIRM" =~ "Yes" ]]; then
-            $TERM_CMD bash -c "
-                echo 'Removing Cinnamon...'
-                sudo apt remove -y cinnamon-desktop-environment cinnamon lightdm 2>/dev/null
-                sudo apt autoremove -y 2>/dev/null
-                echo ''
-                echo 'Cinnamon removed. Your files are untouched.'
-                read -p 'Press Enter to close...'
-            "
-            tnotify "Desktop" "Cinnamon removed"
-        fi
-    elif [[ "$DE_CHOICE" =~ "Cinnamon" ]] && [[ "$DE_CHOICE" =~ "Install" ]]; then
+    elif [ "$DE_CHOICE" = "Remove Cinnamon" ]; then
+        $TERM_CMD bash -c "
+            echo 'Removing Cinnamon...'
+            sudo apt remove -y cinnamon-desktop-environment cinnamon lightdm 2>/dev/null
+            sudo apt autoremove -y 2>/dev/null
+            echo ''
+            echo 'Cinnamon removed. Your files are untouched.'
+            read -p 'Press Enter to close...'
+        "
+        sw_report remove "Desktop" "Cinnamon" sw_pkgs_installed "$DE_PKG"
+    elif [ "$DE_CHOICE" = "Install Cinnamon" ]; then
         $TERM_CMD bash -c "
             echo '========================================='
             echo '  Installing Cinnamon Desktop'
@@ -293,31 +353,56 @@ $cinnamon_status
             echo 'Done! Select Cinnamon at the login screen.'
             read -p 'Press Enter to close...'
         "
-        tnotify "Desktop" "Cinnamon installed — select it at login"
+        de_report_install "Cinnamon" "$DE_PKG"
     fi
     done
 }
 
 essentials_menu() {
+    # Each row's state is read from the packages its install adds
+    local -a E_NAMES=("File Manager [thunar]" "Notifications [mako]" "Clipboard Manager [cliphist]"
+        "Screenshot Tools [grim, slurp]" "Screen Lock & Idle [gtklock, swayidle]" "Volume OSD [wob]"
+        "Brightness Control [brightnessctl]" "Auto-tiling [autotiling]" "Legacy System Utils [man, locate...]")
+    local -a E_PKGS=("thunar" "mako-notifier" "wl-clipboard cliphist" "grim slurp" "gtklock swayidle"
+        "wob" "brightnessctl" "autotiling" "man-db plocate lsof strace tree")
+    local E_ALL="cliphist xwayland wget pavucontrol gvfs gvfs-backends adwaita-qt thunar papirus-icon-theme btop zram-tools"
     while true; do
-    E_OPTS="󰑓 Install All Essentials (Recommended)
-Install File Manager (thunar)
-Install Notifications (mako)
-Install Clipboard Manager
-Install Screenshot Tools
-Install Screen Lock & Idle
-Install Volume OSD (wob)
-Install Brightness Control
-Install Auto-tiling
-Install Legacy System Utils (man, locate...)
-󰌍 Back"
-    
-    E_CHOICE=$(echo -e "$E_OPTS" | tfuzzel -d -p " 󰑓 Essentials | ")
+    local E_CHOICE E_NAME="" E_LIST="" i
+
+    # Package lists split into words on purpose
+    # shellcheck disable=SC2086
+    E_CHOICE=$( {
+        sw_row "Desktop Essentials - the recommended set" sw_pkgs_installed $E_ALL
+        for i in "${!E_NAMES[@]}"; do
+            sw_row "${E_NAMES[$i]}" sw_pkgs_installed ${E_PKGS[$i]}
+        done
+        printf '%s\n' "󰌍 Back"
+    } | tfuzzel -d -p " 󰑓 Essentials | " --width 60)
 
     [ -n "$E_CHOICE" ] || menu_close
     if is_back "$E_CHOICE"; then return; fi
 
-    if [[ "$E_CHOICE" =~ "Legacy System Utils" ]]; then
+    E_CHOICE=$(sw_label "$E_CHOICE")
+    if [[ "$E_CHOICE" == "Desktop Essentials"* ]]; then
+        E_NAME="Desktop Essentials"; E_LIST="$E_ALL"
+    else
+        for i in "${!E_NAMES[@]}"; do
+            if [[ "$E_CHOICE" == "${E_NAMES[$i]} ("* ]]; then
+                E_NAME="${E_NAMES[$i]%% [*}"; E_LIST="${E_PKGS[$i]}"
+                break
+            fi
+        done
+    fi
+    [ -n "$E_NAME" ] || continue
+
+    # Already there: installing again is how it gets repaired (it also redoes
+    # the setup some of these come with), so that is what its menu offers
+    # shellcheck disable=SC2086
+    if sw_pkgs_installed $E_LIST; then
+        sw_actions "$E_NAME" "󰑓 Reinstall $E_NAME (redoes its setup)" >/dev/null || continue
+    fi
+
+    if [ "$E_NAME" = "Legacy System Utils" ]; then
         $TERM_CMD bash -c "
             echo 'Installing Full Debian Standard Utilities...'
             echo 'This restores all tools usually found in a standard Debian install.'
@@ -335,7 +420,7 @@ Install Legacy System Utils (man, locate...)
             echo 'Done! Standard utilities restored.'
             read -p 'Press Enter to close...'
         "
-    elif [[ "$E_CHOICE" =~ "Install All" ]]; then
+    elif [ "$E_NAME" = "Desktop Essentials" ]; then
         $TERM_CMD bash -c "
             echo '========================================='
             echo '  Installing Desktop Essentials'
@@ -384,12 +469,9 @@ Install Legacy System Utils (man, locate...)
             echo 'Done! Some features require Sway restart.'
             read -p 'Press Enter to close...'
         "
-        if command -v thunar >/dev/null; then
-            tnotify "Tebian" "Desktop Essentials installed!"
-        fi
-    elif [[ "$E_CHOICE" =~ "File Manager" ]]; then
+    elif [ "$E_NAME" = "File Manager" ]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y thunar thunar-archive-plugin file-roller; echo 'Done!'; read -p 'Press Enter...'"
-    elif [[ "$E_CHOICE" =~ "Notifications" ]]; then
+    elif [ "$E_NAME" = "Notifications" ]; then
         $TERM_CMD bash -c "
             sudo apt update && sudo apt install -y mako-notifier
             mkdir -p ~/.config/mako
@@ -398,78 +480,42 @@ Install Legacy System Utils (man, locate...)
                 echo 'default-timeout=5000' > ~/.config/mako/config
             echo 'Done! Run: mako & to start'; read -p 'Press Enter...'
         "
-    elif [[ "$E_CHOICE" =~ "Clipboard" ]]; then
-        $TERM_CMD bash -c "sudo apt update && sudo apt install -y wl-clipboard cliphist; echo 'Done! Press Mod+V for clipboard history'; read -p 'Press Enter...'"
-    elif [[ "$E_CHOICE" =~ "Screenshot" ]]; then
+    elif [ "$E_NAME" = "Clipboard Manager" ]; then
+        $TERM_CMD bash -c "sudo apt update && sudo apt install -y wl-clipboard cliphist; echo 'Done! Press Super+V for clipboard history'; read -p 'Press Enter...'"
+    elif [ "$E_NAME" = "Screenshot Tools" ]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y grim slurp; echo 'Done! Print key takes screenshots'; read -p 'Press Enter...'"
-    elif [[ "$E_CHOICE" =~ "Screen Lock" ]]; then
+    elif [ "$E_NAME" = "Screen Lock & Idle" ]; then
         $TERM_CMD bash -c "
             sudo apt update && sudo apt install -y gtklock swayidle
             tebian-lockscreen-setup
             echo 'Done! Auto-locks after 5 min idle'; read -p 'Press Enter...'
         "
-    elif [[ "$E_CHOICE" =~ "Volume OSD" ]]; then
+    elif [ "$E_NAME" = "Volume OSD" ]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y wob; echo 'Done! Volume keys show OSD'; read -p 'Press Enter...'"
-    elif [[ "$E_CHOICE" =~ "Brightness" ]]; then
+    elif [ "$E_NAME" = "Brightness Control" ]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y brightnessctl; echo 'Done! Brightness keys work'; read -p 'Press Enter...'"
-    elif [[ "$E_CHOICE" =~ "Auto-tiling" ]]; then
+    elif [ "$E_NAME" = "Auto-tiling" ]; then
         $TERM_CMD bash -c "sudo apt update && sudo apt install -y autotiling; echo 'Done! Windows auto-tile'; read -p 'Press Enter...'"
     fi
+    # shellcheck disable=SC2086
+    sw_report install "Essentials" "$E_NAME" sw_pkgs_installed $E_LIST
     done
 }
 
-terminal_menu() {
-    while true; do
-    HAS_KITTY=$(command -v kitty &>/dev/null && echo "✓" || echo " ")
-    HAS_FOOT=$(command -v foot &>/dev/null && echo "✓" || echo " ")
-    HAS_ALACRITTY=$(command -v alacritty &>/dev/null && echo "✓" || echo " ")
-    HAS_GNOME=$(command -v gnome-terminal &>/dev/null && echo "✓" || echo " ")
-    
-    # The choice lives in config.user's "terminal" block; the base config's
-    # `set $term` is only the fallback
-    DEFAULT_TERM=$(tebian_block_get terminal | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
-    [ -n "$DEFAULT_TERM" ] || DEFAULT_TERM=$(grep '^set \$term' ~/.config/sway/config 2>/dev/null | cut -d' ' -f3)
-    
-    TERM_OPTS="[$HAS_KITTY] kitty - GPU accelerated, feature-rich (Default)
-[$HAS_FOOT] foot - Lightweight, fastest startup
-[$HAS_ALACRITTY] alacritty - GPU, Rust-based, minimal
-[$HAS_GNOME] gnome-terminal - Traditional, tabs support
-Current default: ${DEFAULT_TERM:-kitty}
-󰌍 Back"
-
-    T_CHOICE=$(echo -e "$TERM_OPTS" | tfuzzel -d -p " 󰆍 Terminal | ")
-
-    [ -n "$T_CHOICE" ] || menu_close
-    if is_back "$T_CHOICE"; then return; fi
-    # Informational row — contains a terminal name, don't treat as an install pick
-    if [[ "$T_CHOICE" =~ "Current default" ]]; then continue; fi
-
-    if [[ "$T_CHOICE" =~ "kitty" ]]; then
-        $TERM_CMD bash -c '
-            echo "Installing kitty terminal..."
-            sudo apt update && sudo apt install -y kitty || { echo ""; echo "Install failed."; read -p "Press Enter..."; exit 1; }
-
-            # Only seed a config if there is none — an existing one carries
-            # the theme and font already chosen
-            glass="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/glass/kitty.conf"
-            mkdir -p ~/.config/kitty
+# A config to start from, the first time a terminal is used: never over one
+# that exists, which carries the theme and font already chosen
+terminal_seed_config() {
+    case "$1" in
+        kitty)
+            local glass="${TEBIAN_DIR:-$HOME/Tebian}/configs/themes/glass/kitty.conf"
             if [ ! -f ~/.config/kitty/kitty.conf ] && [ -f "$glass" ]; then
+                mkdir -p ~/.config/kitty
                 cp "$glass" ~/.config/kitty/kitty.conf
             fi
-
-            echo ""
-            echo "Done! kitty is now your default terminal."
-            read -p "Press Enter..."
-        '
-    elif [[ "$T_CHOICE" =~ "foot" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing foot terminal...'
-            sudo apt update && sudo apt install -y foot || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
-
-
-            # Only seed a config if there is none, as for kitty
+            ;;
+        foot)
+            [ -f ~/.config/foot/foot.ini ] && return 0
             mkdir -p ~/.config/foot
-            if [ ! -f ~/.config/foot/foot.ini ]; then
             cat > ~/.config/foot/foot.ini << 'FOOTCONF'
 [main]
 font=JetBrainsMono Nerd Font:size=11
@@ -481,68 +527,88 @@ foreground=eceff4
 selection-background=434c5e
 selection-foreground=eceff4
 FOOTCONF
-            fi
-
-            echo ''
-            echo 'Done! foot is now your default terminal.'
-            echo 'foot is extremely lightweight (~1MB vs kitty ~5MB)'
-            read -p 'Press Enter...'
-        "
-    elif [[ "$T_CHOICE" =~ "alacritty" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing alacritty terminal...'
-            sudo apt update && sudo apt install -y alacritty || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
-
-
-            # Only seed a config if there is none, as for kitty
+            ;;
+        alacritty)
+            [ -f ~/.config/alacritty/alacritty.toml ] && return 0
             mkdir -p ~/.config/alacritty
-            if [ ! -f ~/.config/alacritty/alacritty.toml ]; then
             cat > ~/.config/alacritty/alacritty.toml << 'ALACONF'
 [font]
-normal = { family = \"JetBrainsMono Nerd Font\", style = \"Regular\" }
+normal = { family = "JetBrainsMono Nerd Font", style = "Regular" }
 size = 11.0
 
 [colors.primary]
-background = \"#2e3440\"
-foreground = \"#eceff4\"
+background = "#2e3440"
+foreground = "#eceff4"
 
 [window.padding]
 x = 12
 y = 12
 ALACONF
+            ;;
+    esac
+    return 0
+}
+
+# The terminals on offer: one row each, the one Super+Return opens marked
+# current. Picking another makes it the default, installing it first if needed.
+terminal_menu() {
+    while true; do
+    local DEFAULT_TERM T_CHOICE t desc picked
+
+    # The choice lives in config.user's "terminal" block; the base config's
+    # `set $term` is only the fallback
+    DEFAULT_TERM=$(tebian_block_get terminal | awk '$1 == "set" && $2 == "$term" { print $3; exit }')
+    [ -n "$DEFAULT_TERM" ] || DEFAULT_TERM=$(awk '/^set \$term[[:space:]]/ { print $3; exit }' ~/.config/sway/config 2>/dev/null)
+
+    T_CHOICE=$( {
+        for t in kitty foot alacritty gnome-terminal; do
+            case "$t" in
+                kitty)          desc="GPU accelerated, feature-rich (Tebian's own)" ;;
+                foot)           desc="Lightweight, fastest startup" ;;
+                alacritty)      desc="GPU, Rust-based, minimal" ;;
+                gnome-terminal) desc="Traditional, tabs support" ;;
+            esac
+            if ! sw_has "$t"; then
+                printf '%s\n' "󰄰 $t (Not Installed) - $desc"
+            elif [ "$t" = "$DEFAULT_TERM" ]; then
+                printf '%s\n' "󰄬 $t - $desc  ● current"
+            else
+                printf '%s\n' "󰄬 $t - $desc"
             fi
+        done
+        printf '%s\n' "󰌍 Back"
+    } | tfuzzel -d -p " 󰆍 Terminal | " --width 70)
 
-            echo ''
-            echo 'Done! alacritty is now your default terminal.'
-            read -p 'Press Enter...'
-        "
-    elif [[ "$T_CHOICE" =~ "gnome-terminal" ]]; then
-        $TERM_CMD bash -c "
-            echo 'Installing gnome-terminal...'
-            sudo apt update && sudo apt install -y gnome-terminal || { echo ''; echo 'Install failed.'; read -p 'Press Enter...'; exit 1; }
+    [ -n "$T_CHOICE" ] || menu_close
+    if is_back "$T_CHOICE"; then return; fi
 
+    T_CHOICE=$(sw_label "$T_CHOICE")
+    picked="${T_CHOICE%% *}"
+    case "$picked" in
+        kitty|foot|alacritty|gnome-terminal) ;;
+        *) continue ;;
+    esac
+    [ "$picked" = "$DEFAULT_TERM" ] && sw_has "$picked" && continue
 
-            echo ''
-            echo 'Done! gnome-terminal is now your default terminal.'
-            read -p 'Press Enter...'
-        "
-    else
-        continue
+    if ! sw_has "$picked"; then
+        $TERM_CMD bash -c '
+            echo "Installing $1..."
+            sudo apt update && sudo apt install -y "$1" || { echo ""; echo "Install failed."; read -p "Press Enter..."; exit 1; }
+            echo ""
+            echo "Done! $1 is now your default terminal."
+            read -p "Press Enter..."
+        ' _ "$picked"
+        if ! sw_has "$picked"; then
+            tnotify "Terminal" "$picked was not installed — default unchanged"
+            continue
+        fi
     fi
+    terminal_seed_config "$picked"
 
-    # Make it the default only if the install worked. `set $term` alone
-    # isn't enough: sway expands variables as it reads each line, so the
-    # Mod+Return binding in the base config already holds the old value
-    # and has to be declared again after it.
-    local picked
-    picked=$(echo "$T_CHOICE" | grep -oE 'kitty|foot|alacritty|gnome-terminal' | head -1)
-    if [ -n "$picked" ] && command -v "$picked" >/dev/null; then
-        tebian_block_set terminal "set \$term $picked" 'bindsym $mod+Return exec $term'
-        tnotify "Terminal" "$picked is now the default terminal (Mod+Return)"
-    else
-        tnotify "Terminal" "${picked:-Terminal} was not installed — default unchanged"
-        continue
-    fi
+    # `set $term` alone isn't enough: sway expands variables as it reads
+    # each line, so the Super+Return binding in the base config already
+    # holds the old value and has to be declared again after it.
+    tebian_block_set terminal "set \$term $picked" 'bindsym $mod+Return exec $term'
 
     # This session's terminal follows the pick: get_term would still answer
     # kitty whenever kitty is installed. Not gnome-terminal, which returns
@@ -551,16 +617,23 @@ ALACONF
     case "$picked" in
         kitty|foot|alacritty) TERM_CMD="$picked -e" ;;
     esac
-    swaymsg reload 2>/dev/null &
-    tnotify "Tebian" "Terminal updated. Sway reloaded."
+    swaymsg reload >/dev/null 2>&1 &
+    tnotify "Terminal" "$picked is now the default terminal (Super+Return)"
     done
 }
 
+sw_flatpak_install() {
+    $TERM_CMD bash -c "echo 'Installing Flatpak & Flathub...'; sudo apt update && sudo apt install -y flatpak && flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; read -p 'Done! Reboot recommended. Press Enter...'"
+}
+
+sw_nix_installed() { sw_pkgs_installed nix-setup-systemd || sw_has nix-env; }
+sw_heroic_installed() { [ -e ~/Applications/Heroic.AppImage ]; }
+sw_poke_installed() { [ -e ~/Games/PokeMMO/PokeMMO.sh ]; }
+
 software_menu() {
     while true; do
-    # Detect states
-    HAS_STEAM=$(command -v steam >/dev/null && echo "YES" || echo "NO")
-    HAS_HEROIC=$(ls ~/Applications/Heroic.AppImage &>/dev/null && echo "YES" || echo "NO")
+    local HAS_MC ARCH A_CHOICE A_ROW A_NAME="" A_REPORT=""
+    local -a A_CHECK=()
     # Older Tebian forced Mojang's .deb past dpkg and held it, which leaves
     # apt refusing every install and upgrade; it gets its own fix-it entry
     if dpkg-query -W minecraft-launcher >/dev/null 2>&1; then
@@ -570,64 +643,113 @@ software_menu() {
     else
         HAS_MC="NO"
     fi
-    HAS_POKE=$(ls ~/Games/PokeMMO/PokeMMO.sh &>/dev/null && echo "YES" || echo "NO")
     # Steam (needs i386) and the Minecraft launcher only exist for x86-64
-    local ARCH
     ARCH=$(dpkg --print-architecture 2>/dev/null)
 
-    # Build Dynamic Menu
-    APPS="󰌍 Back
-󰏗 Install Flatpak Support
-󰏗 Install Distrobox (AUR)
-󰏗 Install Nix Package Manager"
-    
-    # Steam Logic
-    if [[ "$HAS_STEAM" == "YES" ]]; then
-        APPS+="\n󰓓 Launch Steam\n󰆴 Uninstall Steam"
-    elif [[ "$ARCH" == "amd64" ]]; then
-        APPS+="\n󰓓 Install Steam"
-    fi
+    A_ROW=$( {
+        sw_row "Flatpak - apps from Flathub" sw_has flatpak
+        sw_row "Distrobox - Arch AUR and other distros' apps" sw_has distrobox
+        sw_row "Nix Package Manager" sw_nix_installed
+        if sw_has steam || [[ "$ARCH" == "amd64" ]]; then
+            sw_row "Steam" sw_has steam
+        fi
+        sw_row "Heroic - Epic and GOG games" sw_heroic_installed
+        case "$HAS_MC" in
+            DEB) printf '%s\n' "󰄬 Minecraft (Needs Repair: blocks updates)" ;;
+            YES) printf '%s\n' "󰄬 Minecraft (Installed)" ;;
+            *)   [[ "$ARCH" == "amd64" ]] && printf '%s\n' "󰄰 Minecraft (Not Installed)" ;;
+        esac
+        sw_row "PokeMMO" sw_poke_installed
+        sw_row "Lutris" sw_has lutris
+        # Graphics driver channel — newer Mesa via backports helps gaming
+        if dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null | grep -q bpo; then
+            printf '%s\n' "󰢮 Graphics Drivers (Current: Backports)"
+        else
+            printf '%s\n' "󰢮 Graphics Drivers (Current: Debian Stable)"
+        fi
+        printf '%s\n' "󰌍 Back"
+    } | tfuzzel -d -p " 󰊴 Software & Gaming | " --width 60)
 
-    # Heroic Logic
-    if [[ "$HAS_HEROIC" == "YES" ]]; then
-        APPS+="\n󰍳 Launch Heroic (Epic/GOG)\n󰆴 Uninstall Heroic"
-    else
-        APPS+="\n󰍳 Install Heroic (Epic/GOG)"
-    fi
+    [ -n "$A_ROW" ] || menu_close
+    if is_back "$A_ROW"; then return; fi
 
-    # Minecraft Logic
-    if [[ "$HAS_MC" == "DEB" ]]; then
-        APPS+="\n󰺵 Reinstall Minecraft (fixes blocked updates)\n󰆴 Uninstall Minecraft"
-    elif [[ "$HAS_MC" == "YES" ]]; then
-        APPS+="\n󰺵 Launch Minecraft\n󰆴 Uninstall Minecraft"
-    elif [[ "$ARCH" == "amd64" ]]; then
-        APPS+="\n󰺵 Install Minecraft"
-    fi
-
-    # PokeMMO Logic
-    if [[ "$HAS_POKE" == "YES" ]]; then
-        APPS+="\n󰄛 Launch PokeMMO\n󰆴 Uninstall PokeMMO"
-    else
-        APPS+="\n󰄛 Install PokeMMO"
-    fi
-
-    APPS+="\n󰊴 Install Lutris"
-
-    # Graphics driver channel — newer Mesa via backports helps gaming
-    if dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null | grep -q bpo; then
-        APPS+="\n󰢮 Graphics Drivers (Current: Backports)"
-    else
-        APPS+="\n󰢮 Graphics Drivers (Current: Debian Stable)"
-    fi
-
-    A_CHOICE=$(echo -e "$APPS" | tfuzzel -d -p " 󰊴 Software | " --width 50)
-    
-    [ -n "$A_CHOICE" ] || menu_close
-    if is_back "$A_CHOICE"; then return; fi
+    # The row names the thing; what to do with it is decided here, as the
+    # action words the handlers below match on
+    A_ROW=$(sw_label "$A_ROW")
+    A_CHOICE=""
+    case "$A_ROW" in
+        Flatpak*)
+            A_NAME="Flatpak"; A_CHECK=(sw_has flatpak)
+            if "${A_CHECK[@]}"; then
+                sw_actions "Flatpak" "󰏗 Reinstall Flatpak (re-adds Flathub)" >/dev/null || continue
+            fi
+            A_CHOICE="Install Flatpak" ;;
+        Distrobox*)
+            A_NAME="Distrobox"; A_CHECK=(sw_has distrobox)
+            if "${A_CHECK[@]}"; then
+                sw_actions "Distrobox" "󰏗 Reinstall Distrobox (shows the AUR steps)" >/dev/null || continue
+            fi
+            A_CHOICE="Install Distrobox" ;;
+        Nix*)
+            A_NAME="Nix"; A_CHECK=(sw_nix_installed)
+            if "${A_CHECK[@]}"; then
+                sw_actions "Nix" "󰏗 Reinstall Nix" >/dev/null || continue
+            fi
+            A_CHOICE="Install Nix" ;;
+        Steam*)
+            A_NAME="Steam"; A_CHECK=(sw_has steam)
+            if "${A_CHECK[@]}"; then
+                A_CHOICE=$(sw_actions "Steam" "󰓓 Launch Steam" "󰆴 Uninstall Steam") || continue
+            else
+                A_CHOICE="Install Steam"
+            fi ;;
+        Heroic*)
+            A_NAME="Heroic"; A_CHECK=(sw_heroic_installed)
+            if "${A_CHECK[@]}"; then
+                A_CHOICE=$(sw_actions "Heroic" "󰍳 Launch Heroic" "󰆴 Uninstall Heroic") || continue
+            else
+                A_CHOICE="Install Heroic"
+            fi ;;
+        Minecraft*)
+            A_NAME="Minecraft"; A_CHECK=(test -x "$HOME/Games/minecraft-launcher/minecraft-launcher")
+            case "$HAS_MC" in
+                DEB) A_CHOICE=$(sw_actions "Minecraft" "󰺵 Reinstall Minecraft (fixes blocked updates)" "󰆴 Uninstall Minecraft") || continue ;;
+                YES) A_CHOICE=$(sw_actions "Minecraft" "󰺵 Launch Minecraft" "󰆴 Uninstall Minecraft") || continue ;;
+                *)   A_CHOICE="Install Minecraft" ;;
+            esac ;;
+        PokeMMO*)
+            A_NAME="PokeMMO"; A_CHECK=(sw_poke_installed)
+            if "${A_CHECK[@]}"; then
+                A_CHOICE=$(sw_actions "PokeMMO" "󰄛 Launch PokeMMO" "󰆴 Uninstall PokeMMO") || continue
+            else
+                A_CHOICE="Install PokeMMO"
+            fi ;;
+        Lutris*)
+            A_NAME="Lutris"; A_CHECK=(sw_has lutris)
+            if "${A_CHECK[@]}"; then
+                A_CHOICE=$(sw_actions "Lutris" "󰊴 Launch Lutris") || continue
+            else
+                A_CHOICE="Install Lutris"
+            fi ;;
+        "Graphics Drivers"*)
+            A_CHOICE="Graphics Drivers" ;;
+        *) continue ;;
+    esac
+    # Installs and removals that run in a terminal are checked afterwards;
+    # the ones done here report themselves
+    case "$A_CHOICE" in
+        Install*|Reinstall*) A_REPORT=install ;;
+        "Uninstall Steam") A_REPORT=remove ;;
+        # Only the old .deb is removed in a terminal
+        "Uninstall Minecraft")
+            if [ "$HAS_MC" = DEB ]; then
+                A_REPORT=remove; A_CHECK=(sw_pkgs_installed minecraft-launcher)
+            fi ;;
+    esac
 
     # Action Handlers
     if [[ "$A_CHOICE" =~ "Install Flatpak" ]]; then
-        $TERM_CMD bash -c "echo 'Installing Flatpak & Flathub...'; sudo apt update && sudo apt install -y flatpak && flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; read -p 'Done! Reboot recommended. Press Enter...'"
+        sw_flatpak_install
     elif [[ "$A_CHOICE" =~ "Install Distrobox" ]]; then
         $TERM_CMD bash -c "echo 'Installing Distrobox & Podman...'; sudo apt update && sudo apt install -y distrobox podman; echo '--------------------------------'; echo 'To use AUR:'; echo '1. distrobox create --name arch --image archlinux'; echo '2. distrobox enter arch'; echo '3. sudo pacman -S --needed git base-devel'; echo '4. git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si'; read -p 'Done! Press Enter...'"
     elif [[ "$A_CHOICE" =~ "Install Nix" ]]; then
@@ -717,11 +839,11 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch Heroic" ]]; then
         # Installs from before Heroic's menu entry pulled in FUSE 2 lack it
         if ! compgen -G "/usr/lib/*/libfuse.so.2" >/dev/null && ! compgen -G "/lib/*/libfuse.so.2" >/dev/null; then
-            tebian_term_apt_install libfuse2t64 || { tnotify "Heroic" "Heroic needs FUSE 2 (libfuse2t64) to start"; continue; }
+            tebian_term_apt_install libfuse2t64 || { tnotify "Software" "Heroic needs FUSE 2 (libfuse2t64) to start"; continue; }
         fi
         setsid ~/Applications/Heroic.AppImage >/dev/null 2>&1 &
     elif [[ "$A_CHOICE" =~ "Uninstall Heroic" ]]; then
-        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && notify-send "Tebian" "Heroic removed."
+        rm -f ~/Applications/Heroic.AppImage ~/.local/share/applications/heroic.desktop && tnotify "Software" "Heroic removed"
 
     elif [[ "$A_CHOICE" =~ "Install Minecraft" || "$A_CHOICE" =~ "Reinstall Minecraft" ]]; then
         # Mojang's tarball, unpacked in the home folder. Their .deb depends
@@ -782,7 +904,7 @@ DESKEOF
             $TERM_CMD bash -c "sudo apt-mark unhold minecraft-launcher >/dev/null 2>&1; sudo dpkg --purge minecraft-launcher; rm -f ~/.local/share/applications/minecraft-launcher.desktop; read -p 'Minecraft removed (worlds in ~/.minecraft are kept). Enter...'"
         else
             rm -rf ~/Games/minecraft-launcher ~/.local/share/applications/minecraft-launcher.desktop &&
-                tnotify "Tebian" "Minecraft removed (worlds in ~/.minecraft are kept)"
+                tnotify "Software" "Minecraft removed (worlds in ~/.minecraft are kept)"
         fi
 
     elif [[ "$A_CHOICE" =~ "Install PokeMMO" ]]; then
@@ -818,12 +940,17 @@ DESKEOF
     elif [[ "$A_CHOICE" =~ "Launch PokeMMO" ]]; then
         bash -c "cd ~/Games/PokeMMO && ./PokeMMO.sh" &
     elif [[ "$A_CHOICE" =~ "Uninstall PokeMMO" ]]; then
-        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && notify-send "Tebian" "PokeMMO removed."
+        rm -rf ~/Games/PokeMMO ~/.local/share/applications/pokemmo.desktop && tnotify "Software" "PokeMMO removed"
     
     elif [[ "$A_CHOICE" =~ "Install Lutris" ]]; then
         $TERM_CMD bash -c "echo 'Installing Lutris...'; sudo apt update && sudo apt install -y lutris; echo 'Done!'; read -p 'Press Enter to close...'"
+    elif [[ "$A_CHOICE" =~ "Launch Lutris" ]]; then
+        setsid lutris >/dev/null 2>&1 &
     elif [[ "$A_CHOICE" =~ "Graphics Drivers" ]]; then
         gfx_drivers_menu
+    fi
+    if [ -n "$A_REPORT" ]; then
+        sw_report "$A_REPORT" "Software" "$A_NAME" "${A_CHECK[@]}"
     fi
     done
 }
@@ -835,20 +962,28 @@ DESKEOF
 # only the Mesa set is pulled from it, explicitly, with -t.
 gfx_drivers_menu() {
     while true; do
-        local mesa_ver channel
+        local mesa_ver channel m_bpo="" m_stable="" G_CHOICE G_WANT
         mesa_ver=$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null)
-        if echo "$mesa_ver" | grep -q bpo; then channel="Backports"; else channel="Debian Stable"; fi
+        if echo "$mesa_ver" | grep -q bpo; then
+            channel="Backports"; m_bpo="  ● current"
+        else
+            channel="Debian Stable"; m_stable="  ● current"
+        fi
 
-        G_OPTS="󰋼 Installed: Mesa ${mesa_ver%%-*} (${channel})
-󰢮 Switch to Backports — newer Mesa, fixes game glitches
-󰒙 Switch to Debian Stable — revert to the frozen version
-󰌍 Back"
+        local mesa_show="Mesa ${mesa_ver%%-*}"
+        [ -n "$mesa_ver" ] || mesa_show="Mesa not installed"
 
-        G_CHOICE=$(echo -e "$G_OPTS" | tfuzzel -d -p " 󰢮 Graphics | ")
+        # Picking the current one runs it again: that is how the 32-bit half
+        # Steam needs gets pulled in after Steam is installed
+        G_CHOICE=$(printf '%s\n' "󰢮 Backports: newer Mesa, fixes game glitches$m_bpo" \
+            "󰒙 Debian Stable: the frozen version$m_stable" "󰌍 Back" \
+            | tfuzzel -d -p " 󰢮 Graphics Drivers ($mesa_show) | " --width 60)
         [ -n "$G_CHOICE" ] || menu_close
         if is_back "$G_CHOICE"; then return; fi
+        G_CHOICE=$(sw_label "$G_CHOICE")
 
-        if [[ "$G_CHOICE" =~ "Switch to Backports" ]]; then
+        if [[ "$G_CHOICE" == Backports* ]]; then
+            G_WANT="Backports"
             $TERM_CMD bash -c "
                 echo 'Enabling trixie-backports (NotAutomatic: nothing else will upgrade)...'
                 # A second entry for a suite already in the sources makes
@@ -869,7 +1004,8 @@ gfx_drivers_menu() {
                 echo 'Done — reboot (or log out/in) so everything picks up the new driver.'
                 read -p 'Press Enter...'
             "
-        elif [[ "$G_CHOICE" =~ "Switch to Debian Stable" ]]; then
+        elif [[ "$G_CHOICE" == "Debian Stable"* ]]; then
+            G_WANT="Debian Stable"
             $TERM_CMD bash -c "
                 # Downgrade the Mesa family back to stable, then drop the repo
                 # file this toggle created.
@@ -893,35 +1029,42 @@ gfx_drivers_menu() {
                 echo 'Back on Debian stable Mesa — reboot (or log out/in) to apply.'
                 read -p 'Press Enter...'
             "
+        else
+            continue
+        fi
+        mesa_ver=$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers 2>/dev/null)
+        if echo "$mesa_ver" | grep -q bpo; then channel="Backports"; else channel="Debian Stable"; fi
+        if [ "$channel" = "$G_WANT" ]; then
+            tnotify "Graphics Drivers" "$channel (Mesa ${mesa_ver%%-*}) — reboot to use it"
+        else
+            tnotify "Graphics Drivers" "Not changed: still $channel"
         fi
     done
 }
 
 package_browser() {
     while true; do
-    PB_OPTS="󰍉 Search APT Packages
-󰍉 Search Flatpak Apps
-󰏗 Browse Installed (APT)
-󰏗 Browse Installed (Flatpak)
-󰌍 Back"
+    local PB_CHOICE FP_NOTE=""
+    sw_has flatpak || FP_NOTE=" (Flatpak Not Installed)"
 
-    PB_CHOICE=$(echo -e "$PB_OPTS" | tfuzzel -d -p " 󰏗 Packages | ")
+    PB_CHOICE=$(printf '%s\n' "󰍉 Search APT Packages" "󰍉 Search Flatpak Apps$FP_NOTE" \
+        "󰏗 Browse Installed (APT)" "󰏗 Browse Installed (Flatpak)$FP_NOTE" "󰌍 Back" \
+        | tfuzzel -d -p " 󰏗 Packages | ")
 
     [ -n "$PB_CHOICE" ] || menu_close
     if is_back "$PB_CHOICE"; then return; fi
 
-    if [[ "$PB_CHOICE" =~ "Search APT" ]]; then
-        apt_search
-    elif [[ "$PB_CHOICE" =~ "Search Flatpak" ]]; then
-        flatpak_search
-    elif [[ "$PB_CHOICE" =~ "Installed (APT)" ]]; then
-        apt_installed_browser
-    elif [[ "$PB_CHOICE" =~ "Installed (Flatpak)" ]]; then
-        flatpak_installed_browser
-    fi
+    case "$(sw_label "$PB_CHOICE")" in
+        "Search APT"*)                 apt_search ;;
+        "Search Flatpak"*)             flatpak_search ;;
+        "Browse Installed (APT)"*)     apt_installed_browser ;;
+        "Browse Installed (Flatpak)"*) flatpak_installed_browser ;;
+    esac
     done
 }
 
+# Searching for one package: the results stay up after acting on one, with
+# its new state, until Back. Escape at a step goes back to the menu before it.
 apt_search() {
     local QUERY
     QUERY=$(echo "" | tfuzzel -d -p " 󰍉 APT Search: ")
@@ -933,31 +1076,34 @@ apt_search() {
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        notify-send "Package Browser" "No results for: $QUERY"
+        tnotify "Package Browser" "No results for: $QUERY"
         return
     fi
 
     if [[ "$COUNT" -gt 50 ]]; then
-        notify-send "Package Browser" "$COUNT results — showing the best 50. Try a more specific search."
+        tnotify "Package Browser" "$COUNT results — showing the best 50. Try a more specific search."
     fi
 
     # Ranked above, so the package actually searched for is never cut off
     local TOP_RESULTS
     TOP_RESULTS=$(echo "$RESULTS" | head -50)
-
-    # Batch check install state
     local PKG_NAMES
     PKG_NAMES=$(echo "$TOP_RESULTS" | awk -F' - ' '{print $1}')
+
+    while true; do
+    # Batch check install state, again each time: the last pick may have
+    # changed it
     local INSTALLED_PKGS
     INSTALLED_PKGS=$(echo "$PKG_NAMES" | xargs dpkg -l 2>/dev/null | awk '/^ii/{print $2}')
 
+    # The state is in words after the name too: Text Mode drops the glyph
     local MENU="󰌍 Back"
     while IFS= read -r LINE; do
         local PKG_NAME
         PKG_NAME=$(echo "$LINE" | awk -F' - ' '{print $1}')
         local DESC="${LINE#* - }"
         if echo "$INSTALLED_PKGS" | grep -qx "$PKG_NAME"; then
-            MENU+=$'\n'"󰄬 $PKG_NAME - $DESC"
+            MENU+=$'\n'"󰄬 $PKG_NAME (Installed) - $DESC"
         else
             MENU+=$'\n'"󰄰 $PKG_NAME - $DESC"
         fi
@@ -974,6 +1120,7 @@ apt_search() {
     local SEL_PKG
     SEL_PKG=$(echo "$SEL" | sed -E 's/^[[:space:]]*[󰄬󰄰✓✗] *//; s/^[[:space:]]+//' | awk '{print $1}')
     apt_package_action "$SEL_PKG"
+    done
 }
 
 apt_package_action() {
@@ -982,25 +1129,33 @@ apt_package_action() {
     dpkg -l "$PKG" 2>/dev/null | grep -q "^ii" && IS_INSTALLED=true
 
     local DESC
-    DESC=$(apt-cache show "$PKG" 2>/dev/null | awk -F': ' '/^Description:/{print $2; exit}')
+    # Debian splits descriptions out: the field is Description-en there
+    DESC=$(apt-cache show "$PKG" 2>/dev/null | awk -F': ' '/^Description(-[a-z][a-z](_[A-Z][A-Z])?)?:/{print $2; exit}')
     local SIZE
     SIZE=$(apt-cache show "$PKG" 2>/dev/null | awk -F': ' '/^Installed-Size:/{print $2; exit}')
 
-    local ACTION_OPTS="󰌍 Back"
+    local ACTION_OPTS
     if $IS_INSTALLED; then
-        ACTION_OPTS+="\n󰆴 Uninstall $PKG"
+        ACTION_OPTS="󰆴 Uninstall $PKG"
     else
-        ACTION_OPTS+="\n󰏗 Install $PKG"
+        ACTION_OPTS="󰏗 Install $PKG"
     fi
-    ACTION_OPTS+="\n󰋽 $DESC"
+    [ -n "$DESC" ] && ACTION_OPTS+="\n󰋽 $DESC"
     [ -n "$SIZE" ] && ACTION_OPTS+="\n󰋊 Size: ${SIZE} KB"
+    ACTION_OPTS+="\n󰌍 Back"
 
     local A_CHOICE
-    A_CHOICE=$(echo -e "$ACTION_OPTS" | tfuzzel -d -p " 󰏗 $PKG | ")
+    while true; do
+        A_CHOICE=$(echo -e "$ACTION_OPTS" | tfuzzel -d -p " 󰏗 $PKG | ")
+        if [ -z "$A_CHOICE" ] || is_back "$A_CHOICE"; then return; fi
+        # Whole-label matches: the description row can contain "Install" too.
+        # That row and the size are only there to read: picking them keeps
+        # the menu up.
+        if [[ "$A_CHOICE" == *"Uninstall $PKG" || "$A_CHOICE" == *"Install $PKG" ]]; then
+            break
+        fi
+    done
 
-    if [ -z "$A_CHOICE" ] || is_back "$A_CHOICE"; then return; fi
-
-    # Whole-label matches: the description row can contain "Install" too
     if [[ "$A_CHOICE" == *"Uninstall $PKG" ]]; then
         $TERM_CMD bash -c "
             echo 'Removing $PKG...'
@@ -1009,7 +1164,8 @@ apt_package_action() {
             echo 'Done!'
             read -p 'Press Enter to close...'
         "
-    elif [[ "$A_CHOICE" == *"Install $PKG" ]]; then
+        sw_report remove "Package Browser" "$PKG" sw_pkgs_installed "$PKG"
+    else
         $TERM_CMD bash -c "
             echo 'Installing $PKG...'
             sudo apt update && sudo apt install -y '$PKG'
@@ -1017,6 +1173,7 @@ apt_package_action() {
             echo 'Done!'
             read -p 'Press Enter to close...'
         "
+        sw_report install "Package Browser" "$PKG" sw_pkgs_installed "$PKG"
     fi
 }
 
@@ -1050,7 +1207,7 @@ apt_installed_browser() {
         COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null; true)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            notify-send "Package Browser" "No manually installed packages found."
+            tnotify "Package Browser" "No manually installed packages found."
             return
         fi
 
@@ -1072,11 +1229,25 @@ apt_installed_browser() {
     done
 }
 
+# Flatpak missing: offer it here instead of a dead end. Succeeds once it
+# is there.
+flatpak_need() {
+    sw_has flatpak && return 0
+    local c
+    c=$(printf '%s\n' "󰏗 Install Flatpak (apps from Flathub)" "󰌍 Back" \
+        | tfuzzel -d -p " 󰏗 Flatpak not installed | ")
+    if [ -z "$c" ] || is_back "$c"; then return 1; fi
+    sw_flatpak_install
+    sw_report install "Package Browser" "Flatpak" sw_has flatpak
+    sw_has flatpak
+}
+
+flatpak_app_installed() {
+    flatpak list --app --columns=application 2>/dev/null | grep -qxF -- "$1"
+}
+
 flatpak_search() {
-    if ! command -v flatpak &>/dev/null; then
-        echo -e "󰌍 Back\n󰏗 Flatpak not installed\n󰏗 Install via: Software > Software & Gaming" | tfuzzel -d -p " 󰏗 Flatpak | "
-        return
-    fi
+    flatpak_need || return
 
     local QUERY
     QUERY=$(echo "" | tfuzzel -d -p " 󰍉 Flatpak Search: ")
@@ -1092,11 +1263,12 @@ flatpak_search() {
     COUNT=$(echo "$RESULTS" | grep -c . 2>/dev/null; true)
 
     if [[ "$COUNT" -eq 0 ]]; then
-        notify-send "Package Browser" "No Flatpak results for: $QUERY"
+        tnotify "Package Browser" "No Flatpak results for: $QUERY"
         return
     fi
 
-    # Check which are installed
+    while true; do
+    # Read again each time round: the last pick may have changed it
     local INSTALLED_APPS
     INSTALLED_APPS=$(flatpak list --app --columns=application 2>/dev/null)
 
@@ -1106,10 +1278,12 @@ flatpak_search() {
         [ -z "$APP_ID" ] && continue
         APP_REMOTE[$APP_ID]="${APP_REMOTES%%,*}"
         local LABEL="$APP_NAME"
-        [ -n "$APP_DESC" ] && LABEL="$APP_NAME - $APP_DESC"
         if echo "$INSTALLED_APPS" | grep -qx "$APP_ID"; then
+            LABEL+=" (Installed)"
+            [ -n "$APP_DESC" ] && LABEL+=" - $APP_DESC"
             MENU+=$'\n'"󰄬 $LABEL [$APP_ID]"
         else
+            [ -n "$APP_DESC" ] && LABEL+=" - $APP_DESC"
             MENU+=$'\n'"󰄰 $LABEL [$APP_ID]"
         fi
     done <<< "$RESULTS"
@@ -1122,25 +1296,17 @@ flatpak_search() {
     # Extract app ID from brackets
     local APP_ID
     APP_ID=$(echo "$SEL" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
-    [ -z "$APP_ID" ] && return
-
-    local IS_INSTALLED=false
-    echo "$INSTALLED_APPS" | grep -qx "$APP_ID" && IS_INSTALLED=true
-
-    local FP_OPTS="󰌍 Back"
-    if $IS_INSTALLED; then
-        FP_OPTS+="\n󰆴 Uninstall $APP_ID"
-    else
-        FP_OPTS+="\n󰏗 Install $APP_ID"
-    fi
+    [ -z "$APP_ID" ] && continue
 
     local FP_CHOICE
-    FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
-
-    if [ -z "$FP_CHOICE" ] || is_back "$FP_CHOICE"; then return; fi
+    if flatpak_app_installed "$APP_ID"; then
+        FP_CHOICE=$(sw_actions "$APP_ID" "󰆴 Uninstall $APP_ID") || continue
+    else
+        FP_CHOICE=$(sw_actions "$APP_ID" "󰏗 Install $APP_ID") || continue
+    fi
 
     # Whole-label matches: "Uninstall org.x.Installer" contains "Install"
-    if [[ "$FP_CHOICE" == *"Uninstall $APP_ID" ]]; then
+    if [[ "$FP_CHOICE" == "Uninstall $APP_ID" ]]; then
         APP_ID="$APP_ID" $TERM_CMD bash -c '
             echo "Removing $APP_ID..."
             flatpak uninstall -y "$APP_ID"
@@ -1148,7 +1314,8 @@ flatpak_search() {
             echo "Done!"
             read -p "Press Enter to close..."
         '
-    elif [[ "$FP_CHOICE" == *"Install $APP_ID" ]]; then
+        sw_report remove "Package Browser" "$APP_ID" flatpak_app_installed "$APP_ID"
+    elif [[ "$FP_CHOICE" == "Install $APP_ID" ]]; then
         local FP_REMOTE="${APP_REMOTE[$APP_ID]:-flathub}"
         APP_ID="$APP_ID" FP_REMOTE="$FP_REMOTE" $TERM_CMD bash -c '
             echo "Installing $APP_ID from $FP_REMOTE..."
@@ -1157,14 +1324,13 @@ flatpak_search() {
             echo "Done!"
             read -p "Press Enter to close..."
         '
+        sw_report install "Package Browser" "$APP_ID" flatpak_app_installed "$APP_ID"
     fi
+    done
 }
 
 flatpak_installed_browser() {
-    if ! command -v flatpak &>/dev/null; then
-        echo -e "󰌍 Back\n󰏗 Flatpak not installed\n󰏗 Install via: Software > Software & Gaming" | tfuzzel -d -p " 󰏗 Flatpak | "
-        return
-    fi
+    flatpak_need || return
 
     while true; do
         local INSTALLED
@@ -1173,7 +1339,7 @@ flatpak_installed_browser() {
         COUNT=$(echo "$INSTALLED" | grep -c . 2>/dev/null; true)
 
         if [[ "$COUNT" -eq 0 ]]; then
-            notify-send "Package Browser" "No Flatpak apps installed."
+            tnotify "Package Browser" "No Flatpak apps installed."
             return
         fi
 
@@ -1193,23 +1359,18 @@ flatpak_installed_browser() {
         APP_ID=$(echo "$SEL" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
         [ -z "$APP_ID" ] && continue
 
-        local FP_OPTS="󰆴 Uninstall $APP_ID
-󰌍 Back"
-
         local FP_CHOICE
-        FP_CHOICE=$(echo -e "$FP_OPTS" | tfuzzel -d -p " 󰏗 $APP_ID | ")
+        FP_CHOICE=$(sw_actions "$APP_ID" "󰆴 Uninstall $APP_ID") || continue
 
-        if [ -z "$FP_CHOICE" ] || is_back "$FP_CHOICE"; then continue; fi
-
-        if [[ "$FP_CHOICE" =~ "Uninstall" ]]; then
-            $TERM_CMD bash -c "
-                echo 'Removing $APP_ID...'
-                flatpak uninstall -y '$APP_ID'
-                echo ''
-                echo 'Done!'
-                read -p 'Press Enter to close...'
-            "
+        if [[ "$FP_CHOICE" == "Uninstall $APP_ID" ]]; then
+            APP_ID="$APP_ID" $TERM_CMD bash -c '
+                echo "Removing $APP_ID..."
+                flatpak uninstall -y "$APP_ID"
+                echo ""
+                echo "Done!"
+                read -p "Press Enter to close..."
+            '
+            sw_report remove "Package Browser" "$APP_ID" flatpak_app_installed "$APP_ID"
         fi
     done
 }
-

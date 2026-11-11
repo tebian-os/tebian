@@ -189,7 +189,7 @@ start() {
     [ "$sound" = mic ] && how="with microphone"
     # Short-lived: the notification is on screen, so in the video
     notify-send -a Tebian -t 2500 "Recording started ($how)" \
-        "Run the same key or tebian-record again to stop." 2>/dev/null
+        "Press Ctrl+Print again to stop (or Super+Print > Stop Recording)." 2>/dev/null
     return 0
 }
 

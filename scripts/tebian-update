@@ -536,7 +536,7 @@ fi
 if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
         "$LOCAL_BIN/tebian-install-swayfx" --check ||
-            warn "SwayFX needs rebuilding (window snapping or library fixes): Settings → More → Desktop & UI → Window Snapping"
+            warn "SwayFX needs rebuilding (window snapping or library fixes): Settings → More → Desktop & UI → Window Snapping → Update Snapping"
     elif ! "$LOCAL_BIN/tebian-build-sway" --check; then
         info "Sway: adding window snapping (rebuilding Debian's sway, about a minute)"
         if sudo -v; then

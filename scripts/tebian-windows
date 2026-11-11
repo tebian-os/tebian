@@ -1,7 +1,7 @@
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 # ==============================================================================
-# TEBIAN WINDOW SWITCHER (Mod+Shift+Tab)
+# TEBIAN WINDOW SWITCHER (Super+Shift+Tab)
 # Every open window, on every workspace: type to find one, Enter to go to it.
 # ==============================================================================
 
@@ -19,8 +19,13 @@ say() {
 # sway describes its windows as JSON; jq is how a shell script reads that
 # reliably. The desktop install has it, a minimal one may not.
 if ! command -v jq >/dev/null 2>&1; then
-    say "The window switcher needs jq: sudo apt install jq"
-    exit 1
+    pick=$(printf '%s\n' "Install jq" "Cancel" |
+        tfuzzel -d -p " 󰖲 The window switcher needs jq | " --lines 2 --width 45)
+    [[ "$pick" == *Install* ]] || exit 0
+    TERM_CMD="${TERM_CMD:-$(tebian_term_cmd)}" tebian_term_apt_install jq || {
+        say "jq could not be installed"
+        exit 1
+    }
 fi
 
 TREE=$(swaymsg -t get_tree 2>/dev/null) || { say "Can't reach sway to list windows."; exit 1; }

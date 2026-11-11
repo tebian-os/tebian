@@ -2,8 +2,11 @@
 # tebian-settings module: system.sh
 # Sourced by tebian-settings — do not run directly
 
+# The facts are rows of their own so they are easy to read; picking one does
+# nothing but show the page again
 sysinfo_menu() {
-    # Gather system info
+    local HOSTNAME UPTIME KERNEL CPU MEM_TOTAL MEM_USED DISK_USED DISK_TOTAL GPU CHOICE
+    while true; do
     HOSTNAME=$(hostname)
     UPTIME=$(uptime -p 2>/dev/null || uptime)
     KERNEL=$(uname -r)
@@ -13,24 +16,25 @@ sysinfo_menu() {
     DISK_USED=$(df -h / | awk 'NR==2 {print $3}')
     DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}')
     GPU=$(lspci 2>/dev/null | grep -iE "VGA|3D|Display" | head -1 | sed 's/.*: //')
-    
-    INFO="󰋅 About This Computer
-󰌢 Host: $HOSTNAME
-󰓅 Uptime: $UPTIME
-󰍛 Kernel: $KERNEL
-󰚰 CPU: $CPU
-󰍛 RAM: $MEM_USED / $MEM_TOTAL
-󰋊 Disk: $DISK_USED / $DISK_TOTAL
-󰢻 GPU: ${GPU:-Not detected}
-󰌍 Back
-An act of God."
 
-    CHOICE=$(echo -e "$INFO" | tfuzzel -d -p "" --width 50 --lines 15)
+    # printf, not echo -e: a CPU or GPU name may hold a backslash
+    CHOICE=$(printf '%s\n' \
+        "󰌢 Host: $HOSTNAME" \
+        "󰓅 Uptime: $UPTIME" \
+        "󰍛 Kernel: $KERNEL" \
+        "󰚰 CPU: ${CPU:-Unknown}" \
+        "󰍛 RAM: $MEM_USED / $MEM_TOTAL" \
+        "󰋊 Disk: $DISK_USED / $DISK_TOTAL" \
+        "󰢻 GPU: ${GPU:-Not detected}" \
+        "󰚰 Easter Egg: TempleOS in a VM" \
+        "󰌍 Back" | tfuzzel -d -p " 󰋅 About This Computer | " --width 50 --lines 15)
     [ -n "$CHOICE" ] || menu_close
+    is_back "$CHOICE" && return
 
-    if [[ "$CHOICE" =~ "act of God" ]]; then
+    if [[ "$(sysprefs_words "$CHOICE")" == "Easter Egg: TempleOS"* ]]; then
         temple_os
     fi
+    done
 }
 
 temple_os() {
@@ -102,7 +106,7 @@ backup_menu() {
     while true; do
     BACKUP_OPTS="󰆏 Backup Configs to ~/Tebian-Backup
 󰑋 Restore from Backup
-󰈔 View Current Backup
+󰈔 View Backups
 󰌍 Back"
 
     B_CHOICE=$(echo -e "$BACKUP_OPTS" | tfuzzel -d -p " 󰆏 Backup | ")
@@ -113,24 +117,24 @@ backup_menu() {
     if [[ "$B_CHOICE" =~ "Backup Configs" ]]; then
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         if backup_configs "$HOME/Tebian-Backup/$TIMESTAMP"; then
-            notify-send "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
+            tnotify "Backup Complete" "Saved to ~/Tebian-Backup/$TIMESTAMP"
         else
-            notify-send "Backup" "Could not write ~/Tebian-Backup/$TIMESTAMP"
+            tnotify "Backup" "Could not write ~/Tebian-Backup/$TIMESTAMP"
         fi
 
     elif [[ "$B_CHOICE" =~ "Restore" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
 
-        if [ ! -d "$BACKUP_DIR" ]; then
-            notify-send "Restore" "No backups found"
+        # List available backups
+        BACKUPS=$(ls -1t "$BACKUP_DIR" 2>/dev/null | head -10)
+        if [ -z "$BACKUPS" ]; then
+            tnotify "Restore" "No backups found"
             continue
         fi
-
-        # List available backups
-        BACKUPS=$(ls -1t "$BACKUP_DIR" | head -10)
-        R_CHOICE=$(echo -e "󰌍 Back\n$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
-
-        [ -n "$R_CHOICE" ] || menu_close
+        # printf, not echo -e: a folder name may hold a backslash. A picker
+        # inside the restore: Escape cancels it, back to this menu
+        R_CHOICE=$(printf '%s\n' "󰌍 Back" "$BACKUPS" | tfuzzel -d -p " 󰑋 Restore | ")
+        [ -n "$R_CHOICE" ] || continue
         if is_back "$R_CHOICE"; then
             continue
         fi
@@ -140,7 +144,7 @@ backup_menu() {
         # Stray files in ~/Tebian-Backup show up in the list — don't "restore"
         # from something that isn't a backup directory
         if [ ! -d "$RESTORE_DIR" ]; then
-            notify-send "Restore" "Not a backup: $R_CHOICE"
+            tnotify "Restore" "Not a backup: $R_CHOICE"
             continue
         fi
 
@@ -152,7 +156,7 @@ backup_menu() {
         local before
         before="$BACKUP_DIR/$(date +%Y%m%d_%H%M%S)-before-restore"
         if ! backup_configs "$before"; then
-            notify-send "Restore" "Could not back up the current configs first — nothing was changed"
+            tnotify "Restore" "Could not back up the current configs first — nothing was changed"
             continue
         fi
 
@@ -178,17 +182,18 @@ backup_menu() {
 
         swaymsg reload >/dev/null 2>&1 &
         if [ -n "$failed" ]; then
-            notify-send "Restore incomplete" "Not restored:$failed — your previous configs are in ${before#"$HOME"/}"
+            tnotify "Restore incomplete" "Not restored:$failed — your previous configs are in ${before#"$HOME"/}"
         else
-            notify-send "Restore Complete" "Restored from $R_CHOICE (previous configs: ${before#"$HOME"/})"
+            tnotify "Restore Complete" "Restored from $R_CHOICE (previous configs: ${before#"$HOME"/})"
         fi
 
-    elif [[ "$B_CHOICE" =~ "View Current" ]]; then
+    elif [[ "$B_CHOICE" =~ "View Backups" ]]; then
         BACKUP_DIR="$HOME/Tebian-Backup"
-        if [ -d "$BACKUP_DIR" ]; then
-            $TERM_CMD bash -c "ls -la $BACKUP_DIR; echo ''; ls -la $BACKUP_DIR/$(ls -1t $BACKUP_DIR | head -1) 2>/dev/null; read -p 'Press Enter...'"
+        if [ -n "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+            # Every backup, then what the newest one holds
+            $TERM_CMD bash -c 'ls -la "$1"; echo; newest=$(ls -1t "$1" | head -1); echo "Newest: $newest"; ls -la "$1/$newest" 2>/dev/null; read -p "Press Enter..."' _ "$BACKUP_DIR"
         else
-            notify-send "Backup" "No backups found"
+            tnotify "Backup" "No backups found"
         fi
     fi
     done
@@ -210,39 +215,40 @@ config_menu() {
     while true; do
     TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
     local MACHINE_CONF="$HOME/.config/tebian/machine.conf"
-    local TRACK_OPTS
+    local TRACK_OPTS cfg_remote
     if [ -d "$CONFIG_GIT_DIR" ]; then
+        cfg_remote=$(cfg_git remote get-url origin 2>/dev/null)
         TRACK_OPTS="󰊢 View Config Changes
 󰆓 Save Config Snapshot
 󰋚 Config History
-󰆓 Set Config Remote URL"
-        cfg_git remote get-url origin >/dev/null 2>&1 && TRACK_OPTS+="
+󰆓 Config Remote (Current: ${cfg_remote:-Not Set})"
+        [ -n "$cfg_remote" ] && TRACK_OPTS+="
 󰕒 Push Config to Remote"
     else
-        TRACK_OPTS="󰊢 Enable Config Tracking (git)"
+        TRACK_OPTS="󰊢 Config Tracking (OFF)"
     fi
 
     # ~/Tebian as a git clone of Tebian (fleet or dev machine): one that
-    # tracks a remote, which is what tebian-update pulls
+    # tracks a remote, which is what tebian-update pulls. Its branch and
+    # remote go on the lines that act on them, not on lines of their own
+    # that do nothing when picked.
     if command -v git &>/dev/null && [ -d "$TEBIAN_DIR/.git" ] &&
        git -C "$TEBIAN_DIR" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
-        GIT_BRANCH=$(git -C "$TEBIAN_DIR" branch --show-current 2>/dev/null || echo "unknown")
+        # Empty on a detached HEAD
+        GIT_BRANCH=$(git -C "$TEBIAN_DIR" branch --show-current 2>/dev/null)
         GIT_DIRTY=$(git -C "$TEBIAN_DIR" status --porcelain 2>/dev/null | head -1)
-        GIT_REMOTE=$(git -C "$TEBIAN_DIR" remote get-url origin 2>/dev/null || echo "none")
+        GIT_REMOTE=$(git -C "$TEBIAN_DIR" remote get-url origin 2>/dev/null)
         if [ -n "$GIT_DIRTY" ]; then
-            STATUS_LABEL="branch: $GIT_BRANCH (modified)"
+            STATUS_LABEL="Branch: ${GIT_BRANCH:-detached}, Modified"
         else
-            STATUS_LABEL="branch: $GIT_BRANCH (clean)"
+            STATUS_LABEL="Branch: ${GIT_BRANCH:-detached}, No Changes"
         fi
-        REMOTE_LABEL="remote: $GIT_REMOTE"
 
-        C_OPTS="󰋽 $STATUS_LABEL
-󰋽 $REMOTE_LABEL
-󰚰 Update Tebian
+        C_OPTS="󰚰 Update Tebian
 󰑓 Rebuild System
 󰏫 Edit Machine Settings
-󰊢 View Tebian Diff
-󰆓 Set Tebian Remote URL
+󰊢 View Tebian Diff ($STATUS_LABEL)
+󰆓 Tebian Remote (Current: ${GIT_REMOTE:-Not Set})
 $TRACK_OPTS
 󰌍 Back"
     else
@@ -253,17 +259,19 @@ $TRACK_OPTS
 󰌍 Back"
     fi
 
-    C_CHOICE=$(echo -e "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | " --width 40)
+    # printf, not echo -e: a remote URL may hold a backslash
+    C_CHOICE=$(printf '%s\n' "$C_OPTS" | tfuzzel -d -p " 󰑀 Config | " --width 50)
 
     [ -n "$C_CHOICE" ] || menu_close
     if is_back "$C_CHOICE"; then return; fi
+    C_CHOICE=$(sysprefs_words "$C_CHOICE")
 
-    if [[ "$C_CHOICE" =~ "Update Tebian" ]]; then
+    if [[ "$C_CHOICE" == "Update Tebian"* ]]; then
         $TERM_CMD bash -c "
             tebian-update
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Rebuild System" ]]; then
+    elif [[ "$C_CHOICE" == "Rebuild System"* ]]; then
         $TERM_CMD bash -c "
             echo '=== Tebian Rebuild ==='
             echo ''
@@ -271,7 +279,7 @@ $TRACK_OPTS
             echo ''
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Edit Machine Settings" ]]; then
+    elif [[ "$C_CHOICE" == "Edit Machine Settings"* ]]; then
         # This machine's choices live in machine.conf, layered over
         # ~/Tebian/tebian.conf — which is Tebian's file (tracked in git on
         # fleet machines), so editing it here would block updates
@@ -284,7 +292,7 @@ $TRACK_OPTS
             } > "$MACHINE_CONF"
         fi
         $TERM_CMD nano "$MACHINE_CONF"
-    elif [[ "$C_CHOICE" =~ "View Tebian Diff" ]]; then
+    elif [[ "$C_CHOICE" == "View Tebian Diff"* ]]; then
         $TERM_CMD bash -c "
             echo '=== Config Changes ==='
             echo ''
@@ -296,7 +304,7 @@ $TRACK_OPTS
             echo ''
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Set Tebian Remote URL" ]]; then
+    elif [[ "$C_CHOICE" == "Tebian Remote"* ]]; then
         $TERM_CMD bash -c "
             echo '=== Set Git Remote ==='
             echo ''
@@ -316,7 +324,7 @@ $TRACK_OPTS
             fi
             read -p 'Press Enter to close...'
         "
-    elif [[ "$C_CHOICE" =~ "Enable Config Tracking" ]]; then
+    elif [[ "$C_CHOICE" == "Config Tracking"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" TRACKED="${CONFIG_TRACKED[*]}" $TERM_CMD bash -c '
             fail() { echo ""; echo "❌ $1"; read -p "Press Enter to close..."; exit 1; }
             echo "=== Enable Config Tracking ==="
@@ -347,13 +355,13 @@ $TRACK_OPTS
             echo "Save Config Snapshot records changes; View Config Changes shows them."
             read -p "Press Enter to close..."
         '
-    elif [[ "$C_CHOICE" =~ "View Config Changes" ]]; then
+    elif [[ "$C_CHOICE" == "View Config Changes"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
             cd "$HOME" && git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" -c color.ui=always diff | less -R
             git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" status --short
             read -p "Press Enter to close..."
         '
-    elif [[ "$C_CHOICE" =~ "Save Config Snapshot" ]]; then
+    elif [[ "$C_CHOICE" == "Save Config Snapshot"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" TRACKED="${CONFIG_TRACKED[*]}" $TERM_CMD bash -c '
             g() { git --git-dir="$CONFIG_GIT_DIR" --work-tree="$HOME" "$@"; }
             cd "$HOME" || exit 1
@@ -372,11 +380,11 @@ $TRACK_OPTS
             fi
             read -p "Press Enter to close..."
         '
-    elif [[ "$C_CHOICE" =~ "Config History" ]]; then
+    elif [[ "$C_CHOICE" == "Config History"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
             git -c color.ui=always --git-dir="$CONFIG_GIT_DIR" log --stat --date=short | less -R
         '
-    elif [[ "$C_CHOICE" =~ "Set Config Remote URL" ]]; then
+    elif [[ "$C_CHOICE" == "Config Remote"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
             g() { git --git-dir="$CONFIG_GIT_DIR" "$@"; }
             echo "Current remote: $(g remote get-url origin 2>/dev/null || echo none)"
@@ -391,7 +399,7 @@ $TRACK_OPTS
             fi
             read -p "Press Enter to close..."
         '
-    elif [[ "$C_CHOICE" =~ "Push Config to Remote" ]]; then
+    elif [[ "$C_CHOICE" == "Push Config to Remote"* ]]; then
         CONFIG_GIT_DIR="$CONFIG_GIT_DIR" $TERM_CMD bash -c '
             if git --git-dir="$CONFIG_GIT_DIR" push -u origin HEAD; then
                 echo "Pushed."
@@ -404,27 +412,35 @@ $TRACK_OPTS
     done
 }
 
-power_menu() {
-    # Stay-awake switches (tebian-awake): until turned off or logout
-    local awake_idle=0 awake_lid=0 laptop=0 k v
+# Stay-awake switches (tebian-awake): until turned off or logout
+power_awake_state() {
+    local k v
+    awake_idle=0 awake_lid=0 laptop=0
     while IFS=$'\t' read -r k v; do
         case "$k" in idle) awake_idle=$v ;; lid) awake_lid=$v ;; laptop) laptop=$v ;; esac
     done < <(tebian-awake status 2>/dev/null)
-    local IDLE_LABEL LID_LABEL=""
+}
+
+# The switches stay in the menu after a pick, showing their new state, like
+# every other switch in Settings
+power_menu() {
+    local awake_idle awake_lid laptop IDLE_LABEL LID_LABEL MODE_LINES
+    while true; do
+    power_awake_state
     if [ "$awake_idle" = 1 ]; then
         IDLE_LABEL="󰅶 Keep Awake (ON: no auto-lock, screen stays on)"
     else
         IDLE_LABEL="󰾪 Keep Awake (OFF)"
     fi
+    LID_LABEL=""
     if [ "$laptop" = 1 ]; then
         if [ "$awake_lid" = 1 ]; then
-            LID_LABEL="󰌢 Lid Closed: Keep Running (ON)"
+            LID_LABEL="󰌢 Keep Running with Lid Closed (ON)"
         else
-            LID_LABEL="󰌢 Lid Closed: Sleep (keep running: OFF)"
+            LID_LABEL="󰌢 Keep Running with Lid Closed (OFF)"
         fi
     fi
 
-    local MODE_LINES
     MODE_LINES=$(power_mode_lines)
 
     POWER_OPTS="󰜉 Reboot
@@ -436,35 +452,45 @@ ${LID_LABEL:+$LID_LABEL
 }${MODE_LINES:+$MODE_LINES
 }󰌍 Back"
     P_CHOICE=$(echo -e "$POWER_OPTS" | tfuzzel -d --match-mode=exact -p " 󰐥 Power | ")
-    
+
     [ -n "$P_CHOICE" ] || menu_close
     if is_back "$P_CHOICE"; then return; fi
 
     # Power modes, then the drop-down again so the switch shows its new state
-    if power_mode_pick "$P_CHOICE"; then
-        power_menu; return
-    fi
+    power_mode_pick "$P_CHOICE" && continue
 
+    # The notification says the state tebian-awake reports afterwards, not
+    # the one the pick asked for
+    local was
     if [[ "$P_CHOICE" =~ "Keep Awake" ]]; then
-        tebian-awake idle toggle
-        if [ "$awake_idle" = 1 ]; then
-            tnotify "Keep Awake" "Off — auto-lock is back"
-        else
+        was=$awake_idle
+        tebian-awake idle toggle >/dev/null 2>&1
+        power_awake_state
+        if [ "$awake_idle" = "$was" ]; then
+            tnotify "Keep Awake" "Couldn't change it — still $([ "$was" = 1 ] && echo on || echo off)"
+        elif [ "$awake_idle" = 1 ]; then
             tnotify "Keep Awake" "On until you turn it off or log out"
+        else
+            tnotify "Keep Awake" "Off — auto-lock is back"
         fi
-        return
+        continue
     elif [[ "$P_CHOICE" =~ "Lid Closed" ]]; then
-        if tebian-awake lid toggle && [ "$awake_lid" = 0 ]; then
+        was=$awake_lid
+        tebian-awake lid toggle >/dev/null 2>&1
+        power_awake_state
+        if [ "$awake_lid" = "$was" ]; then
+            tnotify "Lid Closed" "Couldn't change it — still $([ "$was" = 1 ] && echo "keeps running" || echo "sleeps") with the lid closed"
+        elif [ "$awake_lid" = 1 ]; then
             tnotify "Lid Closed" "Keeps running with the lid closed, until you turn it off or log out"
         else
-            tnotify "Lid Closed" "Closing the lid puts the laptop to sleep again"
+            tnotify "Lid Closed" "Closing the lid puts the laptop to sleep"
         fi
-        return
+        continue
     fi
 
     if [[ "$P_CHOICE" =~ "Reboot" || "$P_CHOICE" =~ "Shutdown" ]]; then
-        local action=poweroff
-        [[ "$P_CHOICE" =~ "Reboot" ]] && action=reboot
+        local action=poweroff what="shut down"
+        [[ "$P_CHOICE" =~ "Reboot" ]] && action=reboot what=restart
         # Blank the display to hide the Sway→Plymouth transition — but only
         # once systemd has accepted the request. Blanking first left a black
         # screen with a live session behind it whenever the reboot was
@@ -472,18 +498,21 @@ ${LID_LABEL:+$LID_LABEL
         if systemctl "$action"; then
             swaymsg output '*' power off >/dev/null 2>&1
         else
-            tnotify "Power" "The system refused to $action — see: systemd-inhibit --list"
+            tnotify "Power" "The system refused to $what — see: systemd-inhibit --list"
         fi
-    elif [[ "$P_CHOICE" =~ "Sleep" ]]; then systemctl suspend
+    elif [[ "$P_CHOICE" =~ "Sleep" ]]; then
+        systemctl suspend ||
+            tnotify "Power" "The system refused to sleep — see: systemd-inhibit --list"
     elif [[ "$P_CHOICE" =~ "Logout" ]]; then swaymsg exit
     fi
+    return
+    done
 }
 
 notification_history_menu() {
-    if ! command -v makoctl &>/dev/null; then
-        notify-send "Notifications" "mako not installed"
-        return
-    fi
+    # Without mako there is no history, and no notification to say so
+    command -v makoctl &>/dev/null || { sysprefs_offer_mako; return; }
+    while true; do
     # mako 1.9+ (trixie has 1.10) prints history as text, one block each:
     #   Notification 12: <summary>
     #     App name: <app>
@@ -498,8 +527,9 @@ notification_history_menu() {
     fi
     # printf, not echo -e: notification text comes from any app and may
     # hold backslashes
-    H_CHOICE=$(printf '%s\n' "$HISTORY" "󰆴 Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notifications | " --width 60)
+    H_CHOICE=$(printf '%s\n' "$HISTORY" "󰆴 Clear All" "󰌍 Back" | tfuzzel -d -p " 󰍡 Notification History | " --width 60)
     [ -n "$H_CHOICE" ] || menu_close
+    is_back "$H_CHOICE" && return
     # Matched without its icon (Text Mode strips it). History lines are
     # "app: summary", so they don't collide with the bare words
     if [[ "$H_CHOICE" =~ ^[^[:alnum:]]*"Clear All"$ ]]; then
@@ -510,6 +540,8 @@ notification_history_menu() {
         systemctl --user restart mako 2>/dev/null || { pkill mako; (mako &) }
         tnotify "Notifications" "History cleared"
     fi
+    # A history line is only there to be read: the list shows again
+    done
 }
 
 # Everything System Update does is update-all's, in a terminal; the Modern

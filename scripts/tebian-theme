@@ -20,11 +20,17 @@ apply_theme() {
     local theme_path="$THEME_DIR/$theme"
 
     if [[ ! "$theme" =~ ^[a-z0-9-]+$ ]] || [ ! -d "$theme_path" ]; then
-        notify-send "Theme Error" "Theme '$theme' not found"
+        echo "Theme '$theme' not found" >&2
+        notify-send "Theme" "Theme '$theme' not found"
         exit 1
     fi
-    
-    echo "Applying $theme theme..."
+
+    # Its own name ("Tokyo Night"), from the header line of its sway file
+    local pretty
+    pretty=$(sed -n '1s/^# \(.*\) Theme.*/\1/p' "$theme_path/sway-theme" 2>/dev/null)
+    : "${pretty:=$theme}"
+
+    echo "Applying $pretty theme..."
     
     # 1. Sway theme (include file)
     mkdir -p "$CONFIG_DIR/sway"
@@ -202,14 +208,14 @@ CSSEOF
 
     # 12. Reload running services
     if [ -n "$WAYLAND_DISPLAY" ]; then
-        swaymsg reload 2>/dev/null
+        swaymsg reload >/dev/null 2>&1
         # A reload keeps mako's modes; a restart would quietly switch Do Not
         # Disturb off while the bar's bell still shows it on
         if ! { pgrep -x mako >/dev/null && makoctl reload >/dev/null 2>&1; }; then
             pkill mako 2>/dev/null; sleep 0.1
             setsid -f mako </dev/null >/dev/null 2>&1
         fi
-        notify-send "Tebian Theme" "$theme theme applied"
+        notify-send "Theme" "$pretty theme applied"
     fi
 
     echo "Done!"
@@ -217,7 +223,7 @@ CSSEOF
 
 # Main
 if [ -z "$1" ]; then
-    echo "Usage: tebian-theme <glass|solid|cyber|paper>"
+    echo "Usage: tebian-theme <theme>"
     echo ""
     echo "Available themes:"
     ls -1 "$THEME_DIR"

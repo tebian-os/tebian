@@ -149,7 +149,13 @@ for r in json.load(sys.stdin).get("results", []):
     line=$(awk -F'\t' -v p="$pick" '$1 == p { print; exit }' <<< "$found")
     [ -n "$line" ] || exit 0
     units=$(printf '°C  Celsius\n°F  Fahrenheit\n' | ask --prompt " 󰔄 Units: ") || exit 0
-    case "$units" in *Fahrenheit*) units=fahrenheit ;; *) units=celsius ;; esac
+    # tfuzzel answers Escape with nothing and a zero exit, so the exit code
+    # alone let Escape here turn weather on in Celsius
+    case "$units" in
+        *Fahrenheit*) units=fahrenheit ;;
+        *Celsius*)    units=celsius ;;
+        *)            exit 0 ;;
+    esac
     mkdir -p "${CONF%/*}"
     printf 'WEATHER_PLACE=%q\nWEATHER_LAT=%s\nWEATHER_LON=%s\nWEATHER_UNITS=%s\n' \
         "$pick" "$(cut -f2 <<< "$line")" "$(cut -f3 <<< "$line")" "$units" > "$CONF"

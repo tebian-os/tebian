@@ -6,7 +6,8 @@ theme_menu() {
     while true; do
     # Detect current theme from theme file header (format: "# Nord Theme - ...")
     CURRENT_THEME=$(head -1 "$HOME/.config/sway/theme" 2>/dev/null | sed -n 's/^# \(.*\) Theme.*/\1/p')
-    _tm() { local name="$1"; local desc="$2"; [[ "${CURRENT_THEME,,}" == "${name,,}" ]] && echo "● $name - $desc" || echo "$name - $desc"; }
+    # The mark goes after the name, as in every other Settings list
+    _tm() { local name="$1"; local desc="$2"; [[ "${CURRENT_THEME,,}" == "${name,,}" ]] && echo "$name - $desc  ● current" || echo "$name - $desc"; }
 
     THEME_OPTS="󰋩 Custom Wallpaper
 $(_tm Glass "Transparent Dark")
@@ -61,73 +62,92 @@ $(_tm "Rose Pine" "Soft Pink")
     done
 }
 
+# Picked by position (--index): file names are the user's own, and one
+# named "Back (2).jpg" was taken for Back, or with an emoji in it, could not
+# be matched back in Text Mode (which strips emoji)
 custom_wallpaper_menu() {
     WALLPAPER_DIR="$HOME/Pictures/Wallpapers"
     SHIPPED_DIR="${TEBIAN_DIR:-$HOME/Tebian}/assets/wallpapers"
     TARGET_DIR="$HOME/.local/share/backgrounds/tebian"
-    
+
     mkdir -p "$WALLPAPER_DIR"
-    
+
     while true; do
         SHIPPED=$(find "$SHIPPED_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) 2>/dev/null | sort)
         CUSTOM=$(find "$WALLPAPER_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.gif" \) 2>/dev/null | sort)
-        
-        W_OPTS="󰷊 Open Wallpaper Folder
-󰏘 Tebian Wallpapers
-󰌍 Back"
-        
-        while IFS= read -r img; do
-            [ -n "$img" ] && W_OPTS+="\n$(basename "$img")"
-        done <<< "$SHIPPED"
-        
-        if [ -n "$CUSTOM" ]; then
-            W_OPTS+="\n󰋩 My Wallpapers"
+
+        # The one in use is a copy, so it is found by content
+        local -a rows=("󰷊 Open Wallpaper Folder") files=("")
+        local img mark heading list
+        for heading in "── Tebian Wallpapers" "── My Wallpapers"; do
+            if [ "$heading" = "── Tebian Wallpapers" ]; then list=$SHIPPED; else list=$CUSTOM; fi
+            [ -n "$list" ] || continue
+            rows+=("$heading"); files+=("")
             while IFS= read -r img; do
-                [ -n "$img" ] && W_OPTS+="\n$(basename "$img")"
-            done <<< "$CUSTOM"
-        fi
-        
-        W_CHOICE=$(echo -e "$W_OPTS" | tfuzzel -d -p " 󰋩 Wallpaper | ")
-        
-        [ -n "$W_CHOICE" ] || menu_close
-        if is_back "$W_CHOICE"; then return; fi
-        
-        if [[ "$W_CHOICE" =~ "Open Wallpaper Folder" ]]; then
-            thunar "$WALLPAPER_DIR" &
+                [ -n "$img" ] || continue
+                mark=""
+                cmp -s "$img" "$TARGET_DIR/default.jpg" && mark="  ● current"
+                rows+=("$(basename "$img")$mark"); files+=("$img")
+            done <<< "$list"
+        done
+        rows+=("󰌍 Back"); files+=("")
+
+        local pick
+        pick=$(printf '%s\n' "${rows[@]}" | tfuzzel -d --index -p " 󰋩 Wallpaper | ")
+
+        [ -n "$pick" ] || menu_close
+        [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -lt ${#rows[@]} ] || continue
+        [ "$pick" -eq $((${#rows[@]} - 1)) ] && return
+
+        if [ "$pick" -eq 0 ]; then
+            if command -v thunar &>/dev/null; then
+                thunar "$WALLPAPER_DIR" &
+            elif command -v xdg-open &>/dev/null; then
+                xdg-open "$WALLPAPER_DIR" >/dev/null 2>&1 &
+            else
+                tnotify "Wallpaper" "No file manager installed. Put pictures in ~/Pictures/Wallpapers to list them here."
+                continue
+            fi
             return
         fi
-        
-        [[ "$W_CHOICE" =~ "Wallpapers" || "$W_CHOICE" =~ "───" ]] && continue
-        
-        if [ -f "$SHIPPED_DIR/$W_CHOICE" ]; then
-            SELECTED="$SHIPPED_DIR/$W_CHOICE"
-        elif [ -f "$WALLPAPER_DIR/$W_CHOICE" ]; then
-            SELECTED="$WALLPAPER_DIR/$W_CHOICE"
-        else
+
+        # A heading
+        SELECTED=${files[$pick]}
+        [ -n "$SELECTED" ] || continue
+
+        mkdir -p "$TARGET_DIR"
+        if ! cp "$SELECTED" "$TARGET_DIR/default.jpg"; then
+            tnotify "Wallpaper" "Could not set $(basename "$SELECTED")"
             continue
         fi
-        
-        mkdir -p "$TARGET_DIR"
-        cp "$SELECTED" "$TARGET_DIR/default.jpg"
         pkill swaybg 2>/dev/null; sleep 0.1
         setsid -f swaybg -i "$TARGET_DIR/default.jpg" -m fill </dev/null >/dev/null 2>&1
-        tnotify "Wallpaper" "Applied: $W_CHOICE"
+        tnotify "Wallpaper" "Wallpaper set: $(basename "$SELECTED")"
     done
 }
 
 feel_menu() {
     while true; do
-    CURRENT_FEEL="None"
-    [ -f "$HOME/.config/tebian/current-feel" ] && CURRENT_FEEL=$(cat "$HOME/.config/tebian/current-feel")
+    # A feel is a bundle of Desktop & UI settings, each of which can be
+    # changed on its own afterwards, so the mark goes on the one the
+    # desktop matches now (none, once it has been customised) rather than
+    # on the one applied last
+    local cur m_w="" m_m="" m_t="" m_n=""
+    cur=$(feel_current)
+    case "$cur" in
+        Windows) m_w="  ● current" ;;
+        macOS)   m_m="  ● current" ;;
+        Tiling)  m_t="  ● current" ;;
+        Minimal) m_n="  ● current" ;;
+    esac
 
-    FEEL_OPTS="󰍹 Windows - Floating, bar bottom, titlebars
- macOS - Floating, bar top, titlebars
-󰕰 Tiling - Tiling, bar auto-hide, no titlebars
-󰆌 Minimal - Tiling, no bar, no titlebars, no gaps
-Current: $CURRENT_FEEL
+    FEEL_OPTS="󰍹 Windows - Floating, bar bottom, title bars$m_w
+ macOS - Floating, bar top, title bars$m_m
+󰕰 Tiling - Tiling, bar auto-hide, no title bars$m_t
+󰆌 Minimal - Tiling, no bar, no title bars, no gaps$m_n
 󰌍 Back"
 
-    F_CHOICE=$(echo -e "$FEEL_OPTS" | tfuzzel -d -p " 󰇄 Feel | ")
+    F_CHOICE=$(echo "$FEEL_OPTS" | tfuzzel -d -p " 󰇄 Desktop Feel | " --width 52)
 
     [ -n "$F_CHOICE" ] || menu_close
     if is_back "$F_CHOICE"; then return; fi
@@ -144,6 +164,23 @@ Current: $CURRENT_FEEL
         apply_feel "Tiling"
     fi
     done
+}
+
+# The feel the desktop matches right now, or nothing
+feel_current() {
+    local float=0 titles=0 pos mode gaps
+    tebian_block_has floating-mode && float=1
+    tebian_block_has titlebars && titles=1
+    pos=$(bar_get position); mode=$(bar_get mode)
+    gaps=$(tebian_block_get gaps 2>/dev/null | awk '$1 == "gaps" && $2 == "inner" { print $3; exit }')
+    # Gaps only tell Minimal (none) from the rest (the feel's, or the theme's)
+    [ "$gaps" = 0 ] || gaps=some
+    case "$float:$titles:${pos:-top}:${mode:-dock}:$gaps" in
+        1:1:bottom:dock:some) echo Windows ;;
+        1:1:top:dock:some)    echo macOS ;;
+        0:0:top:hide:some)    echo Tiling ;;
+        0:0:top:invisible:0)  echo Minimal ;;
+    esac
 }
 
 apply_feel() {
@@ -178,12 +215,12 @@ apply_feel() {
     fi
 
     # --- Title bars ---
+    # titlebars_set (ui.sh) also changes the windows already open; setting
+    # only the default left them with the old feel's borders
     if [[ "$FEEL" == "Windows" || "$FEEL" == "macOS" ]]; then
-        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
-        swaymsg "default_border normal 2" 2>/dev/null
+        titlebars_set on
     else
-        tebian_block_remove titlebars
-        swaymsg "default_border pixel 2" 2>/dev/null
+        titlebars_set off
     fi
 
     # --- Gaps ---
@@ -193,22 +230,33 @@ apply_feel() {
         tebian_block_set gaps "gaps inner 4" "gaps outer 0"
     fi
 
-    # Save current feel
-    echo "$FEEL" > "$HOME/.config/tebian/current-feel"
     tnotify "Desktop Feel" "$FEEL applied"
     swaymsg reload 2>/dev/null &
 }
 
 font_menu() {
     while true; do
-    F_OPTS="󰛖 JetBrains Mono (Default/Code)
-󰛖 Terminus (Retro/Pixel)
-󰛖 Inter (Modern/Clean)
-󰛖 Hack (Classic Terminal)
-󰋽 Applies to Sway, Kitty, & Fuzzel
+    # The choice saved by apply_font; none yet is the default (JetBrains)
+    # shellcheck disable=SC2034  # FONT_SIZE: set by the file, kept local
+    local FONT_NAME="" FONT_SIZE="" m_j="" m_t="" m_i="" m_h=""
+    # shellcheck disable=SC1090
+    [ -f "$HOME/.config/tebian/font" ] && . "$HOME/.config/tebian/font"
+    case "${FONT_NAME:-JetBrains Mono}" in
+        "JetBrains Mono") m_j="  ● current" ;;
+        Terminus)         m_t="  ● current" ;;
+        Inter)            m_i="  ● current" ;;
+        Hack)             m_h="  ● current" ;;
+    esac
+
+    # Where it applies is in the prompt: as a row of its own it looked
+    # like a choice and did nothing when picked
+    F_OPTS="󰛖 JetBrains Mono (Default/Code)$m_j
+󰛖 Terminus (Retro/Pixel)$m_t
+󰛖 Inter (Modern/Clean)$m_i
+󰛖 Hack (Classic Terminal)$m_h
 󰌍 Back"
 
-    F_CHOICE=$(echo -e "$F_OPTS" | tfuzzel -d -p " 󰛖 Fonts | ")
+    F_CHOICE=$(echo "$F_OPTS" | tfuzzel -d -p " 󰛖 Font (desktop, terminal, menus) | " --width 50)
 
     [ -n "$F_CHOICE" ] || menu_close
     if is_back "$F_CHOICE"; then return; fi
@@ -234,7 +282,7 @@ font_menu() {
         printf 'FONT_NAME=%q\nFONT_SIZE=%q\n' "$font_name" "$font_size" > "$HOME/.config/tebian/font"
         tebian_apply_app_fonts
 
-        tnotify "Font" "$font_name applied"
+        tnotify "Font" "Font set: $font_name"
         swaymsg reload 2>/dev/null &
     }
 

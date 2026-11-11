@@ -22,33 +22,29 @@ for o in outputs:
         w = m.get('width', 1920)
         h = m.get('height', 1080)
         r = m.get('refresh', 60000)
-        lines.append(f'output {name} pos {x} {y} res {w}x{h}@{r/1000:.3f}Hz')
+        # Virtual screens report no refresh rate; "@0.000Hz" is not one sway accepts
+        rate = f'@{r/1000:.3f}Hz' if r else ''
+        lines.append(f'output {name} pos {x} {y} res {w}x{h}{rate}')
 print('\n'.join(lines))
 " > "$outfile" 2>/dev/null
 }
 
-# Screen submenu (combines brightness + screenshots + lock)
+# Screen submenu: brightness, displays, capture, lock, night light
 screen_all_menu() {
     while true; do
-        # Detect bar stats state
-        if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
-            PERF_LABEL="󰍛 Bar Stats (OFF)"
-        else
-            PERF_LABEL="󰍛 Bar Stats (ON)"
-        fi
-
         # Night light state
-        if pgrep -x wlsunset &>/dev/null; then
+        if ! command -v wlsunset &>/dev/null; then
+            NIGHT_LABEL="󰖔 Night Light (Not Installed)"
+        elif pgrep -x wlsunset &>/dev/null; then
             NIGHT_LABEL="󰖔 Night Light (ON)"
         else
             NIGHT_LABEL="󰖔 Night Light (OFF)"
         fi
 
-        S_OPTS="󰃠 Brightness
+        S_OPTS="󰃠 $(brightness_label)
 󰍹 Displays
-󰄀 Capture (Print: screenshot, Mod+Print: more)
-󰌾 Lock & Idle (Mod+L: lock now)
-$PERF_LABEL
+󰄀 Capture (Print: screenshot, Super+Print: more)
+󰌾 Lock & Idle (Super+L: lock now)
 $NIGHT_LABEL
 󰌍 Back"
 
@@ -65,8 +61,6 @@ $NIGHT_LABEL
             capture_menu
         elif [[ "$S_CHOICE" =~ "Lock" ]]; then
             lock_menu
-        elif [[ "$S_CHOICE" =~ "Bar Stats" ]]; then
-            bar_stats_toggle
         elif [[ "$S_CHOICE" =~ "Night Light" ]]; then
             night_light_menu
         fi
@@ -74,30 +68,33 @@ $NIGHT_LABEL
 }
 
 # CPU/RAM figures in the Classic bar (status.sh)
+# CPU and RAM in the bar. Listed in Desktop & UI with the bar's other settings.
 bar_stats_toggle() {
     mkdir -p "$HOME/.config/tebian"
     if [ -f "$HOME/.config/tebian/bar_perf_off" ]; then
         rm "$HOME/.config/tebian/bar_perf_off"
-        tnotify "Screen" "Bar stats on"
+        tnotify "UI" "Bar stats on"
     else
         touch "$HOME/.config/tebian/bar_perf_off"
-        tnotify "Screen" "Bar stats off"
+        tnotify "UI" "Bar stats off"
     fi
     # Restart status bar to apply
     pkill -f '\.local/bin/status\.sh' 2>/dev/null
-    swaymsg reload 2>/dev/null &
+    swaymsg reload >/dev/null 2>&1 &
 }
 
 night_light_menu() {
     # Install wlsunset if needed
     if ! command -v wlsunset &>/dev/null; then
-        NL_OPTS="󰖔 Install Night Light (wlsunset)
-󰌍 Back"
-        NL_CHOICE=$(echo -e "$NL_OPTS" | tfuzzel -d -p " 󰖔 Night Light | ")
-        if [[ "$NL_CHOICE" =~ "Install" ]]; then
-            $TERM_CMD bash -c 'sudo apt update && sudo apt install -y wlsunset; echo "Done!"; read -p "Press Enter..."'
+        NL_CHOICE=$(printf '%s\n' "󰖔 Install Night Light (wlsunset)" "󰌍 Back" \
+            | tfuzzel -d -p " 󰖔 Night Light (Not Installed) | ")
+        [ -n "$NL_CHOICE" ] || menu_close
+        if is_back "$NL_CHOICE"; then return; fi
+        # Straight on to the settings once it is there, rather than back out
+        if ! tebian_term_apt_install wlsunset || ! command -v wlsunset &>/dev/null; then
+            tnotify "Night Light" "wlsunset could not be installed"
+            return
         fi
-        return
     fi
 
     while true; do
@@ -106,31 +103,45 @@ night_light_menu() {
         local TEMP=$(cat "$CONF" 2>/dev/null)
         : "${TEMP:=3500}"
 
+        local NL_ON=0 m45="" m35="" m25="" m15=""
         if pgrep -x wlsunset &>/dev/null; then
-            TOGGLE="󰖔 Turn Off"
+            NL_ON=1
+            TOGGLE="󰖔 Night Light (ON)"
         else
-            TOGGLE="󰖔 Turn On"
+            TOGGLE="󰖔 Night Light (OFF)"
         fi
+        # The warmth it has, or will have when switched on
+        case "$TEMP" in
+            4500) m45="  ● current" ;;
+            3500) m35="  ● current" ;;
+            2500) m25="  ● current" ;;
+            1500) m15="  ● current" ;;
+        esac
 
         NL_OPTS="$TOGGLE
-󰖔 Low Warmth (4500K)
-󰖔 Medium Warmth (3500K)
-󰖔 High Warmth (2500K)
-󰖔 Max Warmth (1500K)
-Current: ${TEMP}K
+󰖔 Low Warmth (4500K)$m45
+󰖔 Medium Warmth (3500K)$m35
+󰖔 High Warmth (2500K)$m25
+󰖔 Max Warmth (1500K)$m15
 󰌍 Back"
-        NL_CHOICE=$(echo -e "$NL_OPTS" | tfuzzel -d -p " 󰖔 Night Light | ")
+        NL_CHOICE=$(echo "$NL_OPTS" | tfuzzel -d -p " 󰖔 Night Light | ")
 
         [ -n "$NL_CHOICE" ] || menu_close
-        if is_back "$NL_CHOICE" || [[ "$NL_CHOICE" =~ "Current" ]]; then return; fi
+        if is_back "$NL_CHOICE"; then return; fi
 
         local NEW_TEMP=""
-        if [[ "$NL_CHOICE" =~ "Turn Off" ]]; then
-            pkill wlsunset
+        if [[ "$NL_CHOICE" =~ "Night Light" ]] && [ "$NL_ON" = 1 ]; then
+            pkill -x wlsunset
+            # It takes a moment to go, and the menu drawn next asks whether
+            # it is running: without the wait it still said ON
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                pgrep -x wlsunset >/dev/null || break
+                sleep 0.1
+            done
             # Stays off after the next login too
             tebian_block_remove nightlight
-            tnotify "Night Light" "Disabled"
-        elif [[ "$NL_CHOICE" =~ "Turn On" ]]; then
+            tnotify "Night Light" "Off"
+        elif [[ "$NL_CHOICE" =~ "Night Light" ]]; then
             NEW_TEMP=$TEMP
         elif [[ "$NL_CHOICE" =~ "Low" ]]; then
             NEW_TEMP=4500
@@ -146,7 +157,7 @@ Current: ${TEMP}K
             TEMP=$NEW_TEMP
             mkdir -p "$(dirname "$CONF")"
             echo "$TEMP" > "$CONF"
-            pkill wlsunset 2>/dev/null
+            pkill -x wlsunset 2>/dev/null
             # Near-constant warmth: with the default sun-based schedule (lat/long 0)
             # the display would stay at the 6500K day temp during computed daytime
             wlsunset -t "$TEMP" -T $((TEMP + 100)) &
@@ -159,23 +170,54 @@ Current: ${TEMP}K
     done
 }
 
+# brightnessctl's view of the screen backlight: "<percent>", or "none"
+# (a desktop monitor has none: its brightness is on its own buttons), or
+# "missing" (not installed). -c backlight: the first device is otherwise
+# whatever brightnessctl finds first, a keyboard light on some laptops.
+brightness_level() {
+    command -v brightnessctl &>/dev/null || { echo missing; return; }
+    local pct
+    pct=$(brightnessctl -m -c backlight 2>/dev/null | head -1 | cut -d, -f4)
+    pct=${pct%\%}
+    [[ "$pct" =~ ^[0-9]+$ ]] && echo "$pct" || echo none
+}
+
+brightness_label() {
+    local lvl
+    lvl=$(brightness_level)
+    case "$lvl" in
+        missing) echo "Brightness (Not Installed)" ;;
+        none)    echo "Brightness (Not adjustable here)" ;;
+        *)       echo "Brightness (Current: ${lvl}%)" ;;
+    esac
+}
+
 screen_menu() {
     while true; do
-    SCREEN_OPTS="󰃠 Brightness Up (+10%)
-󰃟 Brightness Down (-10%)
-󰍹 Display Outputs
-󰌢 Display Layout (GUI)
-󰌍 Back"
-    S_CHOICE=$(echo -e "$SCREEN_OPTS" | tfuzzel -d -p " 󰌢 Screen | ")
+    local lvl S_CHOICE
+    lvl=$(brightness_level)
+    if [ "$lvl" = missing ]; then
+        # The base install has no brightnessctl; offer it, as the keys need it too
+        if ! tebian_term_apt_install brightnessctl || ! command -v brightnessctl &>/dev/null; then
+            tnotify "Brightness" "brightnessctl could not be installed"
+            return
+        fi
+        continue
+    fi
+    if [ "$lvl" = none ]; then
+        tnotify "Brightness" "No brightness control for this screen. Use the buttons on the monitor."
+        return
+    fi
+    S_CHOICE=$(printf '%s\n' "󰃠 Brighter (+10%)" "󰃟 Dimmer (-10%)" "󰌍 Back" \
+        | tfuzzel -d -p " 󰃠 Brightness ${lvl}% | ")
 
     [ -n "$S_CHOICE" ] || menu_close
     if is_back "$S_CHOICE"; then return; fi
 
-    if [[ "$S_CHOICE" =~ "Brightness Up" ]]; then brightnessctl set +10%
-    elif [[ "$S_CHOICE" =~ "Brightness Down" ]]; then brightnessctl set 10%-
-    elif [[ "$S_CHOICE" =~ "Display Outputs" ]]; then display_output_menu
-    elif [[ "$S_CHOICE" =~ "Display Layout" ]]; then
-        display_layout_gui
+    if [[ "$S_CHOICE" =~ "Brighter" ]]; then
+        brightnessctl -q -c backlight set +10% || tnotify "Brightness" "Could not change the brightness"
+    elif [[ "$S_CHOICE" =~ "Dimmer" ]]; then
+        brightnessctl -q -c backlight set 10%- || tnotify "Brightness" "Could not change the brightness"
     fi
     done
 }
@@ -190,24 +232,24 @@ display_layout_gui() {
     setsid -f wdisplays >/dev/null 2>&1 < /dev/null
 }
 
+# Each screen is a switch: "<name> <make model> (ON: <size>)" or "(OFF)".
+# Picked by its connector name (the first word), which sway keeps unique
+# and which holds no spaces; the make and model are whatever the monitor
+# reports and could hold any words.
 display_output_menu() {
     while true; do
-    # Get connected outputs as JSON
     local output_json
     output_json=$(swaymsg -t get_outputs 2>/dev/null)
 
     OUTPUTS=$(echo "$output_json" | python3 -c "
 import json, sys
 try:
-    outputs = json.load(sys.stdin)
-    for o in outputs:
-        name = o['name']
-        make = o.get('make', '')
-        model = o.get('model', '')
-        res = f\"{o['current_mode']['width']}x{o['current_mode']['height']}\" if o.get('current_mode') else 'off'
-        active = '●' if o.get('active') else '○'
-        print(f'{active} {name} - {make} {model} ({res})')
-except:
+    for o in json.load(sys.stdin):
+        desc = ' '.join(w for w in (o.get('make', ''), o.get('model', '')) if w and w != 'Unknown')
+        m = o.get('current_mode')
+        state = f\"ON: {m['width']}x{m['height']}\" if o.get('active') and m else 'OFF'
+        print(f\"{o['name']}{'  ' + desc if desc else ''} ({state})\")
+except Exception:
     pass
 " 2>/dev/null)
 
@@ -223,25 +265,51 @@ import json, sys
 print(len([o for o in json.load(sys.stdin) if o.get('active')]))
 " 2>/dev/null)
 
-    D_OPTS="$OUTPUTS"
-    # Only show layout options when multiple outputs are connected
+    local -a names=() states=() rows=()
+    local line gui="󰌢 Resolution, Scale & Arrangement (wdisplays)"
+    command -v wdisplays &>/dev/null || gui="󰌢 Resolution, Scale & Arrangement (Not Installed)"
+    while IFS= read -r line; do
+        names+=("${line%% *}"); rows+=("󰍹 $line")
+        if [[ "$line" == *"(OFF)" ]]; then states+=(off); else states+=(on); fi
+    done <<< "$OUTPUTS"
+    # Only show layout options when multiple outputs are connected. No
+    # "Mirror All": sway cannot mirror outputs; stacking them all at 0,0
+    # showed different workspaces on each with a confused cursor
     if [ "$output_count" -gt 1 ]; then
-        D_OPTS+="\n───────────────"
-        D_OPTS+="\n󰇄 Extend Right"
-        D_OPTS+="\n󰇅 Extend Left"
-        D_OPTS+="\n󰆢 Extend Above"
-        D_OPTS+="\n󰆣 Extend Below"
-        D_OPTS+="\n󰍹 Position a Monitor..."
+        rows+=("───────────────" "󰇄 Extend Right" "󰇅 Extend Left" "󰆢 Extend Above" \
+            "󰆣 Extend Below" "󰍹 Position a Monitor...")
     fi
-    D_OPTS+="\n󰌍 Back"
+    rows+=("$gui" "󰌍 Back")
 
-    D_CHOICE=$(echo -e "$D_OPTS" | tfuzzel -d -p " 󰍹 Displays | ")
+    D_CHOICE=$(printf '%s\n' "${rows[@]}" | tfuzzel -d -p " 󰍹 Displays | " --width 56)
     [ -n "$D_CHOICE" ] || menu_close
     if is_back "$D_CHOICE"; then return; fi
 
-    # No "Mirror All": sway cannot mirror outputs; stacking them all at
-    # 0,0 showed different workspaces on each with a confused cursor
-    if [[ "$D_CHOICE" =~ "Extend Right" ]]; then
+    local picked="" picked_state i
+    line="${D_CHOICE#"${D_CHOICE%%[A-Za-z0-9]*}"}"
+    for i in "${!names[@]}"; do
+        [ "${line%% *}" = "${names[$i]}" ] && { picked=${names[$i]}; picked_state=${states[$i]}; }
+    done
+
+    if [ -n "$picked" ]; then
+        if [ "$picked_state" = on ]; then
+            # Never the last screen: nothing would be left to undo it from
+            if [ "${output_count:-0}" -le 1 ]; then
+                tnotify "Display" "$picked is the only screen on — not turning it off"
+                continue
+            fi
+            swaymsg "output $picked disable" >/dev/null
+            tnotify "Display" "$picked off until you log out or turn it back on"
+        else
+            swaymsg "output $picked enable" >/dev/null
+            tnotify "Display" "$picked on"
+        fi
+        save_display_layout
+
+    elif [[ "$D_CHOICE" =~ "Resolution, Scale" ]]; then
+        display_layout_gui
+
+    elif [[ "$D_CHOICE" =~ "Extend Right" ]]; then
         local pos=0
         echo "$output_json" | python3 -c "
 import json, sys
@@ -250,7 +318,7 @@ for o in json.load(sys.stdin):
         w = o.get('current_mode',{}).get('width',1920)
         print(o['name'], w)
 " 2>/dev/null | while read -r name width; do
-            swaymsg "output $name pos $pos 0"
+            swaymsg "output $name pos $pos 0" >/dev/null
             pos=$((pos + width))
         done
         tnotify "Display" "Extended right"
@@ -284,9 +352,9 @@ import json, sys
 t = sum(o.get('current_mode',{}).get('width',1920) for o in json.load(sys.stdin) if o.get('active') and o['name'] != '$pname')
 print(t)
 " 2>/dev/null)
-                swaymsg "output $name pos ${total_ext:-0} 0"
+                swaymsg "output $name pos ${total_ext:-0} 0" >/dev/null
             else
-                swaymsg "output $name pos $ext_offset 0"
+                swaymsg "output $name pos $ext_offset 0" >/dev/null
                 ext_offset=$((ext_offset + width))
             fi
         done
@@ -316,9 +384,9 @@ for o in json.load(sys.stdin):
         print(o['name'])
 " 2>/dev/null | while read -r name; do
             if [ "$name" = "$pname" ]; then
-                swaymsg "output $name pos 0 ${ext_h:-0}"
+                swaymsg "output $name pos 0 ${ext_h:-0}" >/dev/null
             else
-                swaymsg "output $name pos 0 0"
+                swaymsg "output $name pos 0 0" >/dev/null
             fi
         done
         tnotify "Display" "Extended above"
@@ -341,9 +409,9 @@ for o in json.load(sys.stdin):
         print(o['name'])
 " 2>/dev/null | while read -r name; do
             if [ "$name" = "$pname" ]; then
-                swaymsg "output $name pos 0 0"
+                swaymsg "output $name pos 0 0" >/dev/null
             else
-                swaymsg "output $name pos 0 $pheight"
+                swaymsg "output $name pos 0 $pheight" >/dev/null
             fi
         done
         tnotify "Display" "Extended below"
@@ -352,23 +420,6 @@ for o in json.load(sys.stdin):
     elif [[ "$D_CHOICE" =~ "Position a Monitor" ]]; then
         display_position_menu "$output_json"
 
-    elif [[ "$D_CHOICE" =~ "●" ]] || [[ "$D_CHOICE" =~ "○" ]]; then
-        local out_name
-        out_name=$(echo "$D_CHOICE" | awk '{print $2}')
-        if [[ "$D_CHOICE" =~ "●" ]]; then
-            # Never the last screen: nothing would be left to undo it from
-            if [ "${output_count:-0}" -le 1 ]; then
-                tnotify "Display" "$out_name is the only screen on — not turning it off"
-                continue
-            fi
-            swaymsg "output $out_name disable"
-            tnotify "Display" "$out_name off until you log out or turn it back on"
-            save_display_layout
-        else
-            swaymsg "output $out_name enable"
-            tnotify "Display" "$out_name enabled"
-            save_display_layout
-        fi
     fi
     done
 }
@@ -382,14 +433,12 @@ display_position_menu() {
 import json, sys
 for o in json.load(sys.stdin):
     if o.get('active'):
-        name = o['name']
-        make = o.get('make', '')
-        model = o.get('model', '')
-        print(f'{name} - {make} {model}')
+        desc = ' '.join(w for w in (o.get('make', ''), o.get('model', '')) if w and w != 'Unknown')
+        print(o['name'] + ('  ' + desc if desc else ''))
 " 2>/dev/null)
 
     local pick
-    pick=$(echo -e "$output_list\n󰌍 Back" | tfuzzel -d -p " Which monitor to move? | ")
+    pick=$(printf '%s\n' "$output_list" "󰌍 Back" | tfuzzel -d -p " Which monitor to move? | ")
     [ -n "$pick" ] || menu_close
     if is_back "$pick"; then return; fi
 
@@ -402,14 +451,12 @@ for o in json.load(sys.stdin):
 import json, sys
 for o in json.load(sys.stdin):
     if o.get('active') and o['name'] != '$move_name':
-        name = o['name']
-        make = o.get('make', '')
-        model = o.get('model', '')
-        print(f'{name} - {make} {model}')
+        desc = ' '.join(w for w in (o.get('make', ''), o.get('model', '')) if w and w != 'Unknown')
+        print(o['name'] + ('  ' + desc if desc else ''))
 " 2>/dev/null)
 
     local anchor
-    anchor=$(echo -e "$others\n󰌍 Back" | tfuzzel -d -p " Relative to which monitor? | ")
+    anchor=$(printf '%s\n' "$others" "󰌍 Back" | tfuzzel -d -p " Relative to which monitor? | ")
     if [ -z "$anchor" ] || is_back "$anchor"; then return; fi
 
     local anchor_name
@@ -454,56 +501,44 @@ for o in json.load(sys.stdin):
     mw=$(echo "$move_info" | cut -d' ' -f1)
     mh=$(echo "$move_info" | cut -d' ' -f2)
 
+    local where
     if [[ "$dir" =~ "Left" ]]; then
-        swaymsg "output $move_name pos $((ax - mw)) $ay"
+        where="left of"
+        swaymsg "output $move_name pos $((ax - mw)) $ay" >/dev/null
     elif [[ "$dir" =~ "Right" ]]; then
-        swaymsg "output $move_name pos $((ax + aw)) $ay"
+        where="right of"
+        swaymsg "output $move_name pos $((ax + aw)) $ay" >/dev/null
     elif [[ "$dir" =~ "Above" ]]; then
-        swaymsg "output $move_name pos $ax $((ay - mh))"
+        where="above"
+        swaymsg "output $move_name pos $ax $((ay - mh))" >/dev/null
     elif [[ "$dir" =~ "Below" ]]; then
-        swaymsg "output $move_name pos $ax $((ay + ah))"
+        where="below"
+        swaymsg "output $move_name pos $ax $((ay + ah))" >/dev/null
     fi
-    tnotify "Display" "$move_name positioned relative to $anchor_name"
+    [ -n "$where" ] || return
+    tnotify "Display" "$move_name moved $where $anchor_name"
     save_display_layout
 }
 
-screenshot_menu() {
-    if ! command -v grim &>/dev/null; then
-        notify-send "Screenshots" "Not installed. Use Install Essentials menu."
-        return
-    fi
-    
-    SCR_OPTS="󰆟 Region (Clipboard)
-󰹑 Full Screen (File)
-󰷊 Open Screenshots Folder
-󰌍 Back"
-    S_CHOICE=$(echo -e "$SCR_OPTS" | tfuzzel -d -p " 󰄀 Snaps | ")
-
-    [ -n "$S_CHOICE" ] || menu_close
-    if is_back "$S_CHOICE"; then return; fi
-
-    if [[ "$S_CHOICE" =~ "Region" ]]; then
-        mkdir -p ~/Pictures/Screenshots
-        FILE=~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied to clipboard"
-    elif [[ "$S_CHOICE" =~ "Full Screen" ]]; then
-        mkdir -p ~/Pictures/Screenshots
-        grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
-        notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"
-    elif [[ "$S_CHOICE" =~ "Open Screenshots" ]]; then
-        if command -v thunar &>/dev/null; then
-            thunar ~/Pictures/Screenshots &
-        else
-            notify-send "File Manager" "Not installed"
-        fi
-    fi
-}
 
 lock_menu() {
     while true; do
     if ! command -v gtklock &>/dev/null; then
-        tnotify "Screen Lock" "Not installed. Use Install Essentials menu."
-        return
+        # Offered here rather than sent off to Software > Install Essentials;
+        # the same install as there (gtklock, swayidle and its setup)
+        L_CHOICE=$(printf '%s\n' "󰌾 Install Screen Lock (gtklock)" "󰌍 Back" \
+            | tfuzzel -d -p " 󰌾 Screen Lock (Not Installed) | ")
+        [ -n "$L_CHOICE" ] || menu_close
+        if is_back "$L_CHOICE"; then return; fi
+        $TERM_CMD bash -c "
+            sudo apt update && sudo apt install -y gtklock swayidle && tebian-lockscreen-setup
+            read -p 'Press Enter...'
+        "
+        if ! command -v gtklock &>/dev/null; then
+            tnotify "Screen Lock" "gtklock could not be installed"
+            return
+        fi
+        continue
     fi
 
     # The saved setting is the truth (swayidle may just be restarting);
@@ -513,24 +548,24 @@ lock_menu() {
     [ -f "$TEBIAN_IDLE_CONF" ] && . "$TEBIAN_IDLE_CONF"
     if [ "$AUTOLOCK" = on ]; then
         IDLE_STATE="ON"
-        IDLE_LABEL="󰗊 Disable Auto-Lock (ON, ${LOCK_MINUTES} min; still locks on suspend)"
+        IDLE_LABEL="󰗊 Auto-Lock (ON: after ${LOCK_MINUTES} min idle)"
     else
         IDLE_STATE="OFF"
-        IDLE_LABEL="󰗈 Enable Auto-Lock (OFF; still locks on suspend)"
+        IDLE_LABEL="󰗈 Auto-Lock (OFF: still locks on suspend)"
     fi
 
     if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
         KEY_STATE="ON"
-        KEY_LABEL="󰌌 Disable Super+L Keybind (Currently: ON)"
+        KEY_LABEL="󰌌 Super+L Locks the Screen (ON)"
     else
         KEY_STATE="OFF"
-        KEY_LABEL="󰌌 Enable Super+L Keybind (Currently: OFF)"
+        KEY_LABEL="󰌌 Super+L Locks the Screen (OFF)"
     fi
 
     LOCK_OPTS="󰌾 Lock Now
 $IDLE_LABEL
 $KEY_LABEL
-󰔛 Set Lock Timeout
+󰔛 Auto-Lock Timeout
 󰌍 Back"
     L_CHOICE=$(echo -e "$LOCK_OPTS" | tfuzzel -d -p " 󰌾 Lock | " --width 56)
 
@@ -539,40 +574,45 @@ $KEY_LABEL
 
     if [[ "$L_CHOICE" =~ "Lock Now" ]]; then
         gtklock -d
+    elif [[ "$L_CHOICE" =~ "Auto-Lock Timeout" ]]; then
+        lock_timeout_menu
     elif [[ "$L_CHOICE" =~ "Auto-Lock" ]]; then
         if [[ "$IDLE_STATE" == "ON" ]]; then
             tebian_idle_set off "$LOCK_MINUTES"
-            tnotify "Screen Lock" "Auto-lock disabled"
+            tnotify "Screen Lock" "Auto-lock off (still locks on suspend)"
         else
             tebian_idle_set on "$LOCK_MINUTES"
-            tnotify "Screen Lock" "Auto-lock enabled ($LOCK_MINUTES min)"
+            tnotify "Screen Lock" "Auto-lock on ($LOCK_MINUTES min)"
         fi
     elif [[ "$L_CHOICE" =~ "Super+L" ]]; then
         mkdir -p ~/.config/sway
         if [[ "$KEY_STATE" == "ON" ]]; then
             sed -i '/bindsym.*exec gtklock/d' ~/.config/sway/config.user 2>/dev/null
-            tnotify "Screen Lock" "Super+L keybind disabled"
-            swaymsg reload 2>/dev/null &
+            tnotify "Screen Lock" "Super+L no longer locks the screen"
+            swaymsg reload >/dev/null 2>&1 &
         else
             echo 'bindsym $mod+l exec gtklock -d' >> ~/.config/sway/config.user
-            tnotify "Screen Lock" "Super+L keybind enabled"
-            swaymsg reload 2>/dev/null &
+            tnotify "Screen Lock" "Super+L locks the screen"
+            swaymsg reload >/dev/null 2>&1 &
         fi
-    elif [[ "$L_CHOICE" =~ "Set Lock Timeout" ]]; then
-        lock_timeout_menu
     fi
     done
 }
 
 lock_timeout_menu() {
-    TO_OPTS="󰔛 1 minute
-󰔛 3 minutes
-󰔛 5 minutes (default)
-󰔛 10 minutes
-󰔛 15 minutes
-󰔛 30 minutes
-󰌍 Back"
-    T_CHOICE=$(echo -e "$TO_OPTS" | tfuzzel -d -p " 󰔛 Timeout | ")
+    local AUTOLOCK=on LOCK_MINUTES=5 m label TO_OPTS=""
+    # shellcheck disable=SC1090
+    [ -f "$TEBIAN_IDLE_CONF" ] && . "$TEBIAN_IDLE_CONF"
+    for m in 1 3 5 10 15 30; do
+        label="󰔛 $m minutes"
+        [ "$m" = 1 ] && label="󰔛 1 minute"
+        [ "$m" = 5 ] && label+=" (default)"
+        # Only while auto-lock is on: off, no timeout is in use
+        [ "$AUTOLOCK" = on ] && [ "$m" = "$LOCK_MINUTES" ] && label+="  ● current"
+        TO_OPTS+="$label"$'\n'
+    done
+    TO_OPTS+="󰌍 Back"
+    T_CHOICE=$(printf '%s\n' "$TO_OPTS" | tfuzzel -d -p " 󰔛 Auto-Lock Timeout | ")
 
     [ -n "$T_CHOICE" ] || menu_close
     if is_back "$T_CHOICE"; then return; fi
@@ -583,6 +623,6 @@ lock_timeout_menu() {
 
     # Picking a timeout implies auto-lock on; saved so it survives a login
     tebian_idle_set on "$MINS"
-    tnotify "Screen Lock" "Lock timeout set to $MINS minutes"
+    tnotify "Screen Lock" "Auto-lock on, after $MINS min idle"
 }
 

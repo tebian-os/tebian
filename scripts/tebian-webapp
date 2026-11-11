@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # TEBIAN WEB APPS
-# A website as its own app: a launcher in Mod+D, the App Drawer and the dock,
+# A website as its own app: a launcher in Super+D, the App Drawer and the dock,
 # opening the site in a window of its own (a Chrome-based browser's --app
 # mode). Settings > Software > Web Apps is the menu for this.
 #
@@ -12,7 +12,7 @@
 #   tebian-webapp set-url <id> <url> [--no-icon]
 #   tebian-webapp refresh-icon <id>
 #   tebian-webapp remove <id>          launcher, icon and pin
-#   tebian-webapp pin|unpin <id>       Mod+D's pinned apps
+#   tebian-webapp pin|unpin <id>       Super+D's pinned apps
 #   tebian-webapp pinned <id>          exit 0 when pinned
 #   tebian-webapp browser              the browser open would use; 1 if none
 #   tebian-webapp check-name <name>    prints it cleaned up, or why not
@@ -585,7 +585,7 @@ icon_or_fallback() {  # id
 }
 
 # ------------------------------------------------------------------------------
-# Pins (Mod+D's pinned apps, the list the dock reads too)
+# Pins (Super+D's pinned apps, the list the dock reads too)
 # ------------------------------------------------------------------------------
 
 is_pinned() { grep -qxF "$1.desktop" "$PIN_FILE" 2>/dev/null; }
@@ -719,7 +719,7 @@ cmd_pin() {
     local id
     id=$(need_id "${1:-}")
     declare -F tebian_pins_init >/dev/null && tebian_pins_init
-    [ -f "$PIN_FILE" ] || { echo "Open the app menu (Mod+D) once, then pin." >&2; exit 1; }
+    [ -f "$PIN_FILE" ] || { echo "Open the app menu (Super+D) once, then pin." >&2; exit 1; }
     if declare -F tebian_pin_app >/dev/null; then
         tebian_pin_app "$id.desktop"
     elif ! is_pinned "$id"; then

@@ -66,8 +66,8 @@ if [ -f "$LOCK" ]; then
 fi
 
 case "$FREE" in
-    left-half) SIDE="Left" ;;
-    right-half) SIDE="Right" ;;
+    left-half) SIDE="left" ;;
+    right-half) SIDE="right" ;;
     *) exit 0 ;;
 esac
 
@@ -132,7 +132,7 @@ trap '[ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"' EXIT
 # like the window switcher.
 LINES_N=${#IDS[@]}
 [ "$LINES_N" -gt 15 ] && LINES_N=15
-PICK=$(print_entries | tfuzzel -d --index -p " 󰖲 Fill $SIDE | " --width 60 --lines "$LINES_N" || true)
+PICK=$(print_entries | tfuzzel -d --index -p " 󰖲 Fill the $SIDE half | " --width 60 --lines "$LINES_N" || true)
 [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
 [[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#IDS[@]}" ] || exit 0
 

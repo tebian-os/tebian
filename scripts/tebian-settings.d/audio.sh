@@ -5,23 +5,23 @@
 # Audio submenu: mixer, output, input, microphone mute
 audio_menu() {
     while true; do
-        local out_label in_label mute_label choice
+        local out_label in_label mute_label choice out in
         if command -v wpctl &>/dev/null; then
-            out_label=$(audio_default_name SINK)
-            in_label=$(audio_default_name SOURCE)
-            if [ -z "$in_label" ]; then
-                mute_label="Mute Microphone (No microphone)"
+            out=$(audio_default_name SINK)
+            in=$(audio_default_name SOURCE)
+            if [ -z "$in" ]; then
+                mute_label="Microphone (None found)"
             elif mic_is_muted; then
-                mute_label="Mute Microphone (ON)"
+                mute_label="Microphone (Muted)"
             else
-                mute_label="Mute Microphone (OFF)"
+                mute_label="Microphone (ON)"
             fi
-            out_label="Switch Output (${out_label:-None})"
-            in_label="Switch Input (${in_label:-None})"
+            out_label="Output Device (${out:+Current: }${out:-None found})"
+            in_label="Input Device (${in:+Current: }${in:-None found})"
         else
-            out_label="Switch Output (PipeWire not installed)"
-            in_label="Switch Input (PipeWire not installed)"
-            mute_label="Mute Microphone (PipeWire not installed)"
+            out_label="Output Device (PipeWire Not Installed)"
+            in_label="Input Device (PipeWire Not Installed)"
+            mute_label="Microphone (PipeWire Not Installed)"
         fi
 
         choice=$(printf '%s\n' "󰕾 Audio Mixer" "󰓃 $out_label" "󰍬 $in_label" \
@@ -35,9 +35,9 @@ audio_menu() {
         choice="${choice#"${choice%%[A-Za-z]*}"}"
         case "$choice" in
             "Audio Mixer"*)     audio_mixer ;;
-            "Switch Output"*)   audio_output_menu ;;
-            "Switch Input"*)    audio_input_menu ;;
-            "Mute Microphone"*) mic_mute_toggle ;;
+            "Output Device"*)   audio_output_menu ;;
+            "Input Device"*)    audio_input_menu ;;
+            "Microphone"*)      mic_mute_toggle ;;
         esac
     done
 }
@@ -121,9 +121,10 @@ mic_is_muted() {
 audio_output_menu() { audio_pick_device Sinks; }
 audio_input_menu()  { audio_pick_device Sources; }
 
-# Picker for Sinks or Sources. Labels are device names; the default gets
-# "(Current)", and repeated names (two identical HDMI ports) get their
-# position, so each label maps back to exactly one id.
+# Picker for Sinks or Sources. Labels are device names; the default is
+# marked "● current", and repeated names (two identical HDMI ports) get
+# their position. Picked by position (--index): a device is named by its
+# maker, and one called "Back" was taken for the Back entry.
 audio_pick_device() {
     local sect="$1" kind title
     if [ "$sect" = Sinks ]; then kind="output"; title="󰓃 Output"
@@ -138,7 +139,7 @@ audio_pick_device() {
         seen=0
         for l in "${names[@]}"; do [ "$l" = "$name" ] && seen=$((seen + 1)); done
         [ "$seen" -gt 0 ] && label="$name ($((seen + 1)))"
-        [ "$def" = 1 ] && { label="$label (Current)"; cur="$name"; }
+        [ "$def" = 1 ] && cur="$name"
         ids+=("$id"); defs+=("$def"); names+=("$name"); labels+=("$label")
         n=$((n + 1))
     done < <(audio_nodes "$sect")
@@ -152,36 +153,48 @@ audio_pick_device() {
         return
     fi
 
-    local choice i
-    choice=$(printf '%s\n' "${labels[@]}" "󰌍 Back" | tfuzzel -d -p " $title | " --width 60)
-    [ -n "$choice" ] || menu_close
-    if is_back "$choice"; then return; fi
-    # Device labels carry no glyph, so icon and text mode return the same text
+    local pick i
+    local -a shown=()
     for i in "${!labels[@]}"; do
-        [ "${labels[$i]}" = "$choice" ] || continue
-        [ "${defs[$i]}" = 1 ] && return
-        if wpctl set-default "${ids[$i]}"; then
-            tnotify "Audio ${kind^}" "Switched to: ${labels[$i]}"
-        else
-            tnotify "Audio ${kind^}" "Could not switch to: ${labels[$i]}"
-        fi
-        return
+        if [ "${defs[$i]}" = 1 ]; then shown+=("${labels[$i]}  ● current")
+        else shown+=("${labels[$i]}"); fi
     done
+    pick=$(printf '%s\n' "${shown[@]}" "󰌍 Back" | tfuzzel -d --index -p " $title | " --width 60)
+    [ -n "$pick" ] || menu_close
+    # Back, or typed text that matched nothing
+    [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -lt "$n" ] || return
+    [ "${defs[$pick]}" = 1 ] && return
+    label="${labels[$pick]}"
+    if wpctl set-default "${ids[$pick]}"; then
+        tnotify "Audio ${kind^}" "Switched to $label"
+    else
+        tnotify "Audio ${kind^}" "Could not switch to $label"
+    fi
 }
 
+# Set to the opposite of what it is, not "toggle": the state is read back
+# for the label and the notification, and a toggle read straight after
+# could still show the old state
 mic_mute_toggle() {
     audio_need_wpctl || return
     if [ -z "$(audio_default_name SOURCE)" ]; then
         tnotify "Microphone" "No microphone found"
         return
     fi
-    if ! wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; then
+    local want=1 _
+    mic_is_muted && want=0
+    if ! wpctl set-mute @DEFAULT_AUDIO_SOURCE@ "$want"; then
         tnotify "Microphone" "Could not change mute"
         return
     fi
-    if mic_is_muted; then
-        tnotify "Microphone" "Muted"
+    # The change lands a moment later; the menu redrawn next asks for it
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [ "$want" = 1 ]; then mic_is_muted && break; else mic_is_muted || break; fi
+        sleep 0.1
+    done
+    if [ "$want" = 1 ]; then
+        tnotify "Microphone" "Microphone muted"
     else
-        tnotify "Microphone" "On"
+        tnotify "Microphone" "Microphone on"
     fi
 }

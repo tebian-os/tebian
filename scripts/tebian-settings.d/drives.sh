@@ -30,11 +30,11 @@ drives_menu() {
         local opts disk part label mounted
 
         if [ -f "$flag_off" ]; then
-            opts="󰋊 Drive Doctor (Current: Off)"
+            opts="󰋊 Drive Doctor (OFF)"
         elif _drive_doctor_running; then
-            opts="󰋊 Drive Doctor (Current: On)"
+            opts="󰋊 Drive Doctor (ON)"
         else
-            opts="󰋊 Drive Doctor (Current: Not running — select to start)"
+            opts="󰋊 Drive Doctor (ON, not running: select to start)"
         fi
         if [ -f "$flag_ask" ]; then
             opts+="\n󰑓 Healthy Drives (Current: Ask before mounting)"
@@ -47,7 +47,7 @@ drives_menu() {
         # Without the root-side probe, sick drives are only noticed once a
         # mount has already failed — offer the install rather than hide it
         if [ ! -f "$rule" ] || [ ! -x "$probe" ]; then
-            opts+="\n󰒃 Install Health Probe (Missing — needs sudo)"
+            opts+="\n󰒃 Drive Health Check (Not Installed)"
         fi
 
         # One eject entry per USB disk that has something mounted
@@ -67,12 +67,23 @@ drives_menu() {
         [ -n "$D_CHOICE" ] || menu_close
         if is_back "$D_CHOICE"; then return; fi
 
-        if [[ "$D_CHOICE" =~ "Drive Doctor" ]]; then
+        # Eject rows first, matched whole: they carry the drive's own label,
+        # and a stick named "Healthy Drives" toggled that setting instead
+        if [[ "$D_CHOICE" =~ ^[^A-Za-z]*Eject\ .*\((/dev/[a-zA-Z0-9]+)\)$ ]]; then
+            tebian-drive-doctor eject "${BASH_REMATCH[1]}"
+        elif [[ "$D_CHOICE" =~ "Drive Doctor" ]]; then
             mkdir -p "$HOME/.config/tebian"
             if [ -f "$flag_off" ] || ! _drive_doctor_running; then
                 rm -f "$flag_off"
                 _drive_doctor_autostart
                 setsid tebian-drive-doctor watch >/dev/null 2>&1 &
+                # The watcher writes its pid file a moment after it starts;
+                # without the wait the menu came back still saying "not running"
+                local _i
+                for _i in 1 2 3 4 5 6 7 8 9 10; do
+                    _drive_doctor_running && break
+                    sleep 0.1
+                done
                 tnotify "Drives" "Drive Doctor on — USB drives mount when plugged in"
             else
                 touch "$flag_off"
@@ -98,10 +109,13 @@ drives_menu() {
         elif [[ "$D_CHOICE" =~ "Check Plugged-in" ]]; then
             # --all: also re-ask about drives that were ignored earlier
             tebian-drive-doctor scan --all &
-            return
+            # Its questions are fuzzel menus, which wait for the screen to be
+            # free: going back to a Settings menu left them queued behind it
+            tnotify "Drives" "Checking plugged-in USB drives"
+            menu_close
         elif [[ "$D_CHOICE" =~ "Format a Drive" ]]; then
             format_drive_menu
-        elif [[ "$D_CHOICE" =~ "Install Health Probe" ]]; then
+        elif [[ "$D_CHOICE" =~ "Drive Health Check" ]]; then
             local _tdir="${TEBIAN_DIR:-$HOME/Tebian}"
             $TERM_CMD bash -c "
                 echo 'Installing the Drive Doctor health probe (udev rule + root-owned script)...'
@@ -113,8 +127,6 @@ drives_menu() {
                 read -rp 'Press Enter to close. '
             "
             tlog "Drives: health probe install attempted"
-        elif [[ "$D_CHOICE" =~ Eject.*\((/dev/[a-zA-Z0-9]+)\) ]]; then
-            tebian-drive-doctor eject "${BASH_REMATCH[1]}"
         fi
     done
 }
