@@ -210,7 +210,7 @@ titlebars_set() {
     local b="pixel 2"
     if [ "$1" = on ]; then
         b="normal 2"
-        tebian_block_set titlebars "default_border normal 2" "default_floating_border normal 2"
+        tebian_block_set titlebars "${TEBIAN_TITLEBAR_LINES[@]}"
     else
         tebian_block_remove titlebars
     fi

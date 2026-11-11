@@ -664,11 +664,30 @@ tebian_block_add_line() {
     fi
 }
 
+# Title bars on. default_border alone misses every app that draws its own
+# window frame (GTK dialogs, Chromium-family browsers): sway leaves those
+# to the app, so on a fresh Desktop install they had no title bar until the
+# switch was turned off and on, which applies "border normal" to the open
+# windows. The for_window rules do that for each window as it opens.
+TEBIAN_TITLEBAR_LINES=(
+    'default_border normal 2'
+    'default_floating_border normal 2'
+    'for_window [app_id=".*"] border normal 2'
+    'for_window [class=".*"] border normal 2'
+)
+
 # Convert old one-line markers ("cmd # tebian-name") into blocks. Idempotent
 # and cheap: runs at every login (tebian-session) and when Settings opens.
 tebian_user_migrate() {
     local file="${1:-$TEBIAN_SWAY_USER}" key line
     [ -f "$file" ] || return 0
+
+    # Title bars turned on before the for_window rules existed: add them,
+    # so apps with their own frame get a title bar too (see above)
+    if tebian_block_has titlebars "$file" &&
+       ! tebian_block_get titlebars "$file" | grep -q '^for_window '; then
+        tebian_block_set_in "$file" titlebars "${TEBIAN_TITLEBAR_LINES[@]}"
+    fi
 
     # Older templates bound bare Ctrl+Left/Right to workspace switching,
     # which steals word-jump from every text field. Only the exact shipped

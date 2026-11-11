@@ -369,8 +369,7 @@ if [[ "$CHOICE" =~ "Desktop" ]]; then
 
         # Enable floating mode by default (familiar experience)
         setup_floating_mode
-        idempotent_append "default_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
-        idempotent_append "default_floating_border normal 2 # tebian-titlebars-on" "$HOME/.config/sway/config.user"
+        tebian_block_set titlebars "${TEBIAN_TITLEBAR_LINES[@]}"
         echo "  Floating mode with title bars enabled"
 
         # Modern bar (Waybar: hover buttons, drop-down menus). Base mode

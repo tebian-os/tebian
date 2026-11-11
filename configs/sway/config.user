@@ -60,4 +60,6 @@ bindsym $mod+Ctrl+Down snap restore
 # tebian:titlebars {
 default_border normal 2
 default_floating_border normal 2
+for_window [app_id=".*"] border normal 2
+for_window [class=".*"] border normal 2
 # tebian:titlebars }
