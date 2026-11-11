@@ -284,6 +284,16 @@ else
     fail "pins: first pin lost the defaults"
 fi
 
+# The kitty config a user gets is the theme's copy, not configs/kitty: a
+# setting added only there never reached anyone (new terminals kept opening
+# at the setup window's full-screen size)
+bad=0
+for f in configs/themes/*/kitty.conf; do
+    grep -q '^remember_window_size no' "$f" && grep -q '^initial_window_width' "$f" ||
+        { fail "kitty: $f lacks the window size lines of configs/kitty/kitty.conf"; bad=1; }
+done
+[ "$bad" = 0 ] && pass "kitty: every theme opens new windows at a set size"
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then

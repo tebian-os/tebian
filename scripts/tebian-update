@@ -610,6 +610,21 @@ if [ -f "$MAKO_CUR" ] && [ ! -f "$MAKO_MARK" ] && [ -n "$MAKO_DND" ]; then
     touch "$MAKO_MARK"
 fi
 
+# --- 3d. New kitty windows at a normal size --------------------------------------
+# ~/.config/kitty/kitty.conf is a copy of the theme's, so the theme files
+# gaining these lines does not reach it. Without them kitty reopens at the
+# size of the last window closed: after setup that is the full-screen setup
+# terminal, title bar under the top bar. Appended once; a config that
+# already says anything about remember_window_size is the user's.
+KITTY_CUR="$HOME/.config/kitty/kitty.conf"
+if [ -f "$KITTY_CUR" ] && ! grep -q '^[[:space:]]*remember_window_size' "$KITTY_CUR"; then
+    KITTY_SIZE=$(sed -n '/^# A new window opens at this size/,$p' "$TEBIAN_DIR/configs/kitty/kitty.conf" 2>/dev/null) || KITTY_SIZE=""
+    if [ -n "$KITTY_SIZE" ]; then
+        printf '\n%s\n' "$KITTY_SIZE" >> "$KITTY_CUR"
+        info "Terminal: new windows open at a normal size (added to ~/.config/kitty/kitty.conf)"
+    fi
+fi
+
 # --- 4. Apply ---------------------------------------------------------------------
 if [ -n "$REBUILD" ]; then
     echo ""
