@@ -13,8 +13,8 @@ fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
 
-mkdir -p "$HOME/.config/tebian"
-[ -f "$PIN_FILE" ] || touch "$PIN_FILE"
+# The defaults, not an empty file, when this is the first menu opened
+tebian_pins_init
 
 # Every launchable app, sorted by name; labels carry the ID where two apps
 # share a name. Split by hand, not with `IFS=$'\t' read`: that merges the

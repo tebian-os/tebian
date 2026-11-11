@@ -46,7 +46,7 @@ screen_all_menu() {
 
         S_OPTS="󰃠 Brightness
 󰍹 Displays
-󰄀 Screenshots (Print: region, Shift+Print: full)
+󰄀 Capture (Print: screenshot, Mod+Print: more)
 󰌾 Lock & Idle (Mod+L: lock now)
 $PERF_LABEL
 $NIGHT_LABEL
@@ -61,8 +61,8 @@ $NIGHT_LABEL
             screen_menu
         elif [[ "$S_CHOICE" =~ "Displays" ]]; then
             display_output_menu
-        elif [[ "$S_CHOICE" =~ "Screenshots" ]]; then
-            screenshot_menu
+        elif [[ "$S_CHOICE" =~ "Capture" ]]; then
+            capture_menu
         elif [[ "$S_CHOICE" =~ "Lock" ]]; then
             lock_menu
         elif [[ "$S_CHOICE" =~ "Bar Stats" ]]; then

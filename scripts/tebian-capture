@@ -1,0 +1,260 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN CAPTURE
+# Everything that takes something off the screen, in one menu.
+#
+#   tebian-capture             the menu
+#   tebian-capture menu [--back]   the same; --back adds a Back entry and
+#                              exits 10 when it is picked (for Settings)
+#   tebian-capture region      screenshot of a dragged box: saved + copied
+#   tebian-capture screen      screenshot of every monitor: saved
+#   tebian-capture window      screenshot of a clicked window: saved + copied
+#   tebian-capture record      start/stop a screen recording (tebian-record)
+#   tebian-capture text        copy the text in a dragged box (OCR, tesseract)
+#   tebian-capture qr          read the QR code or barcode in a dragged box
+#                              (zbarimg) and copy what it says
+#
+# Screenshots keep the Print keys' behaviour and names:
+# ~/Pictures/Screenshots/screenshot-<date>_<time>.png. Text and codes are
+# read from a picture kept in memory and the runtime dir, never saved.
+# ==============================================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _f in "$SCRIPT_DIR/tebian-common" "$HOME/.local/bin/tebian-common"; do
+    # shellcheck disable=SC1090
+    [ -f "$_f" ] && { . "$_f"; break; }
+done
+unset _f
+
+SHOTS="$HOME/Pictures/Screenshots"
+RECORD="$SCRIPT_DIR/tebian-record"
+[ -x "$RECORD" ] || RECORD=tebian-record
+
+say() {  # title message
+    notify-send -a Tebian "$1" "$2" 2>/dev/null || echo "$1: $2" >&2
+}
+
+ask() {  # prompt [lines]; lines on stdin; prints the choice
+    if declare -F tfuzzel >/dev/null; then
+        tfuzzel -d -p "$1" --lines "${2:-2}" --width 45
+    else
+        fuzzel -d -p "$1" --lines "${2:-2}" --width 45
+    fi
+}
+
+# A terminal that waits for its command: the install below is checked
+# right after it (gnome-terminal and kin return at once)
+install_term() {
+    local t
+    t=$(tebian_term_cmd 2>/dev/null)
+    case "$t" in
+        ""|gnome-terminal*|kgx*|ptyxis*)
+            for t in kitty foot alacritty; do
+                command -v "$t" >/dev/null 2>&1 && { echo "$t -e"; return; }
+            done
+            echo "kitty -e" ;;
+        *) echo "$t" ;;
+    esac
+}
+
+# need COMMAND PACKAGE WHAT: true when COMMAND is there or was just
+# installed. Optional tools are offered on first use, not up front.
+need() {
+    command -v "$1" >/dev/null 2>&1 && return 0
+    local pick
+    pick=$(printf '%s\n' "Install $2" "Cancel" | ask " $3 needs $2 | ")
+    [[ "$pick" == Install* ]] || return 1
+    if declare -F tebian_term_apt_install >/dev/null; then
+        TERM_CMD="$(install_term)" tebian_term_apt_install "$2"
+    fi
+    command -v "$1" >/dev/null 2>&1 && return 0
+    say "$3" "$2 could not be installed"
+    return 1
+}
+
+need_grab() {  # grim, slurp, wl-copy: the desktop install has all three
+    need grim grim "Screen capture" && need slurp slurp "Screen capture" &&
+        need wl-copy wl-clipboard "Screen capture"
+}
+
+new_shot() {
+    mkdir -p "$SHOTS" && echo "$SHOTS/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png"
+}
+
+shot_region() {
+    local geo file
+    need_grab || return 1
+    geo=$(slurp 2>/dev/null)
+    [ -n "$geo" ] || return 0
+    file=$(new_shot) || return 1
+    grim -g "$geo" "$file" && wl-copy < "$file" && say "Screenshot" "Saved & copied to clipboard"
+}
+
+shot_screen() {
+    local file
+    need grim grim "Screen capture" || return 1
+    file=$(new_shot) || return 1
+    grim "$file" && say "Screenshot" "Saved to ~/Pictures/Screenshots/"
+}
+
+# Click a window to take it alone. slurp is given the visible windows'
+# boxes (sway's content rect, without border or title bar) and -r keeps
+# the pick to one of them. Without jq to read sway's tree, a box is
+# dragged instead.
+shot_window() {
+    local geo="" file boxes=""
+    need_grab || return 1
+    if command -v jq >/dev/null 2>&1; then
+        # shellcheck disable=SC2016
+        boxes=$(swaymsg -t get_tree 2>/dev/null | jq -r '
+            .. | select(.pid? and .visible?)
+            | "\(.rect.x + .window_rect.x),\(.rect.y + .window_rect.y) \(.window_rect.width)x\(.window_rect.height)"' 2>/dev/null)
+    fi
+    if [ -n "$boxes" ]; then
+        geo=$(slurp -r <<< "$boxes" 2>/dev/null)
+    else
+        geo=$(slurp 2>/dev/null)
+    fi
+    [ -n "$geo" ] || return 0
+    file=$(new_shot) || return 1
+    grim -g "$geo" "$file" && wl-copy < "$file" && say "Screenshot" "Window saved & copied to clipboard"
+}
+
+# A dragged box as a PNG in the runtime dir, for text and code reading.
+# Prints the path; the caller removes it. Optional: a scale.
+grab_box() {
+    local geo tmp
+    geo=$(slurp 2>/dev/null)
+    [ -n "$geo" ] || return 1
+    tmp=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/tebian-capture.XXXXXX.png") || return 1
+    if ! grim -s "${1:-1}" -g "$geo" "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        return 1
+    fi
+    echo "$tmp"
+}
+
+# The first words of TEXT, on one line, for a notification
+preview() {
+    local s
+    s=$(tr '\n\t' '  ' <<< "$1" | tr -s ' ')
+    s="${s# }" s="${s% }"
+    [ "${#s}" -gt 90 ] && s="${s:0:90}…"
+    printf '%s' "$s"
+}
+
+# Every installed language (tesseract-ocr-deu, -fra, ...), so OCR reads
+# what the user installed without a setting; osd is not a language
+ocr_langs() {
+    local langs
+    langs=$(tesseract --list-langs 2>/dev/null | awk 'NR > 1 && $1 != "osd" { print $1 }' | paste -sd+)
+    echo "${langs:-eng}"
+}
+
+copy_text() {
+    local img text
+    need_grab && need tesseract tesseract-ocr "Copy Text" || return 1
+    # Twice the screen's pixels: small 1x text (10 px) came back with stray
+    # marks, at 2x it read clean; it costs a fraction of a second
+    img=$(grab_box 2) || return 0
+    # A page ends in a form feed; $( ) drops the blank lines around it
+    text=$(tesseract "$img" - -l "$(ocr_langs)" 2>/dev/null | tr -d '\f')
+    rm -f "$img"
+    if [ -z "${text//[[:space:]]/}" ]; then
+        say "Copy Text" "No text found in that area"
+        return 1
+    fi
+    printf '%s' "$text" | wl-copy
+    say "Text copied" "$(preview "$text")"
+}
+
+scan_qr() {
+    local img code
+    need_grab && need zbarimg zbar-tools "Scan QR Code" || return 1
+    img=$(grab_box) || return 0
+    code=$(zbarimg -q --raw "$img" 2>/dev/null)
+    rm -f "$img"
+    code="${code%$'\n'}"
+    if [ -z "$code" ]; then
+        say "Scan QR Code" "No QR code or barcode found in that area"
+        return 1
+    fi
+    printf '%s' "$code" | wl-copy
+    if [[ "$code" =~ ^https?://[^[:space:]]+$ ]] && command -v xdg-open >/dev/null 2>&1; then
+        # A link gets an Open button; the notification waits for the click
+        # in the background, so nothing is opened without one
+        (
+            act=$(notify-send -a Tebian -A open=Open "Link copied" "$code" 2>/dev/null)
+            [ "$act" = open ] && setsid -f xdg-open "$code" >/dev/null 2>&1 < /dev/null
+        ) > /dev/null 2>&1 &
+        disown 2>/dev/null
+    else
+        say "Code copied" "$(preview "$code")"
+    fi
+}
+
+open_folder() {
+    mkdir -p "$1"
+    if command -v xdg-open >/dev/null 2>&1; then
+        setsid -f xdg-open "$1" >/dev/null 2>&1 < /dev/null
+    elif command -v thunar >/dev/null 2>&1; then
+        setsid -f thunar "$1" >/dev/null 2>&1 < /dev/null
+    else
+        say "File Manager" "Not installed. The files are in ${1/#$HOME/\~}"
+    fi
+}
+
+menu() {
+    local back="${1:-}" rec_label ocr_label qr_label opts pick
+    if "$RECORD" status >/dev/null 2>&1; then
+        rec_label="󰑋 Stop Recording (REC)"
+    else
+        rec_label="󰑋 Record Screen..."
+    fi
+    ocr_label="󰅍 Copy Text from Screen"
+    command -v tesseract >/dev/null 2>&1 || ocr_label+=" (Not Installed)"
+    qr_label="󰐲 Scan QR Code"
+    command -v zbarimg >/dev/null 2>&1 || qr_label+=" (Not Installed)"
+
+    opts="󰆟 Screenshot Region (Print)
+󰹑 Screenshot Full Screen (Shift+Print)
+󰖲 Screenshot a Window
+$rec_label
+$ocr_label
+$qr_label
+󰷊 Open Screenshots Folder
+󰷊 Open Recordings Folder"
+    [ "$back" = --back ] && opts+=$'\n'"󰌍 Back"
+
+    pick=$(printf '%s\n' "$opts" | ask " 󰄀 Capture | " "$(grep -c . <<< "$opts")")
+    [ -n "$pick" ] || exit 0
+    [[ "$pick" == *Back* ]] && exit 10
+
+    # The menu has to be off the screen before the screen is taken
+    sleep 0.2
+    case "$pick" in
+        *"Screenshots Folder"*)     open_folder "$SHOTS" ;;
+        *"Recordings Folder"*)      open_folder "$HOME/Videos/Recordings" ;;
+        *"Screenshot Region"*)      shot_region ;;
+        *"Screenshot Full"*)        shot_screen ;;
+        *"Screenshot a Window"*)    shot_window ;;
+        *"Recording"*|*"Record "*)  "$RECORD" toggle ;;
+        *"Copy Text"*)              copy_text ;;
+        *"Scan QR"*)                scan_qr ;;
+    esac
+    exit 0
+}
+
+case "${1:-menu}" in
+    menu)   menu "${2:-}" ;;
+    region) shot_region ;;
+    screen) shot_screen ;;
+    window) shot_window ;;
+    record) shift; exec "$RECORD" toggle "$@" ;;
+    text)   copy_text ;;
+    qr)     scan_qr ;;
+    -h|--help|help) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "usage: tebian-capture [menu [--back]|region|screen|window|record|text|qr]" >&2; exit 2 ;;
+esac

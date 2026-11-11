@@ -28,7 +28,8 @@ SWAYFX_VERSION="0.6"
 # snap to edges and corners, easier resize) OR any pinned source below
 # changes. The private libraries in $PREFIX/lib get fixes only through a
 # rebuild, and tebian-update asks for one (--check) when this changes.
-TEBIAN_REV=1
+# 2: arrow keys step (thirds, quarters), next-output, floating_snap_assist
+TEBIAN_REV=2
 BUILD_ID="$SWAYFX_VERSION+tebian$TEBIAN_REV"
 PREFIX="/opt/tebian-swayfx"
 MARKER="$HOME/.config/tebian/swayfx-installed"
@@ -163,12 +164,16 @@ echo "[3/4] Building SwayFX (this takes a few minutes)..."
 # libdrm: core only (Mesa's own libdrm_amdgpu etc. come from the system).
 # xkbcommon: built here, so point it at the system keyboard data explicitly —
 # its default would look under /opt and find no layouts.
+# wayland: its build treats warnings as errors, and trixie's expat 2.9 (a
+# stable update) deprecates two functions wayland-scanner calls — that
+# warning alone stopped the build.
 meson setup build/ --prefix="$PREFIX" --libdir=lib --buildtype=release \
     --force-fallback-for=wayland-server,wayland-client,wayland-cursor,wayland-egl,wayland-scanner,wayland-protocols,pixman-1,libdrm,xkbcommon \
     -Dc_link_args="-Wl,-rpath,$PREFIX/lib" \
     -Dman-pages=disabled -Dswaybar=false -Dswaynag=false \
     -Dwlroots:examples=false \
     -Dwayland:documentation=false -Dwayland:tests=false -Dwayland:dtd_validation=false \
+    -Dwayland:werror=false \
     -Dpixman:tests=disabled -Dpixman:demos=disabled -Dpixman:gtk=disabled \
     -Dpixman:libpng=disabled -Dpixman:openmp=disabled \
     -Dlibdrm:intel=disabled -Dlibdrm:radeon=disabled -Dlibdrm:amdgpu=disabled \

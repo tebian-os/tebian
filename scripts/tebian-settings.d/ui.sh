@@ -55,6 +55,23 @@ ui_menu() {
     else
         SNAP_LABEL="󰖲 Window Snapping (Not Installed)"
     fi
+    # Snap Assist: after a window takes half the screen, offer the others
+    # for the free half. Only the current sway build can do it, so the
+    # entry is left out (not shown dead) until sway is rebuilt.
+    ASSIST_LABEL=""
+    if tebian_snap_rev2; then
+        if tebian_snap_assist_enabled; then
+            ASSIST_LABEL="󰖲 Snap Assist (ON)"
+        else
+            ASSIST_LABEL="󰖳 Snap Assist (OFF)"
+        fi
+    fi
+
+    if tebian-dock status >/dev/null 2>&1; then
+        DOCK_LABEL="󰀻 Dock (ON)"
+    else
+        DOCK_LABEL="󰀻 Dock (OFF)"
+    fi
 
     # Detect window effects (swayfx)
     if [ -f "$HOME/.config/tebian/swayfx-installed" ]; then
@@ -96,7 +113,9 @@ $CLOCK_LABEL
 $WEATHER_LABEL
 $FLOAT_LABEL
 $TITLE_LABEL
-$SNAP_LABEL
+$SNAP_LABEL${ASSIST_LABEL:+
+$ASSIST_LABEL}
+$DOCK_LABEL
 $FX_LABEL
 󰛖 Font Rendering
 󰌌 Keybinds (Mod+S: settings, Mod+D: apps)
@@ -157,6 +176,10 @@ $FX_LABEL
         clock_format_toggle
     elif [[ "$U_CHOICE" == *"Weather in Bar"* ]]; then
         weather_menu
+    elif [[ "$U_CHOICE" =~ "Snap Assist" ]]; then
+        snap_assist_toggle
+    elif [[ "$U_CHOICE" == *"Dock ("* ]]; then
+        dock_menu
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "Not Installed" ]]; then
         window_snapping_install
     elif [[ "$U_CHOICE" =~ "Window Snapping" ]] && [[ "$U_CHOICE" =~ "ON" ]]; then
@@ -239,7 +262,10 @@ Mod+Return ··· Terminal
 Mod+Shift+Q ··· Close Window
 Mod+F ··· Fullscreen
 Mod+Space ··· Toggle Float/Tile
-Mod+Ctrl+Arrows ··· Snap Window (Floating Mode)
+Mod+Ctrl+Arrows ··· Snap Window: halves, thirds, corners (Floating Mode)
+Mod+Ctrl+Return / BackSpace ··· Maximize / Restore Window
+Mod+Ctrl+1 2 3 ··· Snap to Left / Middle / Right Third
+Mod+Ctrl+Shift+Left/Right ··· Move Window to Other Monitor
 Mod+R ··· Resize Mode
 Mod+L ··· Lock Screen
 Mod+Tab ··· Switch Workspace
@@ -247,6 +273,9 @@ Mod+1-9 ··· Go to Workspace
 Mod+Shift+? ··· Show Key Helper
 Print ··· Screenshot (Region)
 Shift+Print ··· Screenshot (Full)
+Mod+Print ··· Capture Menu (record, copy text, QR)
+Ctrl+Print ··· Record Screen (again to stop)
+Mod+. ··· Emoji Picker
 Mod+V ··· Clipboard History
 Mod+Alt+Left/Right ··· Previous/Next Workspace
 󰌍 Back"
@@ -292,6 +321,7 @@ for i in json.load(sys.stdin):
 
     INPUT_OPTS="$INPUT_OPTS
 󰌌 Keyboard Layout
+󰌌 Emoji Picker (Mod+.)
 󰍽 Mouse Speed
 󰌍 Back"
 
@@ -327,6 +357,8 @@ for i in json.load(sys.stdin):
         scroll_speed_menu
     elif [[ "$I_CHOICE" =~ "Keyboard Layout" ]]; then
         keyboard_layout_menu
+    elif [[ "$I_CHOICE" =~ "Emoji Picker" ]]; then
+        capture_emoji
     elif [[ "$I_CHOICE" =~ "Mouse Speed" ]]; then
         mouse_speed_menu
     fi
@@ -762,5 +794,41 @@ font_rendering_menu() {
 
         font_rendering_write "$hint" "$rgba"
         tnotify "Fonts" "Hinting: ${hint}, subpixel: ${rgba} — restart apps to see it"
+    done
+}
+
+snap_assist_toggle() {
+    if ! tebian_snap_rev2; then
+        tnotify "UI" "Snap Assist needs the current sway build — Window Snapping rebuilds it"
+    elif tebian_snap_assist_enabled; then
+        tebian_snap_assist_set off
+        tnotify "UI" "Snap Assist off"
+    else
+        tebian_snap_assist_set on
+        tnotify "UI" "Snap Assist on"
+    fi
+}
+
+# Settings > More > Desktop & UI > Dock. tebian-dock does the work; this is
+# only its menu, with each label showing the current state.
+dock_menu() {
+    local st on pos ah CHOICE p
+    while true; do
+        st=$(tebian-dock status 2>/dev/null)
+        on=$(sed -n 's/^enabled=//p' <<< "$st")
+        pos=$(sed -n 's/^position=//p' <<< "$st")
+        ah=$(sed -n 's/^autohide=//p' <<< "$st")
+        CHOICE=$(printf '%s\n' "󰀻 Dock (${on^^})" "󰞒 Dock Position (Current: ${pos^})" \
+            "󰆪 Dock Auto-hide (${ah^^})" "󰌍 Back" | tfuzzel -d -p " 󰀻 Dock | ")
+        [ -n "$CHOICE" ] || menu_close
+        is_back "$CHOICE" && return
+        case "$CHOICE" in
+            *"Dock Position"*)
+                p=$(printf 'Bottom\nLeft\nRight\n' | tfuzzel -d -p " 󰞒 Dock Position | ")
+                [ -n "$p" ] || continue
+                tebian-dock position "${p,,}" ;;
+            *"Dock Auto-hide"*) tebian-dock autohide toggle ;;
+            *"Dock ("*) tebian-dock toggle >/dev/null ;;
+        esac
     done
 }

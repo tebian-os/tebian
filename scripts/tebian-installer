@@ -1677,7 +1677,7 @@ KBEOF
 
             echo 87; echo "# Installing desktop extras..."
             chroot_apt_install_desktop \
-                blueman mako-notifier grim slurp wl-clipboard xdg-utils \
+                blueman mako-notifier grim slurp wl-clipboard wtype xdg-utils \
                 brightnessctl lxpolkit cliphist thunar thunar-archive-plugin \
                 file-roller papirus-icon-theme btop \
                 pavucontrol adwaita-qt \
@@ -1700,7 +1700,7 @@ KBEOF
 
             echo 92; echo "# Installing fonts..."
             chroot_apt_install \
-                fonts-noto fonts-jetbrains-mono
+                fonts-noto fonts-noto-color-emoji fonts-jetbrains-mono
 
             echo 93; echo "# Downloading Nerd Font..."
             # Pinned release + checksum (from upstream's SHA-256.txt): a

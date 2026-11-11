@@ -1,0 +1,751 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN WEB APPS
+# A website as its own app: a launcher in Mod+D, the App Drawer and the dock,
+# opening the site in a window of its own (a Chrome-based browser's --app
+# mode). Settings > Software > Web Apps is the menu for this.
+#
+#   tebian-webapp add <name> <url> [--no-icon]   prints the new app's id
+#   tebian-webapp list                 id<TAB>name<TAB>url<TAB>icon, by name
+#   tebian-webapp open <id>            what the launcher runs
+#   tebian-webapp rename <id> <name>
+#   tebian-webapp set-url <id> <url> [--no-icon]
+#   tebian-webapp refresh-icon <id>
+#   tebian-webapp remove <id>          launcher, icon and pin
+#   tebian-webapp pin|unpin <id>       Mod+D's pinned apps
+#   tebian-webapp pinned <id>          exit 0 when pinned
+#   tebian-webapp browser              the browser open would use; 1 if none
+#   tebian-webapp check-name <name>    prints it cleaned up, or why not
+#   tebian-webapp check-url <url>      prints it normalized, or why not
+#
+# <id> is the desktop id (tebian-webapp-mail.desktop), with or without
+# ".desktop". Exit codes: 1 failed, 2 usage, 3 no Chrome-based browser.
+#
+# Everything about an app lives in its one .desktop file in
+# ~/.local/share/applications: Name=, and the URL and the browser it was
+# made with in X-Tebian-WebApp-URL / X-Tebian-WebApp-Browser. The Exec line
+# holds nothing the user typed, only "tebian-webapp open <id>", and the id is
+# made of [a-z0-9-]. A name or URL therefore never passes through a shell,
+# sway's command parser or the Exec field-code rules: it is read back as data
+# and handed to the browser as one argument.
+#
+# Privacy: the icon is fetched from the site itself (the page, then its
+# /apple-touch-icon.png and /favicon.ico), never from a favicon service, and
+# icons the page declares on some other host are skipped. No cookies are sent
+# or kept. When nothing usable comes back, the launcher uses the theme's
+# web-browser icon.
+# ==============================================================================
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+APPS_DIR="$DATA_HOME/applications"
+ICON_DIR="$DATA_HOME/icons/tebian-webapp"
+PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
+PREFIX="tebian-webapp-"
+FALLBACK_ICON="web-browser"
+NAME_MAX=60
+URL_MAX=2048
+
+die() { echo "tebian-webapp: $*" >&2; exit 1; }
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send "$1" "$2" 2>/dev/null
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Checking what the user typed
+# ------------------------------------------------------------------------------
+
+# Trimmed name, or a reason on stderr. Control characters are refused, not
+# escaped: a newline would split the entry into two lines in every fuzzel
+# list, and a tab would shift the index's columns.
+clean_name() {
+    local n="$1"
+    n="${n#"${n%%[![:space:]]*}"}"
+    n="${n%"${n##*[![:space:]]}"}"
+    [ -n "$n" ] || { echo "The name is empty" >&2; return 1; }
+    if [[ "$n" == *[[:cntrl:]]* ]]; then
+        echo "The name can't contain tabs or line breaks" >&2; return 1
+    fi
+    [ "${#n}" -le "$NAME_MAX" ] || { echo "The name is too long (at most $NAME_MAX characters)" >&2; return 1; }
+    printf '%s\n' "$n"
+}
+
+# The URL as the browser will get it: https:// added when no scheme was
+# typed, scheme in lower case. Only http and https: --app treats javascript:,
+# data: and file: as a page to run or read. Spaces and the characters a URL
+# never contains raw (" < > \ ^ ` { | }) are refused: a pasted URL with them
+# is broken, and a browser would only guess at what was meant.
+normalize_url() {
+    # Byte-wise classes: a non-ASCII letter (an IDN host, an accented path)
+    # is neither a control nor a space here, and is left for the browser
+    local LC_ALL=C
+    local u="$1" scheme rest auth host port left
+    u="${u#"${u%%[![:space:]]*}"}"
+    u="${u%"${u##*[![:space:]]}"}"
+    [ -n "$u" ] || { echo "The address is empty" >&2; return 1; }
+    [ "${#u}" -le "$URL_MAX" ] || { echo "The address is too long" >&2; return 1; }
+    if [[ "$u" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]]; then
+        :
+    elif [[ "$u" =~ ^([A-Za-z][A-Za-z0-9+.-]*): ]] &&
+         ! [[ "${BASH_REMATCH[1],,}" =~ ^(localhost|.*\..*)$ && "$u" =~ ^[^:]*:[0-9]+([/?#]|$) ]]; then
+        # mailto:, javascript:1, data: ... A site with a port
+        # ("example.com:8080", "localhost:3000") is not one of these
+        echo "Only web addresses can be web apps (for a local server, type http://name:port)" >&2; return 1
+    else
+        u="https://$u"
+    fi
+    scheme="${u%%://*}"; scheme="${scheme,,}"
+    rest="${u#*://}"
+    case "$scheme" in
+        http|https) ;;
+        *) echo "Only web addresses (http or https) can be web apps" >&2; return 1 ;;
+    esac
+    if [[ "$rest" =~ [[:cntrl:][:space:]\"\<\>\\^\`{|}] ]]; then
+        echo "The address contains spaces or characters a web address can't have" >&2
+        return 1
+    fi
+    auth="${rest%%[/?#]*}"
+    host="${auth##*@}"
+    if [[ "$host" == \[* ]]; then
+        port="${host#*]}"; host="${host%%]*}]"
+    elif [[ "$host" == *:* ]]; then
+        port=":${host#*:}"; host="${host%%:*}"
+    else
+        port=""
+    fi
+    if [ -z "$host" ] || [ "$host" = "[]" ]; then
+        echo "The address has no site name in it" >&2; return 1
+    fi
+    if [ -n "$port" ] && ! { [[ "$port" =~ ^:[0-9]{1,5}$ ]] && [ "$((10#${port#:}))" -le 65535 ]; }; then
+        echo "The address has a broken port number" >&2; return 1
+    fi
+    # Letters, digits, . - _ and non-ASCII (IDN, which the browser converts);
+    # an IPv6 literal in brackets
+    if [[ "$host" == \[* ]]; then
+        left="${host//[0-9A-Fa-f:.\[\]]/}"
+    else
+        left="${host//[A-Za-z0-9._-]/}"
+    fi
+    if [[ "$left" =~ [\ -~] ]]; then
+        echo "The site name in the address is not valid" >&2; return 1
+    fi
+    printf '%s://%s\n' "$scheme" "$rest"
+}
+
+origin_of() {  # url → scheme://host[:port]
+    local a="${1#*://}"
+    printf '%s://%s\n' "${1%%://*}" "${a%%[/?#]*}"
+}
+
+host_of() {  # url → host, lower case, no port or user
+    local a="${1#*://}"
+    a="${a%%[/?#]*}"; a="${a##*@}"
+    if [[ "$a" == \[* ]]; then a="${a%%]*}]"; else a="${a%%:*}"; fi
+    printf '%s\n' "${a,,}"
+}
+
+# ------------------------------------------------------------------------------
+# Desktop entry values
+# ------------------------------------------------------------------------------
+
+# A desktop-entry string value: backslash escaped first, a leading space kept
+# with \s. Control characters never get here (refused above).
+desk_str() {
+    local v="${1//\\/\\\\}"
+    [[ "$v" == " "* ]] && v="\\s${v# }"
+    printf '%s' "$v"
+}
+
+# One Exec argument per the Desktop Entry spec: plain when it is only safe
+# characters, else double-quoted with " ` $ \ escaped, % doubled, and the
+# whole then escaped once more as a string value
+exec_arg() {
+    if [[ "$1" =~ ^[A-Za-z0-9/._+-]+$ ]]; then
+        printf '%s' "$1"
+        return
+    fi
+    local v="$1"
+    v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//\`/\\\`}"; v="${v//\$/\\\$}"
+    v="${v//%/%%}"
+    desk_str "\"$v\""
+}
+
+# How a launcher starts us. The absolute path when installed, so a launcher
+# started by something without ~/.local/bin on its PATH still works.
+self_cmd() {
+    if [ -x "$HOME/.local/bin/tebian-webapp" ]; then
+        exec_arg "$HOME/.local/bin/tebian-webapp"
+    else
+        printf 'tebian-webapp'
+    fi
+}
+
+# "mail" from "tebian-webapp-mail.desktop" or "tebian-webapp-mail"; fails on
+# anything else, so an id can never name a path outside the apps dir
+id_norm() {
+    local id="${1%.desktop}"
+    [[ "$id" =~ ^tebian-webapp-[a-z0-9]+(-[a-z0-9]+)*$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+need_id() {
+    local id
+    id=$(id_norm "${1:-}") || die "Not a web app id: ${1:-<none>}"
+    [ -f "$APPS_DIR/$id.desktop" ] || die "No such web app: $id"
+    printf '%s\n' "$id"
+}
+
+# A new id from the name (then the site, for a name with no letters a-z),
+# numbered when taken
+new_id() {
+    local name="$1" url="$2" base slug n=2
+    slug=$(printf '%s' "${name,,}" | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40)
+    slug="${slug%-}"
+    if [ -z "$slug" ]; then
+        slug=$(host_of "$url" | LC_ALL=C sed -E 's/^www\.//; s/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40)
+        slug="${slug%-}"
+    fi
+    [ -n "$slug" ] || slug=app
+    base="$PREFIX$slug"
+    slug="$base"
+    while [ -e "$APPS_DIR/$slug.desktop" ]; do
+        slug="$base-$n"; n=$((n + 1))
+    done
+    printf '%s\n' "$slug"
+}
+
+# Name, URL, browser and icon of an app, one per line, unescaped. Only the
+# [Desktop Entry] group, first copy of a key, as the app index reads it.
+read_entry() {
+    awk '
+        function unesc(v,   out, i, c, n) {
+            out = ""; n = length(v)
+            for (i = 1; i <= n; i++) {
+                c = substr(v, i, 1)
+                if (c == "\\" && i < n) {
+                    c = substr(v, ++i, 1)
+                    if (c == "s") c = " "
+                    else if (c == "n" || c == "t" || c == "r") c = " "
+                }
+                out = out c
+            }
+            return out
+        }
+        { sub(/\r$/, "") }
+        /^\[/ { if (g == "[Desktop Entry]") exit; g = $0; next }
+        g != "[Desktop Entry]" { next }
+        {
+            eq = index($0, "="); if (!eq) next
+            k = substr($0, 1, eq - 1); sub(/[ \t]+$/, "", k)
+            if (k in got) next
+            got[k] = 1
+            v = substr($0, eq + 1); sub(/^[ \t]+/, "", v)
+            val[k] = unesc(v)
+        }
+        END {
+            print val["Name"]; print val["X-Tebian-WebApp-URL"]
+            print val["X-Tebian-WebApp-Browser"]; print val["Icon"]
+            print val["StartupWMClass"]
+        }' "$1"
+}
+
+load() {  # id → E_NAME E_URL E_BROWSER E_ICON E_CLASS
+    local -a f
+    mapfile -t f < <(read_entry "$APPS_DIR/$1.desktop")
+    E_NAME="${f[0]:-}"; E_URL="${f[1]:-}"; E_BROWSER="${f[2]:-}"; E_ICON="${f[3]:-}"
+    E_CLASS="${f[4]:-}"
+}
+
+# The dock reads launchers when it starts, so it is told about a change
+dock_reload() {
+    command -v tebian-dock >/dev/null 2>&1 && tebian-dock reload >/dev/null 2>&1
+    return 0
+}
+
+# The whole file is written from values every time, never edited in place
+# with sed, so no user text is ever part of a sed or awk program. Written
+# next to the target and renamed: a launcher is never seen half-written.
+# RUNS_IN is the browser actually opening it, when another one stands in.
+write_entry() {  # id name url browser icon [runs-in]
+    local id="$1" name="$2" url="$3" browser="$4" icon="$5" runs="${6:-$4}" tmp
+    mkdir -p "$APPS_DIR"
+    tmp=$(mktemp "$APPS_DIR/.$id.XXXXXX") || return 1
+    {
+        printf '[Desktop Entry]\n'
+        printf 'Type=Application\n'
+        printf 'Version=1.5\n'
+        printf 'Name=%s\n' "$(desk_str "$name")"
+        printf 'Comment=%s\n' "$(desk_str "Web app: $(host_of "$url")")"
+        printf 'Exec=%s open %s\n' "$(self_cmd)" "$id"
+        printf 'Icon=%s\n' "$(desk_str "$icon")"
+        printf 'Terminal=false\n'
+        # Not WebBrowser: that would make it count as a browser in the
+        # default-browser list and in tebian-browser any-installed
+        printf 'Categories=Network;\n'
+        printf 'StartupWMClass=%s\n' "$(desk_str "$(window_class "$url" "$runs")")"
+        printf 'X-Tebian-WebApp-URL=%s\n' "$(desk_str "$url")"
+        printf 'X-Tebian-WebApp-Browser=%s\n' "$(desk_str "$browser")"
+    } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$APPS_DIR/$id.desktop" || {
+        rm -f "$tmp"; return 1
+    }
+    dock_reload
+}
+
+# ------------------------------------------------------------------------------
+# Browsers
+# ------------------------------------------------------------------------------
+
+# Chrome-based browsers that can open a site as an app, best first: Helium
+# is the one Tebian installs. Firefox has had no app mode since 2021.
+# Fields: command, desktop id, prefix of an app window's Wayland app_id.
+BROWSERS='helium helium.desktop chrome
+helium-browser helium.desktop chrome
+chromium chromium.desktop chrome
+chromium-browser chromium-browser.desktop chrome
+google-chrome-stable google-chrome.desktop chrome
+google-chrome google-chrome.desktop chrome
+brave-browser brave-browser.desktop brave
+brave brave-browser.desktop brave
+vivaldi-stable vivaldi-stable.desktop chrome
+microsoft-edge-stable microsoft-edge.desktop msedge
+flatpak:org.chromium.Chromium org.chromium.Chromium.desktop chrome
+flatpak:io.github.ungoogled_software.ungoogled_chromium io.github.ungoogled_software.ungoogled_chromium.desktop chrome
+flatpak:com.brave.Browser com.brave.Browser.desktop brave
+flatpak:com.google.Chrome com.google.Chrome.desktop chrome'
+
+# The program to run for a browser command, or fail when it is not there.
+# A Flatpak is found by its exported launcher; a deb whose program is not on
+# PATH under this name by the Exec of its own .desktop file.
+browser_bin() {  # command desktop-id
+    local c="$1" d f exe
+    if [[ "$c" == flatpak:* ]]; then
+        for d in "$DATA_HOME/flatpak/exports/bin" /var/lib/flatpak/exports/bin; do
+            [ -x "$d/${c#flatpak:}" ] && { printf '%s\n' "$d/${c#flatpak:}"; return 0; }
+        done
+        return 1
+    fi
+    command -v "$c" 2>/dev/null && return 0
+    for f in /usr/share/applications/"$2" /usr/local/share/applications/"$2"; do
+        [ -f "$f" ] || continue
+        exe=$(awk -F= '/^Exec=/ { split($2, a, " "); print a[1]; exit }' "$f")
+        if [[ "$exe" == /* ]] && [ -x "$exe" ]; then
+            printf '%s\n' "$exe"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# "command<TAB>program<TAB>prefix" of the browser to use: the one the app
+# was made with while it is still installed, else the first one present.
+# Resolved on every launch, so removing that browser moves its apps to
+# another one instead of leaving dead launchers.
+resolve_browser() {  # [preferred command]
+    local want="${1:-}" c d p bin
+    if [ -n "$want" ]; then
+        while read -r c d p; do
+            [ "$c" = "$want" ] || continue
+            bin=$(browser_bin "$c" "$d") && { printf '%s\t%s\t%s\n' "$c" "$bin" "$p"; return 0; }
+        done <<< "$BROWSERS"
+    fi
+    while read -r c d p; do
+        bin=$(browser_bin "$c" "$d") && { printf '%s\t%s\t%s\n' "$c" "$bin" "$p"; return 0; }
+    done <<< "$BROWSERS"
+    return 1
+}
+
+prefix_of() {
+    local c d p
+    while read -r c d p; do
+        [ "$c" = "$1" ] && { echo "$p"; return; }
+    done <<< "$BROWSERS"
+    echo chrome
+}
+
+# Chrome names an --app window after the URL's host and path, and the
+# profile: https://mail.example.com/inbox → chrome-mail.example.com__inbox-Default
+# (Omarchy's omarchy-webapp-window-class, MIT, works this out the same way).
+# --class only sets an X11 WM_CLASS and does not change this on Wayland, so
+# StartupWMClass records this name, and a dock can tell the app's windows
+# from the browser's and from other web apps'.
+window_class() {  # url browser-command
+    local a host path
+    a="${1#*://}"; a="${a%%[?#]*}"
+    host=$(host_of "$1")
+    path="/${a#*/}"; [[ "$a" == */* ]] || path="/"
+    printf '%s-%s_%s-Default\n' "$(prefix_of "$2")" "$host" "${path//\//_}"
+}
+
+# ------------------------------------------------------------------------------
+# Icons
+# ------------------------------------------------------------------------------
+
+CURL_OPTS=(--proto '=http,https' --proto-redir '=http,https' --max-redirs 5
+           --connect-timeout 4 --max-time 8 --max-filesize 2000000 -fsSL)
+
+# What kind of image a file is, by its first bytes: png, svg, ico or "".
+# fuzzel draws PNG and SVG; an ICO is only usable if it carries a PNG.
+img_kind() {
+    local sig
+    sig=$(od -An -tx1 -N8 "$1" 2>/dev/null | tr -d ' \n')
+    case "$sig" in
+        89504e470d0a1a0a) echo png; return ;;
+        00000100*) echo ico; return ;;
+    esac
+    if head -c 2048 "$1" | tr -d '\0' | grep -qi '<svg' &&
+       ! head -c 2048 "$1" | tr -d '\0' | grep -qi '<html'; then
+        echo svg
+    fi
+}
+
+# The biggest PNG image inside an ICO, written to DEST. Plain od, no image
+# tools: modern favicons store their large sizes as PNG.
+ico_png() {  # src dest
+    local src="$1" dest="$2" count i w sz off best=0 boff=0 bsz=0 sig
+    count=$(od -An -tu2 -j4 -N2 "$src" | tr -d ' ')
+    [[ "$count" =~ ^[0-9]+$ ]] || return 1
+    for ((i = 0; i < count && i < 32; i++)); do
+        w=$(od -An -tu1 -j$((6 + 16 * i)) -N1 "$src" | tr -d ' ')
+        [ "$w" = 0 ] && w=256
+        read -r sz off < <(od -An -tu4 -j$((6 + 16 * i + 8)) -N8 "$src") || continue
+        [[ "$sz" =~ ^[0-9]+$ && "$off" =~ ^[0-9]+$ ]] || continue
+        sig=$(od -An -tx1 -j"$off" -N8 "$src" | tr -d ' \n')
+        if [ "$sig" = 89504e470d0a1a0a ] && [ "${w:-0}" -gt "$best" ]; then
+            best="$w"; boff="$off"; bsz="$sz"
+        fi
+    done
+    if [ "$best" -gt 0 ]; then
+        tail -c +$((boff + 1)) "$src" | head -c "$bsz" > "$dest"
+        [ "$(img_kind "$dest")" = png ] && return 0
+    fi
+    ico_bmp_png "$src" "$dest"
+}
+
+# An older favicon holds only bitmaps (www.debian.org's does). Re-encoded
+# as PNG with Python's standard library, when Python is there; the bytes
+# are only ever parsed as numbers, never run.
+ico_bmp_png() {  # src dest
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I - "$1" "$2" 2>/dev/null << 'PY'
+import struct, sys, zlib
+src, dest = sys.argv[1:3]
+d = open(src, "rb").read()
+best = None
+for i in range(min(struct.unpack_from("<H", d, 4)[0], 32)):
+    _, _, _, _, _, _, size, off = struct.unpack_from("<BBBBHHII", d, 6 + 16 * i)
+    hsize, w, h2, _, bpp, comp = struct.unpack_from("<IiiHHI", d, off)
+    if hsize < 40 or comp != 0 or bpp not in (1, 4, 8, 24, 32) or not 0 < w <= 256:
+        continue
+    if best is None or (w, bpp) > (best[1], best[3]):
+        best = (off, w, abs(h2) // 2, bpp, hsize)
+if best is None:
+    sys.exit(1)
+off, w, h, bpp, hsize = best
+pal = []
+if bpp <= 8:
+    n = struct.unpack_from("<I", d, off + 32)[0] or (1 << bpp)
+    p = off + hsize
+    pal = [d[p + 4 * k:p + 4 * k + 3] for k in range(n)]
+xor = off + hsize + 4 * len(pal)
+stride = ((w * bpp + 31) // 32) * 4
+mask = xor + stride * h
+mstride = ((w + 31) // 32) * 4
+rows = []
+any_alpha = bpp == 32 and any(d[xor + 3 + 4 * k] for k in range(w * h))
+for y in range(h - 1, -1, -1):
+    row = bytearray(b"\0")
+    base = xor + y * stride
+    for x in range(w):
+        if bpp == 32:
+            b, g, r, a = d[base + 4 * x:base + 4 * x + 4]
+        elif bpp == 24:
+            b, g, r = d[base + 3 * x:base + 3 * x + 3]; a = 255
+        else:
+            bit = x * bpp
+            v = (d[base + bit // 8] >> (8 - bpp - bit % 8)) & ((1 << bpp) - 1)
+            b, g, r = pal[v]; a = 255
+        if not any_alpha:
+            hidden = d[mask + y * mstride + x // 8] >> (7 - x % 8) & 1 if mask < len(d) else 0
+            a = 0 if hidden else 255
+        row += bytes((r, g, b, a))
+    rows.append(bytes(row))
+def chunk(t, body):
+    return struct.pack(">I", len(body)) + t + body + struct.pack(">I", zlib.crc32(t + body))
+png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+open(dest, "wb").write(png)
+PY
+    [ "$(img_kind "$2" 2>/dev/null)" = png ]
+}
+
+# Icon candidates a page declares, best first, one URL per line (resolved,
+# not yet checked for host): SVG, then apple-touch-icon, then the largest
+# rel=icon. mask-icon is a one-colour outline and is skipped.
+page_icons() {  # page-file base-url
+    local base="$2" origin dir tag rel href sizes type score n
+    origin=$(origin_of "$base")
+    dir="${base%%[?#]*}"
+    if [[ "${dir#*://}" == */* ]]; then dir="${dir%/*}/"; else dir="$origin/"; fi
+    tr '\r\n' '  ' < "$1" | grep -oiE '<link[^>]+>' | head -40 | while IFS= read -r tag; do
+        rel="" href="" sizes="" type=""
+        shopt -s nocasematch
+        [[ "$tag" =~ [[:space:]]rel=(\"[^\"]*\"|\'[^\']*\'|[^[:space:]\>]+) ]] && rel="${BASH_REMATCH[1]}"
+        [[ "$tag" =~ [[:space:]]href=(\"[^\"]*\"|\'[^\']*\'|[^[:space:]\>]+) ]] && href="${BASH_REMATCH[1]}"
+        [[ "$tag" =~ [[:space:]]sizes=(\"[^\"]*\"|\'[^\']*\'|[^[:space:]\>]+) ]] && sizes="${BASH_REMATCH[1]}"
+        [[ "$tag" =~ [[:space:]]type=(\"[^\"]*\"|\'[^\']*\'|[^[:space:]\>]+) ]] && type="${BASH_REMATCH[1]}"
+        rel="${rel//[\"\']/}"; href="${href//[\"\']/}"; sizes="${sizes//[\"\']/}"; type="${type//[\"\']/}"
+        [[ " $rel " =~ [[:space:]](icon|apple-touch-icon|apple-touch-icon-precomposed)[[:space:]] ]] || continue
+        shopt -u nocasematch
+        # Quoted: bash 5.2 reads a bare & in the replacement as "the match"
+        href="${href//&amp;/"&"}"
+        [ -n "$href" ] || continue
+        case "$href" in
+            data:*|javascript:*) continue ;;
+            http://*|https://*) ;;
+            //*) href="${base%%://*}:$href" ;;
+            /*) href="$origin$href" ;;
+            *) href="$dir$href" ;;
+        esac
+        n=0
+        [[ "$sizes" =~ ([0-9]+)x[0-9]+ ]] && n="${BASH_REMATCH[1]}"
+        if [[ "$type" == *svg* || "${href%%[?#]*}" == *.svg ]]; then score=1000
+        elif [[ "$rel" == *apple-touch* ]]; then score=$((500 + n))
+        else score=$(( n > 0 ? n : 16 ))
+        fi
+        printf '%s\t%s\n' "$score" "$href"
+    done | sort -t$'\t' -k1,1nr | cut -f2- | awk '!seen[$0]++'
+}
+
+# The site's own icon into ICON_DIR/<id>.png|.svg; prints the path, or fails
+# (offline, no icon, only formats fuzzel can't draw). Only the site's host,
+# and the host it redirects to, are ever contacted.
+fetch_icon() {  # id url
+    local id="$1" url="$2" work eff host1 host2 cand h kind tries=0 out=""
+    command -v curl >/dev/null 2>&1 || return 1
+    work=$(mktemp -d) || return 1
+    host1=$(host_of "$url")
+    eff=$(curl "${CURL_OPTS[@]}" -o "$work/page" -w '%{url_effective}' "$url" 2>/dev/null) || eff=""
+    host2=""
+    [ -n "$eff" ] && host2=$(host_of "$eff")
+    local -a cands=()
+    if [ -n "$eff" ] && [ -s "$work/page" ]; then
+        mapfile -t cands < <(page_icons "$work/page" "$eff")
+    fi
+    local o
+    for o in "$eff" "$url"; do
+        [ -n "$o" ] || continue
+        o=$(origin_of "$o")
+        cands+=("$o/apple-touch-icon.png" "$o/favicon.ico")
+    done
+    for cand in "${cands[@]}"; do
+        h=$(host_of "$cand")
+        [ "$h" = "$host1" ] || { [ -n "$host2" ] && [ "$h" = "$host2" ]; } || continue
+        tries=$((tries + 1)); [ "$tries" -le 6 ] || break
+        rm -f "$work/img"
+        curl "${CURL_OPTS[@]}" -o "$work/img" "$cand" 2>/dev/null || continue
+        kind=$(img_kind "$work/img")
+        if [ "$kind" = ico ]; then
+            ico_png "$work/img" "$work/img.png" && mv -f "$work/img.png" "$work/img" && kind=png || continue
+        fi
+        case "$kind" in
+            png|svg) out="$kind"; break ;;
+        esac
+    done
+    if [ -n "$out" ]; then
+        mkdir -p "$ICON_DIR"
+        rm -f "$ICON_DIR/$id.png" "$ICON_DIR/$id.svg"
+        mv -f "$work/img" "$ICON_DIR/$id.$out"
+        chmod 644 "$ICON_DIR/$id.$out"
+        rm -rf "$work"
+        printf '%s\n' "$ICON_DIR/$id.$out"
+        return 0
+    fi
+    rm -rf "$work"
+    return 1
+}
+
+# The icon to keep when a fetch fails: the one the app already had, if it
+# is still there, else the theme's
+icon_or_fallback() {  # id
+    local f
+    for f in "$ICON_DIR/$1.png" "$ICON_DIR/$1.svg"; do
+        [ -f "$f" ] && { printf '%s\n' "$f"; return; }
+    done
+    echo "$FALLBACK_ICON"
+}
+
+# ------------------------------------------------------------------------------
+# Pins (Mod+D's pinned apps, the list the dock reads too)
+# ------------------------------------------------------------------------------
+
+is_pinned() { grep -qxF "$1.desktop" "$PIN_FILE" 2>/dev/null; }
+
+unpin() {
+    is_pinned "$1" || return 0
+    grep -vxF "$1.desktop" "$PIN_FILE" > "$PIN_FILE.tmp" || true
+    mv -f "$PIN_FILE.tmp" "$PIN_FILE"
+}
+
+# ------------------------------------------------------------------------------
+# Commands
+# ------------------------------------------------------------------------------
+
+cmd_add() {
+    local name url fetch=1 id browser icon arg
+    local -a pos=()
+    for arg in "$@"; do
+        if [ "$arg" = --no-icon ]; then fetch=0; else pos+=("$arg"); fi
+    done
+    [ ${#pos[@]} -eq 2 ] || { echo "usage: tebian-webapp add <name> <url> [--no-icon]" >&2; exit 2; }
+    name=$(clean_name "${pos[0]}") || exit 1
+    url=$(normalize_url "${pos[1]}") || exit 1
+    if ! browser=$(resolve_browser); then
+        echo "Web apps need a Chrome-based browser such as Helium (Settings > Software > Web Browser)." >&2
+        exit 3
+    fi
+    browser="${browser%%$'\t'*}"
+    id=$(new_id "$name" "$url")
+    icon="$FALLBACK_ICON"
+    if [ "$fetch" = 1 ]; then icon=$(fetch_icon "$id" "$url") || icon="$FALLBACK_ICON"; fi
+    write_entry "$id" "$name" "$url" "$browser" "$icon" || die "Could not write $APPS_DIR/$id.desktop"
+    printf '%s.desktop\n' "$id"
+}
+
+cmd_list() {
+    local f id
+    local -a e
+    for f in "$APPS_DIR/$PREFIX"*.desktop; do
+        [ -f "$f" ] || continue
+        id="${f##*/}"; id="${id%.desktop}"
+        id_norm "$id" >/dev/null || continue
+        mapfile -t e < <(read_entry "$f")
+        [ -n "${e[1]:-}" ] || continue
+        printf '%s.desktop\t%s\t%s\t%s\n' "$id" "${e[0]:-$id}" "${e[1]}" "${e[3]:-}"
+    done | sort -t$'\t' -k2,2f -k1,1
+}
+
+cmd_open() {
+    local id url b cmd bin name
+    if ! id=$(id_norm "${1:-}") || [ ! -f "$APPS_DIR/$id.desktop" ]; then
+        notify "Web Apps" "This web app no longer exists: ${1:-}"
+        exit 1
+    fi
+    load "$id"
+    name="${E_NAME:-$id}"
+    # Checked again here: a hand-edited launcher must not smuggle in a
+    # javascript: or file: address
+    if ! url=$(normalize_url "$E_URL" 2>/dev/null); then
+        notify "Web Apps" "$name has no valid web address. Change it in Settings > Software > Web Apps."
+        exit 1
+    fi
+    if ! b=$(resolve_browser "$E_BROWSER"); then
+        notify "Web Apps" "$name needs a Chrome-based browser such as Helium. Install one in Settings > Software > Web Browser."
+        exit 3
+    fi
+    IFS=$'\t' read -r cmd bin _ <<< "$b"
+    # Another browser standing in for a removed one may name the window
+    # differently: keep StartupWMClass in step, so a dock still matches it
+    if [ "$E_CLASS" != "$(window_class "$url" "$cmd")" ]; then
+        write_entry "$id" "$E_NAME" "$url" "$E_BROWSER" "$E_ICON" "$cmd" 2>/dev/null || true
+    fi
+    local -a args=("--app=$url")
+    # Older Chromium runs under XWayland unless asked, where the window
+    # loses its own app_id
+    [ -n "${WAYLAND_DISPLAY:-}" ] && args+=(--ozone-platform-hint=auto)
+    exec "$bin" "${args[@]}"
+}
+
+cmd_rename() {
+    local id name
+    [ $# -eq 2 ] || { echo "usage: tebian-webapp rename <id> <name>" >&2; exit 2; }
+    id=$(need_id "$1")
+    name=$(clean_name "$2") || exit 1
+    load "$id"
+    write_entry "$id" "$name" "$E_URL" "$E_BROWSER" "$E_ICON" || die "Could not update $id"
+}
+
+cmd_set_url() {
+    local id url fetch=1 icon arg
+    local -a pos=()
+    for arg in "$@"; do
+        if [ "$arg" = --no-icon ]; then fetch=0; else pos+=("$arg"); fi
+    done
+    [ ${#pos[@]} -eq 2 ] || { echo "usage: tebian-webapp set-url <id> <url> [--no-icon]" >&2; exit 2; }
+    id=$(need_id "${pos[0]}")
+    url=$(normalize_url "${pos[1]}") || exit 1
+    load "$id"
+    icon="$E_ICON"
+    # A new site gets its own icon, unless it is the same site
+    if [ "$fetch" = 1 ] && [ "$(host_of "$url")" != "$(host_of "$E_URL")" ]; then
+        icon=$(fetch_icon "$id" "$url") || {
+            rm -f "$ICON_DIR/$id.png" "$ICON_DIR/$id.svg"
+            icon="$FALLBACK_ICON"
+        }
+    fi
+    write_entry "$id" "$E_NAME" "$url" "$E_BROWSER" "$icon" || die "Could not update $id"
+}
+
+cmd_refresh_icon() {
+    local id icon
+    id=$(need_id "${1:-}")
+    load "$id"
+    if icon=$(fetch_icon "$id" "$E_URL"); then
+        write_entry "$id" "$E_NAME" "$E_URL" "$E_BROWSER" "$icon" || die "Could not update $id"
+    else
+        echo "Could not get an icon from $(host_of "$E_URL")" >&2
+        exit 1
+    fi
+}
+
+cmd_remove() {
+    local id
+    id=$(need_id "${1:-}")
+    rm -f "$APPS_DIR/$id.desktop" "$ICON_DIR/$id.png" "$ICON_DIR/$id.svg"
+    unpin "$id"
+    dock_reload
+}
+
+cmd_pin() {
+    local id
+    id=$(need_id "${1:-}")
+    declare -F tebian_pins_init >/dev/null && tebian_pins_init
+    [ -f "$PIN_FILE" ] || { echo "Open the app menu (Mod+D) once, then pin." >&2; exit 1; }
+    if declare -F tebian_pin_app >/dev/null; then
+        tebian_pin_app "$id.desktop"
+    elif ! is_pinned "$id"; then
+        [ -z "$(tail -c1 "$PIN_FILE")" ] || echo >> "$PIN_FILE"
+        echo "$id.desktop" >> "$PIN_FILE"
+    fi
+}
+
+case "${1:-}" in
+    add) shift; cmd_add "$@" ;;
+    list) cmd_list ;;
+    open) cmd_open "${2:-}" ;;
+    rename) shift; cmd_rename "$@" ;;
+    set-url) shift; cmd_set_url "$@" ;;
+    refresh-icon) cmd_refresh_icon "${2:-}" ;;
+    remove) cmd_remove "${2:-}" ;;
+    pin) cmd_pin "${2:-}" ;;
+    unpin) unpin "$(need_id "${2:-}")" ;;
+    pinned) is_pinned "$(need_id "${2:-}")" ;;
+    browser)
+        b=$(resolve_browser) || exit 1
+        printf '%s\n' "${b%%$'\t'*}" ;;
+    check-name) clean_name "${2:-}" ;;
+    check-url) normalize_url "${2:-}" ;;
+    *)
+        sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        exit 2
+        ;;
+esac

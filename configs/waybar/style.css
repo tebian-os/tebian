@@ -32,6 +32,7 @@ tooltip label {
 #clock,
 #custom-weather,
 #custom-dnd,
+#custom-recording,
 #custom-awake,
 #keyboard-state,
 #custom-perf,
@@ -58,6 +59,7 @@ tooltip label {
 #clock:hover,
 #custom-weather:hover,
 #custom-dnd:hover,
+#custom-recording:hover,
 #custom-awake:hover,
 #custom-perf:hover,
 #custom-tray-handle:hover,
@@ -116,6 +118,7 @@ tooltip label {
 #custom-update.pending,
 #custom-drives.mounted { color: @accent; }
 #custom-dnd.active,
+#custom-recording.recording,
 #keyboard-state label.locked { color: @red; }
 #custom-awake.active { color: @accent; }
 #keyboard-state label:not(.locked) { padding: 0; }

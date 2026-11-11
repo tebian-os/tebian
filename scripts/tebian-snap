@@ -1,0 +1,141 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN SNAP ASSIST
+# After a floating window snaps to the left or right half, offer the
+# workspace's other floating windows for the other half, like Windows' Snap
+# Assist. Escape leaves the half empty.
+#
+#   tebian-snap assist <con_id> <zone> [<free zone>]
+#
+# Not a watcher: Tebian's sway runs this itself after every snap
+# (floating_snap_assist, see patches/sway/floating-snap.patch), and only
+# when the window has company on its workspace. The free zone comes only
+# when there is a half to fill; without it, any picker still open from an
+# earlier snap is out of date (the window moved on: a third, a quarter,
+# restored), so it is closed. Switched in Settings (tebian_snap_assist_set
+# in tebian-common).
+# ==============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+[ "${1:-}" = assist ] || { sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+CON_ID="${2:-}" FREE="${4:-}"
+[[ "$CON_ID" =~ ^[0-9]+$ ]] || exit 2
+
+# One picker at a time. The PID file names the instance whose picker is on
+# screen; it is cleared as soon as a pick is made, so the snap that the pick
+# itself causes (which runs this again) doesn't kill the instance carrying
+# it out.
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/tebian-snap-assist.pid"
+# The fuzzel processes anywhere below PID: a grandchild outlives the shell
+# that started it and would keep the screen (see the PID lock in
+# tebian-settings)
+picker_pids() {
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null); do
+        [ "$(cat "/proc/$c/comm" 2>/dev/null)" = fuzzel ] && echo "$c"
+        picker_pids "$c"
+    done
+    return 0
+}
+if [ -f "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null || true)
+    if [[ "$old" =~ ^[0-9]+$ ]] && kill -0 "$old" 2>/dev/null &&
+       grep -q "tebian-snap" "/proc/$old/cmdline" 2>/dev/null; then
+        # Sway starts each run in its own process group (setsid), so the
+        # group takes the menu's subshells along too; they would otherwise
+        # linger, orphaned. Started by hand from a shell, it may share ours.
+        old_group=$(ps -o pgid= -p "$old" 2>/dev/null | tr -d ' ' || true)
+        if [[ "$old_group" =~ ^[0-9]+$ ]] && [ "$old_group" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]; then
+            kill -- "-$old_group" 2>/dev/null || true
+        else
+            old_menus=$(picker_pids "$old")
+            kill "$old" 2>/dev/null || true
+            # shellcheck disable=SC2086  # a list of PIDs
+            [ -z "$old_menus" ] || kill $old_menus 2>/dev/null || true
+        fi
+    fi
+    rm -f "$LOCK"
+fi
+
+case "$FREE" in
+    left-half) SIDE="Left" ;;
+    right-half) SIDE="Right" ;;
+    *) exit 0 ;;
+esac
+
+# sway describes its windows as JSON; jq is how a shell script reads that
+# reliably. The desktop install has it; say so once a session, not at
+# every snap.
+if ! command -v jq >/dev/null 2>&1; then
+    told="${XDG_RUNTIME_DIR:-/tmp}/tebian-snap-assist.nojq"
+    if [ ! -f "$told" ]; then
+        touch "$told"
+        notify-send "Snap Assist" "Needs jq to list your windows: sudo apt install jq (or turn Snap Assist off in Settings)" 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+TREE=$(swaymsg -t get_tree 2>/dev/null) || exit 0
+
+# The other floating windows on the snapped window's workspace: con_id,
+# app, title, \037 between fields (an X11 window can have no app_id, and
+# `read` would merge two tabs around the gap)
+# shellcheck disable=SC2016
+WINDOWS=$(jq -r --argjson id "$CON_ID" '
+    [ recurse(.nodes[]?, .floating_nodes[]?) | select(.type == "workspace")
+      | select(any(recurse(.nodes[]?, .floating_nodes[]?); .id == $id)) ]
+    | first // empty
+    | .floating_nodes[]
+    | select(.id != $id and .pid != null and (.fullscreen_mode // 0) == 0)
+    | [(.id | tostring),
+       (.app_id // .window_properties.class // .window_properties.instance // ""),
+       (.name // "")]
+    | map(gsub("[\t\n\r\u001f]"; " ")) | join("\u001f")
+' <<< "$TREE" 2>/dev/null || true)
+[ -n "$WINDOWS" ] || exit 0
+
+IDS=() APP=() TITLE=()
+while IFS=$'\037' read -r id app title; do
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    IDS+=("$id"); APP+=("$app"); TITLE+=("$title")
+done <<< "$WINDOWS"
+[ ${#IDS[@]} -gt 0 ] || exit 0
+
+# Same look as the window switcher (tebian-windows): app — title, with the
+# app's icon. Printed straight into the pipe: the icon separator is a NUL,
+# which bash variables drop (see tfuzzel).
+print_entries() {
+    local i label
+    for i in "${!IDS[@]}"; do
+        label="${APP[$i]:-window}"
+        [ -n "${TITLE[$i]}" ] && [ "${TITLE[$i]}" != "${APP[$i]}" ] && label+=" — ${TITLE[$i]}"
+        if [ -n "${APP[$i]}" ]; then
+            printf '%s\0icon\x1f%s\n' "$label" "${APP[$i]}"
+        else
+            printf '%s\n' "$label"
+        fi
+    done
+}
+
+echo $$ > "$LOCK"
+trap '[ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"' EXIT
+
+# By position (--index): two windows can share a title. Sized to the list,
+# like the window switcher.
+LINES_N=${#IDS[@]}
+[ "$LINES_N" -gt 15 ] && LINES_N=15
+PICK=$(print_entries | tfuzzel -d --index -p " 󰖲 Fill $SIDE | " --width 60 --lines "$LINES_N" || true)
+[ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
+[[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#IDS[@]}" ] || exit 0
+
+# An absolute zone: "snap left" on a window already at the left would cycle
+# it to a third instead
+swaymsg "[con_id=${IDS[$PICK]}] snap $FREE; [con_id=${IDS[$PICK]}] focus" >/dev/null 2>&1 || true

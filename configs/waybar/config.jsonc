@@ -18,7 +18,7 @@
   "id": "bar-0",
 
   "modules-left": ["custom/tebian", "sway/workspaces", "sway/mode"],
-  "modules-center": ["clock", "custom/weather", "custom/dnd", "custom/awake", "keyboard-state"],
+  "modules-center": ["clock", "custom/weather", "custom/recording", "custom/dnd", "custom/awake", "keyboard-state"],
   "modules-right": [
     "custom/perf",
     "group/tray-drawer",
@@ -73,6 +73,16 @@
     "signal": 11,
     "on-click": "tebian-weather details",
     "on-click-right": "tebian-weather setup"
+  },
+
+  // Shown only while the screen is being recorded (tebian-record); a click
+  // stops it. The interval is for a recorder that died without saying so.
+  "custom/recording": {
+    "exec": "tebian-record bar",
+    "return-type": "json",
+    "interval": 10,
+    "signal": 12,
+    "on-click": "tebian-record stop"
   },
 
   "custom/dnd": {

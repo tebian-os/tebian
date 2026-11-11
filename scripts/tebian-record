@@ -1,0 +1,274 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN RECORD
+# Screen recording with wf-recorder. One key starts and stops it.
+#
+#   tebian-record                    stop if recording, else ask what to record
+#   tebian-record toggle [WHAT] [SOUND]   the same, with the answers given
+#   tebian-record start [WHAT] [SOUND]    start (asks for what is not given)
+#   tebian-record stop               stop and save
+#   tebian-record status             exit 0 while recording, and print the file
+#   tebian-record bar                the Waybar module's JSON (empty while idle)
+#
+#   WHAT:  region (drag a box) | screen (the focused monitor)
+#   SOUND: none | desktop (what you hear) | mic (the default microphone)
+#
+# Saved to ~/Videos/Recordings/recording-<date>_<time>.mp4. While recording,
+# $XDG_RUNTIME_DIR/tebian/recording holds two lines: wf-recorder's PID and
+# the file. The Classic bar can check it without forking ([ -d /proc/$pid ]);
+# everything else should ask `tebian-record status`, which also clears a
+# file left by a recorder that crashed.
+# ==============================================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _f in "$SCRIPT_DIR/tebian-common" "$HOME/.local/bin/tebian-common"; do
+    # shellcheck disable=SC1090
+    [ -f "$_f" ] && { . "$_f"; break; }
+done
+unset _f
+
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/tebian"
+STATE="$STATE_DIR/recording"
+LOG="$STATE_DIR/recording.log"
+OUT_DIR="$HOME/Videos/Recordings"
+FPS=30
+# The last sound choice, offered first next time
+PREFS="$HOME/.config/tebian/record.conf"
+
+say() {  # title message
+    notify-send -a Tebian "$1" "$2" 2>/dev/null || echo "$1: $2" >&2
+}
+
+refresh_bar() { pkill -RTMIN+12 -x waybar 2>/dev/null; }
+
+ask() {  # prompt; lines on stdin; prints the choice
+    if declare -F tfuzzel >/dev/null; then
+        tfuzzel -d -p "$1" --lines "${2:-4}" --width 40
+    else
+        fuzzel -d -p "$1" --lines "${2:-4}" --width 40
+    fi
+}
+
+# PID and file of the running recording; false (and the state file gone)
+# when there is none. The PID is checked to still be wf-recorder: after a
+# crash and a reboot-free week, the number can belong to something else.
+recording() {
+    REC_PID="" REC_FILE=""
+    [ -f "$STATE" ] || return 1
+    { read -r REC_PID; read -r REC_FILE; } < "$STATE"
+    if [[ "$REC_PID" =~ ^[0-9]+$ ]] &&
+       [ "$(cat "/proc/$REC_PID/comm" 2>/dev/null)" = wf-recorder ]; then
+        return 0
+    fi
+    rm -f "$STATE"
+    REC_PID="" REC_FILE=""
+    return 1
+}
+
+need_recorder() {
+    command -v wf-recorder >/dev/null 2>&1 && return 0
+    local yes
+    yes=$(printf '%s\n' "Install wf-recorder" "Cancel" | ask " Screen recording needs wf-recorder | " 2)
+    [[ "$yes" == *Install* ]] || return 1
+    if declare -F tebian_term_apt_install >/dev/null; then
+        TERM_CMD="${TERM_CMD:-$(tebian_term_cmd)}" tebian_term_apt_install wf-recorder
+    fi
+    command -v wf-recorder >/dev/null 2>&1 && return 0
+    say "Screen Recording" "wf-recorder could not be installed"
+    return 1
+}
+
+# x,y WxH of the focused monitor. jq reads sway's JSON; without it the
+# monitor is picked by clicking it (slurp -o).
+focused_output() {
+    local geo=""
+    if command -v jq >/dev/null 2>&1; then
+        # shellcheck disable=SC2016
+        geo=$(swaymsg -t get_outputs 2>/dev/null | jq -r '
+            .[] | select(.focused) | .rect | "\(.x),\(.y) \(.width)x\(.height)"' 2>/dev/null)
+    fi
+    [ -n "$geo" ] || geo=$(slurp -o 2>/dev/null)
+    printf '%s\n' "$geo"
+}
+
+start() {
+    local what="${1:-}" sound="${2:-}" geo pick last=none
+    need_recorder || return 1
+
+    if [ -z "$what" ]; then
+        pick=$(printf '%s\n' "󰆟 Record a Region" "󰹑 Record the Whole Screen" | ask " 󰑋 Record | " 2)
+        case "$pick" in
+            *Region*) what=region ;;
+            *Screen*) what=screen ;;
+            *) return 0 ;;
+        esac
+    fi
+    if [ -z "$sound" ]; then
+        # shellcheck disable=SC1090
+        [ -f "$PREFS" ] && . "$PREFS" && last="${RECORD_SOUND:-none}"
+        local -a opts=("󰝟 No Sound" "󰕾 Desktop Sound" "󰍬 Microphone")
+        case "$last" in
+            desktop) opts=("${opts[1]}" "${opts[0]}" "${opts[2]}") ;;
+            mic)     opts=("${opts[2]}" "${opts[0]}" "${opts[1]}") ;;
+        esac
+        pick=$(printf '%s\n' "${opts[@]}" | ask " 󰑋 Sound | " 3)
+        case "$pick" in
+            *"No Sound"*) sound=none ;;
+            *Desktop*)    sound=desktop ;;
+            *Microphone*) sound=mic ;;
+            *) return 0 ;;
+        esac
+        mkdir -p "${PREFS%/*}" && echo "RECORD_SOUND=$sound" > "$PREFS"
+    fi
+
+    case "$what" in
+        region) geo=$(slurp 2>/dev/null) ;;
+        screen) geo=$(focused_output) ;;
+        *) echo "tebian-record: WHAT is region or screen" >&2; return 2 ;;
+    esac
+    # Escape in slurp
+    [ -n "$geo" ] || return 0
+
+    local -a audio=()
+    case "$sound" in
+        none) ;;
+        # The monitor of the default output: what is playing, not the mic.
+        # PipeWire's pulse server (pipewire-pulse) knows that name, so
+        # nothing has to look the device up first; wf-recorder's own
+        # pipewire backend names devices differently.
+        desktop) audio=(--audio-backend=pulse --audio=@DEFAULT_MONITOR@) ;;
+        mic)     audio=(--audio-backend=pulse --audio) ;;
+        *) echo "tebian-record: SOUND is none, desktop or mic" >&2; return 2 ;;
+    esac
+
+    mkdir -p "$OUT_DIR" "$STATE_DIR" || return 1
+    local file
+    file="$OUT_DIR/recording-$(date +%Y-%m-%d_%H-%M-%S).mp4"
+
+    # -D: a frame every refresh, not only when something changed. With
+    # damage tracking a still screen gave a file with no duration, and
+    # wf-recorder could not even stop (it ends on its next frame, which a
+    # still screen never sends). -r makes that a steady 30 fps.
+    # Its own session, so it outlives the key press (sway's exec) or the
+    # menu that started it; stdin closed so it can never stop to ask which
+    # monitor. The lock fd is not passed on: a recorder holding it would
+    # block every later start.
+    setsid wf-recorder -D -r "$FPS" -g "$geo" "${audio[@]}" -f "$file" \
+        < /dev/null > "$LOG" 2>&1 9>&- &
+    local pid=$!
+    # Not a job of this script: bash would print "Aborted" for it
+    disown "$pid" 2>/dev/null
+    printf '%s\n%s\n' "$pid" "$file" > "$STATE"
+
+    # A recorder that cannot start (no screencopy, no sound server, a
+    # region across two monitors) exits within a moment; say why instead of
+    # leaving a bar indicator for nothing
+    for _ in 1 2 3 4 5 6 7 8; do
+        sleep 0.1
+        kill -0 "$pid" 2>/dev/null || break
+    done
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$STATE" "$file"
+        if [ "$sound" != none ] && grep -qi pulse "$LOG"; then
+            # Without a sound server wf-recorder aborts on an assertion,
+            # which says nothing to a person
+            say "Screen Recording" "Could not record sound: is PipeWire running (pipewire-pulse)? Recording with No Sound works without it."
+        elif grep -q "overlapping outputs" "$LOG"; then
+            say "Screen Recording" "A recording can't span two monitors: pick an area on one of them"
+        else
+            say "Screen Recording" "Could not start: $(grep -v '^[[:space:]]*$' "$LOG" | tail -n 2 | tr '\n' ' ')"
+        fi
+        return 1
+    fi
+
+    refresh_bar
+    local how="no sound"
+    [ "$sound" = desktop ] && how="with desktop sound"
+    [ "$sound" = mic ] && how="with microphone"
+    # Short-lived: the notification is on screen, so in the video
+    notify-send -a Tebian -t 2500 "Recording started ($how)" \
+        "Run the same key or tebian-record again to stop." 2>/dev/null
+    return 0
+}
+
+stop() {
+    recording || { say "Screen Recording" "Not recording"; return 1; }
+    local pid="$REC_PID" file="$REC_FILE"
+    # SIGINT is wf-recorder's Ctrl+C: it finishes the file and exits.
+    # Writing the end of a long recording can take a few seconds.
+    kill -INT "$pid" 2>/dev/null
+    for _ in $(seq 1 100); do
+        [ -d "/proc/$pid" ] || break
+        sleep 0.1
+    done
+    local cut=0
+    # Still writing after 10 s means stuck: SIGTERM is handled like SIGINT,
+    # so only SIGKILL ends it, and the end of the file may be lost
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null
+        cut=1
+    fi
+    rm -f "$STATE"
+    refresh_bar
+
+    if [ -s "$file" ]; then
+        local shown="${file/#$HOME/\~}"
+        # The "Open" button waits for a click, so it waits in the background
+        (
+            title="Recording saved"
+            [ "$cut" = 1 ] && title="Recording saved (stopped by force, the end may be missing)"
+            act=$(notify-send -a Tebian -A open=Open "$title" "$shown" 2>/dev/null)
+            [ "$act" = open ] && command -v xdg-open >/dev/null 2>&1 &&
+                setsid -f xdg-open "$file" >/dev/null 2>&1 < /dev/null
+        ) > /dev/null 2>&1 9>&- &
+        disown 2>/dev/null
+    else
+        say "Screen Recording" "Stopped, but nothing was saved"
+    fi
+    return 0
+}
+
+status() {
+    recording || return 1
+    printf '%s\n' "$REC_FILE"
+}
+
+bar() {
+    if recording; then
+        local since
+        since=$(stat -c %Y "$STATE" 2>/dev/null)
+        printf '{"text": "󰑋 REC", "tooltip": "Recording since %s — click to stop", "class": "recording"}\n' \
+            "$(date -d "@${since:-0}" +%H:%M)"
+    else
+        printf '{"text": "", "tooltip": "", "class": ""}\n'
+    fi
+}
+
+case "${1:-toggle}" in
+    toggle|start)
+        cmd="${1:-toggle}"
+        [ $# -gt 0 ] && shift
+        mkdir -p "$STATE_DIR"
+        # Starting takes a while (two menus, a drag in slurp). A second key
+        # press meanwhile must not start a second recorder, so it is
+        # dropped; one during a recording stops it.
+        exec 9> "$STATE_DIR/recording.lock"
+        if ! flock -n 9; then
+            exit 0
+        fi
+        if [ "$cmd" = toggle ] && recording; then
+            stop
+        elif [ "$cmd" = start ] && recording; then
+            say "Screen Recording" "Already recording: ${REC_FILE/#$HOME/\~}"
+        else
+            start "$@"
+        fi
+        ;;
+    stop)   stop ;;
+    status) status ;;
+    bar)    bar ;;
+    -h|--help|help) sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "usage: tebian-record [toggle|start|stop|status|bar] [region|screen] [none|desktop|mic]" >&2; exit 2 ;;
+esac

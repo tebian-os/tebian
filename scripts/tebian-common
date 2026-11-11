@@ -165,13 +165,34 @@ tebian_apt_repo_add() {
     return "$rc"
 }
 
-# Add an app to the Mod+D pins. tebian-menu writes its defaults on first run and
-# never again, so anything installed later has to add itself or stays off the
-# menu. No file yet means first run has not happened: creating one here would
-# stop the defaults being written, so callers' apps belong in those defaults.
+# The pinned apps (Mod+D, the dock): one desktop-id per line. The defaults
+# are written the first time anything asks, whichever comes first: Mod+D,
+# the drawer, the dock or an installer pinning its app. A menu that made an
+# empty file instead would leave the user with no pins at all.
+TEBIAN_PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
+tebian_pins_init() {
+    [ -f "$TEBIAN_PIN_FILE" ] && return 0
+    mkdir -p "${TEBIAN_PIN_FILE%/*}"
+    cat > "$TEBIAN_PIN_FILE" << 'EOF'
+helium.desktop
+app.zen_browser.zen.desktop
+t3code.desktop
+hermes.desktop
+firefox-esr.desktop
+firefox.desktop
+chromium.desktop
+org.mozilla.firefox.desktop
+kitty.desktop
+thunar.desktop
+code.desktop
+EOF
+}
+
+# Add an app to the pins; anything installed after the defaults were written
+# has to add itself or stays off the menu
 tebian_pin_app() {
-    local desktop="$1" pins="$HOME/.config/tebian/pinned-apps.conf"
-    [ -f "$pins" ] || return 0
+    local desktop="$1" pins="$TEBIAN_PIN_FILE"
+    tebian_pins_init || return 1
     grep -qxF "$desktop" "$pins" && return 0
     # An unterminated last line would otherwise merge with ours
     [ -z "$(tail -c1 "$pins")" ] || echo >> "$pins"
@@ -689,6 +710,11 @@ tebian_user_migrate() {
         tebian_block_remove snap-off "$file"
     fi
 
+    # The same for Snap Assist's line, and the floating-mode keys follow
+    # what this sway can do (see FLOATING MODE AND WINDOW SNAPPING below)
+    tebian_snap_assist_sync "$file"
+    tebian_snap_keys_sync "$file"
+
     grep -qE '[^[:space:]#].*[[:space:]]# tebian-[a-z0-9-]+[[:space:]]*$' "$file" || return 0
 
     local moved
@@ -734,18 +760,84 @@ tebian_user_migrate() {
 # line that an unpatched sway would reject.
 # ==============================================================================
 
-# True if the sway that `sway` starts has Tebian's snapping. Asks sway to
-# check a one-line config rather than guessing from version numbers, so it
-# holds for Debian's sway, Tebian's build and SwayFX alike.
+# True if the sway that `sway` starts has Tebian's snapping — or, given a
+# config line, if it accepts that line (newer builds add options: rev 2 has
+# floating_snap_assist, rev 1 rejects it). Asks sway to check a one-line
+# config rather than guessing from version numbers, so it holds for
+# Debian's sway, Tebian's build and SwayFX alike. A check takes sway a
+# quarter of a second and runs at every login and Settings start, so the
+# answer is kept until the binary changes (an update, a rebuild, SwayFX).
 tebian_snap_supported() {
-    command -v sway >/dev/null || return 1
-    local probe rc
+    local line="${1:-floating_snap enable}" bin id cache probe rc
+    bin=$(command -v sway) || return 1
+    bin=$(readlink -f "$bin")
+    id="$bin:$(stat -c '%i:%s:%Y' "$bin" 2>/dev/null)"
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/tebian/sway-accepts"
+    if [ -f "$cache" ]; then
+        rc=$(ID="$id" L="$line" awk -F'\t' '$1 == ENVIRON["ID"] && $2 == ENVIRON["L"] { print $3; exit }' "$cache")
+        [ -n "$rc" ] && return "$rc"
+    fi
     probe=$(mktemp) || return 1
-    echo 'floating_snap enable' > "$probe"
-    sway -C -c "$probe" >/dev/null 2>&1
+    echo "$line" > "$probe"
+    # sway 1.10 starts its backend before it checks the config; at login
+    # (no compositor yet) that would take over the screen and seat for a
+    # moment, or wait 10 s for a seat it can't get. A headless backend
+    # needs neither.
+    WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -C -c "$probe" >/dev/null 2>&1
     rc=$?
     rm -f "$probe"
-    return $rc
+    [ "$rc" -eq 0 ] || rc=1
+    # Answers for other binaries are dropped: only the current one matters
+    mkdir -p "$(dirname "$cache")" 2>/dev/null &&
+        { ID="$id" awk -F'\t' '$1 == ENVIRON["ID"]' "$cache" 2>/dev/null
+          printf '%s\t%s\t%s\n' "$id" "$line" "$rc"; } > "$cache.$$" &&
+        mv -f "$cache.$$" "$cache"
+    return "$rc"
+}
+
+# Snap Assist: after a window snaps to a left or right half, sway runs
+# tebian-snap, which offers the workspace's other floating windows for the
+# other half (floating_snap_assist, rev 2 of Tebian's sway). On unless
+# turned off; the off switch is a file, not the block, because the block
+# must also go whenever the running sway can't read it (Debian's own sway
+# after an update, SwayFX not yet rebuilt) and the choice has to outlive
+# that.
+TEBIAN_SNAP_ASSIST_LINE='floating_snap_assist ~/.local/bin/tebian-snap assist'
+TEBIAN_SNAP_ASSIST_OFF="$HOME/.config/tebian/snap-assist-off"
+
+tebian_snap_assist_enabled() {
+    [ ! -f "$TEBIAN_SNAP_ASSIST_OFF" ]
+}
+
+# Write or drop the snap-assist block to match the switch and what this
+# sway understands. Runs from tebian_user_migrate, i.e. before sway reads
+# config.user at login, so an older sway never sees the line.
+tebian_snap_assist_sync() {
+    local file="${1:-$TEBIAN_SWAY_USER}"
+    if tebian_snap_assist_enabled && tebian_snap_supported 'floating_snap_assist none'; then
+        tebian_block_get snap-assist "$file" 2>/dev/null | grep -qxF -- "$TEBIAN_SNAP_ASSIST_LINE" ||
+            tebian_block_set_in "$file" snap-assist "$TEBIAN_SNAP_ASSIST_LINE"
+    elif tebian_block_has snap-assist "$file"; then
+        tebian_block_remove snap-assist "$file"
+    fi
+}
+
+# tebian_snap_assist_set on|off — the Settings switch; applies at once in
+# the running sway too (a sway without it just says no)
+tebian_snap_assist_set() {
+    if [ "$1" = on ]; then
+        rm -f "$TEBIAN_SNAP_ASSIST_OFF"
+    else
+        mkdir -p "$(dirname "$TEBIAN_SNAP_ASSIST_OFF")"
+        touch "$TEBIAN_SNAP_ASSIST_OFF"
+    fi
+    tebian_snap_assist_sync
+    if [ "$1" = on ]; then
+        swaymsg "${TEBIAN_SNAP_ASSIST_LINE}" >/dev/null 2>&1
+    else
+        swaymsg floating_snap_assist none >/dev/null 2>&1
+    fi
+    return 0
 }
 
 setup_floating_mode() {
@@ -754,14 +846,84 @@ setup_floating_mode() {
     # focused floating window — so windows kept jumping in front of each
     # other. The block is appended after the user's own setting, so it wins
     # here and their choice returns when the block goes (tiling mode).
+    local -a keys
+    mapfile -t keys < <(tebian_snap_keys)
     tebian_block_set floating-mode \
         'focus_follows_mouse no' \
         'for_window [app_id=".*"] floating enable' \
         'for_window [class=".*"] floating enable' \
-        'bindsym $mod+Ctrl+Left snap left' \
-        'bindsym $mod+Ctrl+Right snap right' \
-        'bindsym $mod+Ctrl+Up snap max' \
-        'bindsym $mod+Ctrl+Down snap restore'
+        "${keys[@]}"
+}
+
+# Floating mode's keyboard snaps. Any sway loads a binding whatever its
+# command says (it's checked when the key is pressed), so none of these can
+# stop sway from starting; a sway that doesn't know a command just does
+# nothing for that key. Up and Down differ: rev 2 of Tebian's sway steps
+# with them (half -> quarter, unsnapped -> max -> restored, see
+# patches/sway/floating-snap.patch), rev 1 and older SwayFX builds know
+# only "max" and "restore" — so those two follow the sway that runs.
+TEBIAN_SNAP_KEYS_REV1=(
+    'bindsym $mod+Ctrl+Left snap left'
+    'bindsym $mod+Ctrl+Right snap right'
+    'bindsym $mod+Ctrl+Up snap max'
+    'bindsym $mod+Ctrl+Down snap restore'
+)
+TEBIAN_SNAP_KEYS_REV2=(
+    'bindsym $mod+Ctrl+Left snap left'
+    'bindsym $mod+Ctrl+Right snap right'
+    'bindsym $mod+Ctrl+Up snap up'
+    'bindsym $mod+Ctrl+Down snap down'
+    'bindsym $mod+Ctrl+Return snap max'
+    'bindsym $mod+Ctrl+BackSpace snap restore'
+    'bindsym $mod+Ctrl+Home snap top-left'
+    'bindsym $mod+Ctrl+Prior snap top-right'
+    'bindsym $mod+Ctrl+End snap bottom-left'
+    'bindsym $mod+Ctrl+Next snap bottom-right'
+    'bindsym $mod+Ctrl+1 snap left-third'
+    'bindsym $mod+Ctrl+2 snap center-third'
+    'bindsym $mod+Ctrl+3 snap right-third'
+    'bindsym $mod+Ctrl+Shift+1 snap left-two-thirds'
+    'bindsym $mod+Ctrl+Shift+3 snap right-two-thirds'
+    'bindsym $mod+Ctrl+Shift+Left snap prev-output'
+    'bindsym $mod+Ctrl+Shift+Right snap next-output'
+)
+
+# Rev 2 of Tebian's sway: stepping arrows, thirds, other screens, Snap Assist
+tebian_snap_rev2() {
+    tebian_snap_supported 'floating_snap_assist none'
+}
+
+# The keyboard snap lines for the sway that runs
+tebian_snap_keys() {
+    if tebian_snap_rev2; then
+        printf '%s\n' "${TEBIAN_SNAP_KEYS_REV2[@]}"
+    else
+        printf '%s\n' "${TEBIAN_SNAP_KEYS_REV1[@]}"
+    fi
+}
+
+# Bring an existing floating-mode block's keys in line with the sway that
+# runs (it can change under the block: a rebuild, SwayFX, a Debian update).
+# Only the lines Tebian ships are touched. Going back to rev 1 just turns
+# Up/Down back into max/restore; the other rev 2 keys stay, doing nothing
+# until sway is rebuilt.
+tebian_snap_keys_sync() {
+    local file="${1:-$TEBIAN_SWAY_USER}" line
+    tebian_block_has floating-mode "$file" || return 0
+    if tebian_snap_rev2; then
+        if grep -qxE 'bindsym \$mod\+Ctrl\+(Up snap max|Down snap restore)' "$file"; then
+            sed -e 's/^bindsym \$mod+Ctrl+Up snap max$/bindsym $mod+Ctrl+Up snap up/' \
+                -e 's/^bindsym \$mod+Ctrl+Down snap restore$/bindsym $mod+Ctrl+Down snap down/' \
+                "$file" | _tebian_rewrite "$file"
+        fi
+        for line in "${TEBIAN_SNAP_KEYS_REV2[@]}"; do
+            tebian_block_add_line floating-mode "$line" "$file"
+        done
+    elif grep -qxE 'bindsym \$mod\+Ctrl\+(Up snap up|Down snap down)' "$file"; then
+        sed -e 's/^bindsym \$mod+Ctrl+Up snap up$/bindsym $mod+Ctrl+Up snap max/' \
+            -e 's/^bindsym \$mod+Ctrl+Down snap down$/bindsym $mod+Ctrl+Down snap restore/' \
+            "$file" | _tebian_rewrite "$file"
+    fi
 }
 
 # Remove floating mode from config.user
@@ -810,7 +972,7 @@ tebian_term_apt_install() {
 tebian_install_quickshell() {
     local term="${TERM_CMD:-kitty -e}"
     $term bash -c '
-        echo "Installing Quickshell (panels for the Modern bar) from trixie-backports..."
+        echo "Installing Quickshell (the bar panels and the dock) from trixie-backports..."
         echo
         list=/etc/apt/sources.list.d/tebian-backports.list
         if ! grep -rqs "trixie-backports" /etc/apt/sources.list /etc/apt/sources.list.d/; then

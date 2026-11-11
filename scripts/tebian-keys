@@ -24,7 +24,7 @@ KEYBINDS="󰘔 Super+Enter → Terminal
 # Floating mode's keyboard snaps (sway's own snap command)
 if grep -q '^bindsym \$mod+Ctrl+Left snap left' ~/.config/sway/config.user 2>/dev/null; then
     KEYBINDS+="
-󰕴 Super+Ctrl+Arrows → Snap Window"
+󰕴 Super+Ctrl+Arrows → Snap Window (again: thirds)"
 fi
 
 if grep -q "bindsym.*exec gtklock" ~/.config/sway/config.user 2>/dev/null; then
@@ -37,6 +37,9 @@ KEYBINDS+="
 󰁮 Super+Shift+Arrows → Move
 󰄀 Print → Screenshot Region
 󰄀 Shift+Print → Screenshot Save
+󰄀 Super+Print → Capture Menu
+󰄀 Ctrl+Print → Record Screen
+󰌌 Super+. → Emoji Picker
 󰐥 Super+Shift+E → Exit Sway"
 
 CHOICE=$(echo -e "$KEYBINDS" | tfuzzel -d -p " 󰌌 Keys | " --width 35)
@@ -68,5 +71,8 @@ case "$CHOICE" in
     *"Lock Screen"*) gtklock -d ;;
     *"Screenshot Region"*) mkdir -p ~/Pictures/Screenshots && FILE=~/Pictures/Screenshots/screenshot-$(date +%Y%m%d_%H%M%S).png && grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied" ;;
     *"Screenshot Save"*) mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/$(date +%Y%m%d_%H%M%S).png && notify-send "Screenshot" "Saved" ;;
+    *"Capture Menu"*) tebian-capture & ;;
+    *"Record Screen"*) tebian-record & ;;
+    *"Emoji Picker"*) tebian-emoji & ;;
     *"Exit Sway"*) swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit" ;;
 esac

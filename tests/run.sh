@@ -201,6 +201,89 @@ else
     pass "sway: no key bound twice across config and config.user"
 fi
 
+# Dock (tebian-dock): on/off is the config.user block, settings land in
+# dock.conf, pins in the Mod+D file with hand-added lines kept. A stub
+# quickshell, so nothing is started.
+if (
+    h=$(mktemp -d); trap 'rm -rf "$h"' EXIT
+    mkdir -p "$h/bin" "$h/.config/tebian" "$h/Tebian/configs"
+    ln -s "$ROOT/configs/panels" "$h/Tebian/configs/panels"
+    printf '#!/bin/sh\nexit 0\n' > "$h/bin/quickshell"
+    printf '#!/bin/sh\nexit 0\n' > "$h/bin/notify-send"
+    chmod +x "$h/bin/quickshell" "$h/bin/notify-send"
+    export HOME="$h" TEBIAN_DIR="$h/Tebian" PATH="$h/bin:$PATH"
+    unset SWAYSOCK
+    d="$ROOT/scripts/tebian-dock"
+    ! "$d" status >/dev/null || exit 1
+    "$d" on >/dev/null && st=$("$d" status) && grep -qx 'enabled=on' <<< "$st" || exit 1
+    grep -qx 'exec tebian-dock run' "$h/.config/sway/config.user" || exit 1
+    "$d" position left && [ "$("$d" position)" = left ] || exit 1
+    ! "$d" position top 2>/dev/null || exit 1
+    "$d" autohide toggle && [ "$("$d" autohide)" = on ] || exit 1
+    printf 'kitty.desktop\n# mine\nfoot.desktop' > "$h/.config/tebian/pinned-apps.conf"
+    "$d" pin thunar.desktop && "$d" pin thunar.desktop && "$d" unpin kitty.desktop
+    [ "$(cat "$h/.config/tebian/pinned-apps.conf")" = $'# mine\nfoot.desktop\nthunar.desktop' ] || exit 1
+    ! "$d" pin ../x.desktop 2>/dev/null || exit 1
+    "$d" off >/dev/null && ! grep -q 'tebian:dock' "$h/.config/sway/config.user"
+); then
+    pass "dock: on/off block, position/autohide, pins keep hand-added lines"
+else
+    fail "dock: tebian-dock state commands"
+fi
+
+# Web apps: hostile names and URLs survive the .desktop file and the app
+# index unchanged, reach the browser as one argument, and never run
+{
+    wa=$(mktemp -d); mkdir -p "$wa/bin"
+    printf '#!/bin/sh\nfor a; do printf "%%s\\n" "$a"; done > "%s/argv"\n' "$wa" > "$wa/bin/helium"
+    printf '#!/bin/sh\nexit 0\n' > "$wa/bin/notify-send"
+    chmod +x "$wa/bin/helium" "$wa/bin/notify-send"
+    name='x%u;"\`$(touch '"$wa"'/pwned) \\ end'
+    url="https://e.com/a'b;c%20d\$(touch\$IFS$wa/pwned2)%u?q=1&r=%c"
+    out=$(env -u SWAYSOCK -u WAYLAND_DISPLAY -u XDG_DATA_HOME HOME="$wa" PATH="$wa/bin:$ROOT/scripts:$PATH" bash -c '
+        w=scripts/tebian-webapp
+        id=$($w add "$1" "$2" --no-icon) || exit 1
+        source scripts/tebian-common
+        [ "$(tebian_app_name "$id")" = "$1" ] || { echo "name changed"; exit 1; }
+        tebian_app_launch "$id" || exit 1
+        for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$HOME/argv" ] && break; sleep 0.1; done
+        [ "$(cat "$HOME/argv")" = "--app=$2" ] || { echo "argv: $(cat "$HOME/argv")"; exit 1; }
+        for bad in "javascript:alert(1)" "file:///etc/passwd" "data:text/html,x" "https://a b" $'"'"'https://a\nExec=x'"'"'; do
+            $w check-url "$bad" >/dev/null 2>&1 && { echo "accepted $bad"; exit 1; }
+        done
+        $w check-name $'"'"'a\nb'"'"' >/dev/null 2>&1 && { echo "accepted a newline"; exit 1; }
+        $w remove "$id" && [ ! -e "$HOME/.local/share/applications/$id" ]
+    ' _ "$name" "$url" 2>&1) && [ ! -e "$wa/pwned" ] && [ ! -e "$wa/pwned2" ] &&
+        pass "web apps: odd names and URLs stay data" || fail "web apps: $out"
+    rm -rf "$wa"
+}
+
+# Recording: nothing running means "not recording", and the bar gets JSON
+if (
+    d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+    export XDG_RUNTIME_DIR="$d" HOME="$d"
+    ! scripts/tebian-record status >/dev/null 2>&1 &&
+        scripts/tebian-record bar | grep -q '"text": *""'
+); then
+    pass "record: idle status and bar output"
+else
+    fail "record: status/bar while idle"
+fi
+
+# Pins: whoever asks first writes the defaults, never an empty file
+if (
+    d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+    export HOME="$d"
+    source scripts/tebian-common
+    tebian_pin_app zz.desktop &&
+        grep -qxF kitty.desktop "$d/.config/tebian/pinned-apps.conf" &&
+        [ "$(tail -1 "$d/.config/tebian/pinned-apps.conf")" = zz.desktop ]
+); then
+    pass "pins: first pin keeps the defaults"
+else
+    fail "pins: first pin lost the defaults"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
     echo -e "${GREEN}All checks passed.${NC}"

@@ -209,6 +209,11 @@ while true; do
     
     # Build output string dynamically based on available hardware
     parts=()
+    # A recording in progress (tebian-record keeps its PID in this file)
+    if [ -f "${XDG_RUNTIME_DIR:-/nonexistent}/tebian/recording" ]; then
+        read -r rec_pid < "$XDG_RUNTIME_DIR/tebian/recording"
+        [ -n "$rec_pid" ] && [ -d "/proc/$rec_pid" ] && parts+=("󰑋 REC")
+    fi
     [ -n "$caps_str" ] && parts+=("$caps_str")
     [ -n "$wifi_status" ] && parts+=("$wifi_status")
     [ -n "$bt_status" ] && parts+=("$bt_status")

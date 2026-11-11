@@ -1,0 +1,155 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN EMOJI
+# Type a name, Enter: the emoji is copied, and typed into the window you
+# were in when wtype is installed.
+#
+#   tebian-emoji          the picker
+#   tebian-emoji list     the list it shows, one "<emoji> <name>  (<kind>)"
+#                         per line, recently picked first
+#
+# The names come from Unicode's own list, emoji-test.txt: Debian's copy
+# (package unicode-data) when installed, else the one in configs/emoji.
+# Skin-tone variants follow all
+# the plain ones. Parsed once into ~/.cache/tebian; picks are remembered
+# in ~/.local/state/tebian/emoji-recent.
+# ==============================================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _f in "$SCRIPT_DIR/tebian-common" "$HOME/.local/bin/tebian-common"; do
+    # shellcheck disable=SC1090
+    [ -f "$_f" ] && { . "$_f"; break; }
+done
+unset _f
+
+# Debian's copy when unicode-data happens to be installed (it follows new
+# Unicode releases), else the one Tebian ships: the picker has to work the
+# first time its key is pressed, without a 39 MB package first
+SRC="${TEBIAN_EMOJI_SRC:-/usr/share/unicode/emoji/emoji-test.txt}"
+if [ ! -r "$SRC" ]; then
+    for _f in "$SCRIPT_DIR/../configs/emoji/emoji-test.txt" \
+              "${TEBIAN_DIR:-$HOME/Tebian}/configs/emoji/emoji-test.txt"; do
+        [ -r "$_f" ] && { SRC="$_f"; break; }
+    done
+    unset _f
+fi
+# v1: the format below; a new format gets a new name, so an old cache is
+# never read as the new one
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/tebian/emoji-v1.list"
+RECENT="${XDG_STATE_HOME:-$HOME/.local/state}/tebian/emoji-recent"
+RECENT_MAX=24
+
+say() {  # title message
+    notify-send -a Tebian "$1" "$2" 2>/dev/null || echo "$1: $2" >&2
+}
+
+# A terminal that waits for its command, so the install can be checked
+install_term() {
+    local t
+    t=$(tebian_term_cmd 2>/dev/null)
+    case "$t" in
+        ""|gnome-terminal*|kgx*|ptyxis*)
+            for t in kitty foot alacritty; do
+                command -v "$t" >/dev/null 2>&1 && { echo "$t -e"; return; }
+            done
+            echo "kitty -e" ;;
+        *) echo "$t" ;;
+    esac
+}
+
+need_data() {
+    [ -r "$SRC" ] && return 0
+    local pick
+    pick=$(printf '%s\n' "Install unicode-data" "Cancel" |
+        fuzzel -d -p " The emoji list comes from unicode-data | " --lines 2 --width 50)
+    [[ "$pick" == Install* ]] || return 1
+    declare -F tebian_term_apt_install >/dev/null &&
+        TERM_CMD="$(install_term)" tebian_term_apt_install unicode-data
+    [ -r "$SRC" ] && return 0
+    say "Emoji" "unicode-data could not be installed"
+    return 1
+}
+
+# emoji-test.txt lines look like
+#   1F600 ; fully-qualified # 😀 E1.0 grinning face
+# Only fully-qualified ones: the others are the same emoji spelled without
+# their variation selector, which some apps draw as plain text. The
+# subgroup ("food-fruit") is the only keyword Unicode gives, so it is kept
+# on the line for typing "fruit" or "animal".
+build_cache() {
+    mkdir -p "${CACHE%/*}" || return 1
+    awk '
+        /^# subgroup:/ { sub(/^# subgroup: */, ""); kind = $0; gsub(/-/, " ", kind); next }
+        /^[0-9A-F]/ && /; fully-qualified/ {
+            c = $0; sub(/^[^#]*# /, "", c)
+            n = split(c, f, " ")
+            name = f[3]; for (i = 4; i <= n; i++) name = name " " f[i]
+            line = f[1] " " name "  (" kind ")"
+            if (name ~ /skin tone/) tones[++t] = line; else print line
+        }
+        END { for (i = 1; i <= t; i++) print tones[i] }
+    ' "$SRC" > "$CACHE.tmp" && [ -s "$CACHE.tmp" ] && mv -f "$CACHE.tmp" "$CACHE"
+}
+
+list() {
+    if [ ! -s "$CACHE" ] || [ "$SRC" -nt "$CACHE" ]; then
+        build_cache || return 1
+    fi
+    # Recent picks first, and not again further down
+    if [ -s "$RECENT" ]; then
+        awk 'NR == FNR { seen[$0]; print; next } !($0 in seen)' "$RECENT" "$CACHE"
+    else
+        cat "$CACHE"
+    fi
+}
+
+remember() {
+    mkdir -p "${RECENT%/*}" || return
+    { printf '%s\n' "$1"; grep -vxF -- "$1" "$RECENT" 2>/dev/null; } |
+        head -n "$RECENT_MAX" > "$RECENT.tmp" && mv -f "$RECENT.tmp" "$RECENT"
+}
+
+pick() {
+    command -v fuzzel >/dev/null 2>&1 || { say "Emoji" "The picker needs fuzzel"; return 1; }
+    need_data || return 1
+    local line emoji
+    # fuzzel itself, not tfuzzel: Text Mode strips emoji from menus, and
+    # here the emoji are the content
+    line=$(list | fuzzel -d -p " Emoji | " --width 50) || return 0
+    [ -n "$line" ] || return 0
+    # Enter on text that matched nothing hands back the text itself, and
+    # that must not be typed into the window as if it were an emoji
+    list | grep -qxF -- "$line" || return 0
+    emoji="${line%% *}"
+    remember "$line"
+
+    local copied=0
+    if command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$emoji" | wl-copy && copied=1
+    fi
+    if command -v wtype >/dev/null 2>&1; then
+        # Focus has to be back on the window the picker covered. wtype
+        # sends its own keymap first; a key right behind it was dropped
+        # (tested with foot: a lone emoji never arrived), so -s waits for
+        # the app to take the keymap. It reads its text in the locale's
+        # charset, and a session without a UTF-8 LANG made it refuse.
+        sleep 0.15
+        LC_ALL=C.UTF-8 wtype -s 50 -- "$emoji" 2>/dev/null && return 0
+    fi
+    if [ "$copied" = 1 ]; then
+        say "Emoji copied" "$emoji is on the clipboard (install wtype to have it typed)"
+    else
+        say "Emoji" "Install wl-clipboard (copy) or wtype (type) to use the picker"
+        return 1
+    fi
+}
+
+case "${1:-pick}" in
+    pick) pick ;;
+    list) [ -r "$SRC" ] || { echo "tebian-emoji: $SRC missing (apt install unicode-data)" >&2; exit 1; }
+          list ;;
+    -h|--help|help) sed -n '4,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "usage: tebian-emoji [pick|list]" >&2; exit 2 ;;
+esac

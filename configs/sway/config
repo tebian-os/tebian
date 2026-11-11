@@ -106,6 +106,11 @@ bindsym $mod+v exec bash -c 'source ~/.local/bin/tebian-common 2>/dev/null; comm
 # Screenshots
 bindsym Print exec bash -c 'mkdir -p ~/Pictures/Screenshots && FILE=~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png && grim -g "$(slurp)" "$FILE" && wl-copy < "$FILE" && notify-send "Screenshot" "Saved & copied to clipboard"'
 bindsym Shift+Print exec bash -c 'mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/screenshot-$(date +%Y-%m-%d_%H-%M-%S).png && notify-send "Screenshot" "Saved to ~/Pictures/Screenshots/"'
+# The rest of the captures: a menu (window shot, record, copy text, QR),
+# and recording on one key (again stops it)
+bindsym $mod+Print exec tebian-capture
+bindsym Ctrl+Print exec tebian-record
+bindsym $mod+period exec tebian-emoji
 
 # Navigation
 bindsym $mod+Left focus left

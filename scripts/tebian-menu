@@ -15,23 +15,8 @@ fi
 
 PIN_FILE="$HOME/.config/tebian/pinned-apps.conf"
 
-# Create default pins on first run
-if [ ! -f "$PIN_FILE" ]; then
-    mkdir -p "$HOME/.config/tebian"
-    cat > "$PIN_FILE" << 'EOF'
-helium.desktop
-app.zen_browser.zen.desktop
-t3code.desktop
-hermes.desktop
-firefox-esr.desktop
-firefox.desktop
-chromium.desktop
-org.mozilla.firefox.desktop
-kitty.desktop
-thunar.desktop
-code.desktop
-EOF
-fi
+# Default pins on first run
+tebian_pins_init
 
 # Every launchable app, once, sorted by name. Split by hand, not with
 # `IFS=$'\t' read`: that merges the tabs around an empty icon.

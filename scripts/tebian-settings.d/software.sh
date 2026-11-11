@@ -5,6 +5,7 @@
 software_hub() {
     while true; do
     SH_OPTS="󰖟 Web Browser
+󰖟 Web Apps
 󰏗 Package Browser
 󰚩 AI Tools
 󰊴 Software & Gaming
@@ -20,6 +21,8 @@ software_hub() {
 
     if [[ "$SH_CHOICE" =~ "Web Browser" ]]; then
         browser_menu
+    elif [[ "$SH_CHOICE" =~ "Web Apps" ]]; then
+        webapps_menu
     elif [[ "$SH_CHOICE" =~ "Package Browser" ]]; then
         package_browser
     elif [[ "$SH_CHOICE" =~ "AI Tools" ]]; then

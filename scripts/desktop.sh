@@ -83,7 +83,7 @@ PACKAGES=(
     # Apps. Only wl-clipboard's Recommends brought it in before
     xdg-utils
     libnotify-bin mako-notifier
-    grim slurp wl-clipboard
+    grim slurp wl-clipboard wtype
     brightnessctl wob
     xdg-desktop-portal-wlr
     lxpolkit

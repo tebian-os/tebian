@@ -33,7 +33,11 @@ brightness|Brightness|Backlight, Dim the Screen|Screen|screen_menu
 displays|Displays|Monitor, External Monitor, Second Screen, Multiple Monitors, Turn Off a Screen|Screen|display_output_menu
 display-layout|Display Layout|Resolution, Refresh Rate, Scale, Arrange Monitors, wdisplays|Screen > Brightness|display_layout_gui
 night-light|Night Light|Blue Light, Warm Screen, Color Temperature, Redshift, Eye Strain|Screen|night_light_menu
-screenshots|Screenshots|Screenshot, Print Screen, Screen Capture, Snip|Screen|screenshot_menu
+capture|Capture|Screenshot, Screenshots, Print Screen, Screen Capture, Snip, Snipping Tool|Screen|capture_menu
+screen-recording|Record Screen|Screen Recording, Screen Recorder, Record Video, Screencast|Screen > Capture|capture_record
+copy-text|Copy Text from Screen|OCR, Text Recognition, Extract Text|Screen > Capture|capture_text
+scan-qr|Scan QR Code|QR, Barcode|Screen > Capture|capture_qr
+emoji|Emoji Picker|Emoticons, Smiley, Special Characters|Keyboard & Mouse|capture_emoji
 lock|Lock & Idle|Lock Screen, Auto-Lock, Screen Lock, Idle, Screensaver|Screen|lock_menu
 lock-timeout|Lock Timeout|Auto-Lock Time, Idle Time, Lock After|Screen > Lock & Idle|lock_timeout_menu
 bar-stats|Bar Stats|CPU in Bar, RAM in Bar, System Monitor in Bar|Screen|bar_stats_toggle
@@ -47,8 +51,10 @@ mouse-speed|Mouse Speed|Pointer Speed, Mouse Acceleration, Cursor Speed, Sensiti
 scroll-speed|Scroll Speed|Touchpad Scroll Speed|Keyboard & Mouse|scroll_speed_menu
 software|Software|Install Apps, Apps, Programs, App Store||software_hub
 web-browsers|Web Browser|Install a Browser, Firefox, Helium, Zen|Software|browser_menu
+web-apps|Web Apps|Website as App, Install Web App, PWA, Site Shortcut, Web Shortcut|Software|webapps_menu
+web-app-add|Add Web App|New Web App, Make a Site an App|Software > Web Apps|webapps_add
 package-browser|Package Browser|Install a Package, Uninstall, Remove an App, apt, Flatpak|Software|package_browser
-ai-tools|AI Tools|Claude Code, Codex, OpenCode, T3 Code|Software|ai_tools_menu
+ai-tools|AI Tools|Claude Code, Codex, OpenCode, T3 Code, Hermes, Grok, Antigravity|Software|ai_tools_menu
 gaming|Software & Gaming|Games, Steam, Heroic, Minecraft, Lutris, Nix, Distrobox|Software|software_menu
 graphics-drivers|Graphics Drivers|Mesa, GPU Driver, Vulkan|Software > Software & Gaming|gfx_drivers_menu
 terminal|Terminal|Default Terminal, kitty, foot, alacritty|Software|terminal_menu
@@ -87,6 +93,8 @@ power|Power|Shutdown, Shut Down, Turn Off, Reboot, Restart, Sleep, Suspend, Log 
 power-mode|Power Mode|Battery Saver, Power Saver, Performance Mode, Battery Life, TLP|More > Performance|power_mode_menu
 more|More|Advanced||more_menu
 desktop-ui|Desktop & UI|Bar, Taskbar, Panel, Title Bars, Floating Windows, Tiling, Window Snapping, Window Effects, Blur, Rounded Corners, Hide Bar, Bar Position|More|ui_menu
+dock|Dock|Taskbar, App Dock, Running Apps, Mac Dock, Auto-hide Dock|More > Desktop & UI|dock_menu
+snap-assist|Snap Assist|Fill Other Half, Window Picker, Snap Thirds, Side by Side|More > Desktop & UI|snap_assist_toggle
 text-mode|UI Icons|Text Mode, Icons in Menus, Nerd Font Icons|More > Desktop & UI|ui_icons_toggle
 bar-style|Bar Style|Modern Bar, Classic Bar, Waybar|More > Desktop & UI|bar_style_toggle
 weather|Weather in Bar|Weather, Forecast, Temperature|More > Desktop & UI|weather_menu

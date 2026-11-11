@@ -1,0 +1,174 @@
+#!/bin/bash
+# ==============================================================================
+# TEBIAN DOCK
+# A Mac-style app dock (configs/panels/dock.qml, a Quickshell instance of its
+# own). Optional and off by default. Works under either bar: on the bar's
+# edge it sits just inside the bar.
+#
+#   tebian-dock on|off|toggle        turn it on (starts now and at every login)
+#   tebian-dock status               key=value lines; exit 0 while it is on
+#   tebian-dock position [bottom|left|right]   print or set where it sits
+#   tebian-dock autohide [on|off|toggle]       print or set auto-hide
+#   tebian-dock run                  run the dock (what login starts)
+#   tebian-dock reload               start it again if it is running (new launchers)
+#   tebian-dock launch|pin|unpin <id.desktop>  the dock's own clicks
+#   tebian-dock list                 what the running dock shows, one app a line
+#
+# On/off is the "dock" block in config.user (`exec tebian-dock run`), so the
+# login start and the switch can't disagree. Position and auto-hide live in
+# ~/.config/tebian/dock.conf, which the running dock watches: changes apply
+# at once, no restart. Pins are the Mod+D pins (pinned-apps.conf).
+# ==============================================================================
+set -u
+
+common() {
+    local f
+    for f in "$(dirname "$(readlink -f "$0")")/tebian-common" "$HOME/.local/bin/tebian-common"; do
+        # shellcheck disable=SC1090
+        [ -f "$f" ] && { . "$f"; return 0; }
+    done
+    echo "tebian-dock: tebian-common is missing" >&2
+    exit 1
+}
+common
+
+TEBIAN_DIR="${TEBIAN_DIR:-$HOME/Tebian}"
+# One canonical path: Quickshell finds a running instance by its config
+# path, so run, kill and ipc must all spell it identically
+QML=$(readlink -f "$TEBIAN_DIR/configs/panels/dock.qml" 2>/dev/null)
+CONF="$HOME/.config/tebian/dock.conf"
+PINS="$HOME/.config/tebian/pinned-apps.conf"
+BLOCK=dock
+
+conf_get() {
+    local v
+    v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([a-z]*\).*/\1/p" "$CONF" 2>/dev/null | tail -1)
+    echo "${v:-$2}"
+}
+
+# Rewrites one key and keeps any other lines (and comments) a user added
+conf_set() {
+    mkdir -p "$(dirname "$CONF")"
+    [ -f "$CONF" ] || printf '# Tebian dock — written by tebian-dock, read live by the dock\n' > "$CONF"
+    { grep -v "^[[:space:]]*$1[[:space:]]*=" "$CONF"; echo "$1=$2"; } | _tebian_rewrite "$CONF"
+}
+
+enabled() { tebian_block_has "$BLOCK"; }
+
+running() {
+    [ -n "$QML" ] && command -v quickshell >/dev/null &&
+        quickshell list -p "$QML" 2>/dev/null | grep -q "Process ID"
+}
+
+stop() {
+    [ -n "$QML" ] && command -v quickshell >/dev/null || return 0
+    quickshell kill -p "$QML" >/dev/null 2>&1
+    return 0
+}
+
+# Started through sway when there is one, so the dock is sway's child with
+# the session's environment, not a child of the menu that asked
+start() {
+    if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null; then
+        swaymsg exec "tebian-dock run" >/dev/null 2>&1 && return 0
+    fi
+    setsid -f tebian-dock run >/dev/null 2>&1 < /dev/null
+}
+
+say() {
+    notify-send "Dock" "$1" 2>/dev/null
+    echo "$1"
+}
+
+dock_on() {
+    if ! command -v quickshell >/dev/null; then
+        # From a menu there is no terminal to ask in; the install opens one
+        tebian_install_quickshell || { say "The dock needs Quickshell, which isn't installed."; exit 1; }
+    fi
+    if [ -z "$QML" ] || [ ! -f "$QML" ]; then
+        say "The dock's files are missing from $TEBIAN_DIR — run tebian-update."
+        exit 1
+    fi
+    tebian_block_set "$BLOCK" 'exec tebian-dock run'
+    running || start
+    say "Dock on"
+}
+
+dock_off() {
+    tebian_block_remove "$BLOCK"
+    stop
+    say "Dock off"
+}
+
+case "${1:-}" in
+    on)     dock_on ;;
+    off)    dock_off ;;
+    reload)
+        # A launcher made while the dock runs (a web app) is not seen until
+        # the dock starts again; its window would show as an unknown app
+        running && start
+        exit 0 ;;
+    toggle) if enabled; then dock_off; else dock_on; fi ;;
+    status)
+        # Settings labels read this: "Dock (ON)", "Position: Bottom"
+        if enabled; then echo "enabled=on"; else echo "enabled=off"; fi
+        if running; then echo "running=yes"; else echo "running=no"; fi
+        echo "position=$(conf_get position bottom)"
+        echo "autohide=$(conf_get autohide off)"
+        enabled
+        ;;
+    position)
+        case "${2:-}" in
+            "") conf_get position bottom ;;
+            bottom|left|right) conf_set position "$2" ;;
+            *) echo "usage: tebian-dock position bottom|left|right" >&2; exit 2 ;;
+        esac
+        ;;
+    autohide)
+        case "${2:-}" in
+            "")     conf_get autohide off ;;
+            on|off) conf_set autohide "$2" ;;
+            toggle) if [ "$(conf_get autohide off)" = on ]; then conf_set autohide off; else conf_set autohide on; fi ;;
+            *) echo "usage: tebian-dock autohide on|off|toggle" >&2; exit 2 ;;
+        esac
+        ;;
+    run)
+        command -v quickshell >/dev/null && [ -f "$QML" ] || exit 1
+        # Replace, don't refuse: a second `run` (Settings turning it on while
+        # a login's copy is still starting, or picking up an update) must
+        # leave exactly one dock
+        stop
+        # App icons follow the GTK icon theme the rest of the desktop uses
+        # (Papirus on Tebian); Quickshell would otherwise use Qt's default
+        theme=$(sed -n 's/^gtk-icon-theme-name *= *//p' "$HOME/.config/gtk-3.0/settings.ini" 2>/dev/null | tail -1)
+        export QS_ICON_THEME="${theme:-Papirus}"
+        # Flatpak apps' .desktop files, which sway is often started without
+        # (tebian_apps_list lists these dirs for Mod+D the same way)
+        export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share"
+        # A bar's pre-connected socket is not ours to use
+        unset WAYLAND_SOCKET
+        exec quickshell -p "$QML"
+        ;;
+    launch)
+        tebian_app_launch "${2:?usage: tebian-dock launch <id.desktop>}" ||
+            say "Couldn't start ${2} — it may have been uninstalled."
+        ;;
+    pin)
+        id="${2:?usage: tebian-dock pin <id.desktop>}"
+        [[ "$id" == ?*.desktop && "$id" != */* ]] || exit 2
+        tebian_pin_app "$id"
+        ;;
+    unpin)
+        id="${2:?usage: tebian-dock unpin <id.desktop>}"
+        [ -f "$PINS" ] || exit 0
+        grep -vxF -- "$id" "$PINS" | _tebian_rewrite "$PINS"
+        ;;
+    list)
+        running || exit 1
+        quickshell ipc -p "$QML" call tebian.dock list
+        ;;
+    *)
+        sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'
+        exit 2
+        ;;
+esac
