@@ -284,6 +284,14 @@ else
     fail "pins: first pin lost the defaults"
 fi
 
+# What the Desktop & UI switches do to real windows (its own hidden sway;
+# skips with a note where sway or a terminal is missing)
+if bash "$ROOT/tests/desktop.sh"; then
+    pass "desktop: switches change real windows (tests/desktop.sh)"
+else
+    fail "desktop: tests/desktop.sh"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
     echo -e "${GREEN}All checks passed.${NC}"

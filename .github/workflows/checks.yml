@@ -1,5 +1,6 @@
 # Runs tests/run.sh on every push and pull request: syntax, shellcheck at
-# error level, and the invariants it pins down. Same Debian release Tebian
+# error level, the invariants it pins down, and (sway, foot and zenity are
+# for this) what the Desktop & UI switches do to real windows. Same Debian release Tebian
 # ships on, so dpkg's version ordering matches users' machines.
 name: checks
 on: [push, pull_request]
@@ -8,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
-      - run: apt-get update && apt-get install -y --no-install-recommends git shellcheck python3 ca-certificates greetd dpkg
+      - run: apt-get update && apt-get install -y --no-install-recommends git shellcheck python3 ca-certificates greetd dpkg sway foot zenity
       - uses: actions/checkout@v4
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: bash tests/run.sh

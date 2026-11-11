@@ -190,12 +190,12 @@ apply_feel() {
     # --- Floating mode ---
     if [[ "$FEEL" == "Windows" || "$FEEL" == "macOS" ]]; then
         setup_floating_mode
-        swaymsg '[app_id=".*"] floating enable' 2>/dev/null
-        swaymsg '[class=".*"] floating enable' 2>/dev/null
+        swaymsg '[app_id=".*"] floating enable' >/dev/null 2>&1
+        swaymsg '[class=".*"] floating enable' >/dev/null 2>&1
     else
         remove_floating_mode
-        swaymsg '[app_id=".*"] floating disable' 2>/dev/null
-        swaymsg '[class=".*"] floating disable' 2>/dev/null
+        swaymsg '[app_id=".*"] floating disable' >/dev/null 2>&1
+        swaymsg '[class=".*"] floating disable' >/dev/null 2>&1
     fi
 
     # --- Bar position (bar_set_* live in ui.sh; they persist to config.user) ---
@@ -231,7 +231,7 @@ apply_feel() {
     fi
 
     tnotify "Desktop Feel" "$FEEL applied"
-    swaymsg reload 2>/dev/null &
+    swaymsg reload >/dev/null 2>&1 &
 }
 
 font_menu() {
