@@ -336,6 +336,19 @@ else
     fail "bar: a refresh signal during Waybar's start would end it (no bar after login)"
 fi
 
+# The Wi-Fi fix reaches every install path, and says only what modprobe
+# accepts (an "options" line for rtw88_core; a typo there is silently ignored)
+wifi_conf="configs/modprobe/tebian-wifi.conf"
+if [ "$(grep -v '^[[:space:]]*\(#\|$\)' "$ROOT/$wifi_conf")" = "options rtw88_core disable_lps_deep=y" ] &&
+   grep -q "queue_root $wifi_conf .*/etc/modprobe.d/tebian-wifi.conf" "$ROOT/scripts/tebian-update" &&
+   grep -q "$wifi_conf\" /etc/modprobe.d/tebian-wifi.conf" "$ROOT/scripts/desktop.sh" &&
+   grep -q "$wifi_conf\" *\\\\$" "$ROOT/scripts/tebian-installer" &&
+   grep -q "/etc/modprobe.d/tebian-wifi.conf" "$ROOT/scripts/uninstall.sh"; then
+    pass "wifi: the Realtek power-save fix is installed by setup, installer and update"
+else
+    fail "wifi: $wifi_conf is missing from an install path, or not a single rtw88_core option"
+fi
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then
