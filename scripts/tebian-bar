@@ -87,6 +87,21 @@ if command -v dbus-update-activation-environment >/dev/null; then
     fi
 fi
 
+# Tebian's helpers tell the bar to redraw a module with a real-time signal
+# (`pkill -RTMIN+8 -x waybar`: the drive watcher, Keep Awake, weather, the
+# recorder). Waybar catches those — once it is running. In its first
+# fraction of a second, while its libraries are still loading, nothing
+# catches them yet and the default for such a signal is to end the program:
+# no message, no crash report, exit status 170. The drive watcher starts at
+# login together with the bar and signals as soon as it has looked at the
+# drives, so on a machine with a card reader or a USB stick in, or simply a
+# slow cold start, the bar was killed at login and never seen. Ignoring the
+# signals here is inherited by Waybar, which swaps in its own handlers when
+# it is ready; a refresh sent before that is lost, and nothing was drawn yet.
+# (34-64: every real-time signal. Numbers, as bash names only half of them.)
+# shellcheck disable=SC2046
+trap '' $(seq 34 64)
+
 # sway passes `-b bar-0`; with "ipc": true Waybar then follows sway's bar
 # mode, so Hide Bar / show-on-Super keep working
 bar_pid=""

@@ -313,6 +313,29 @@ else
     fail "bar: tebian-bar started swaybar after Waybar ended (two bars after a reload)"
 fi
 
+# ...and starts it deaf to the refresh signals (pkill -RTMIN+n -x waybar)
+# until it listens for them itself: one arriving while Waybar was still
+# loading ended it without a word, and the bar was missing after login.
+if (
+    h=$(mktemp -d); trap 'rm -rf "$h"' EXIT
+    mkdir -p "$h/bin" "$h/home/.config/sway" "$h/run"
+    for c in swaybar swaymsg systemctl dbus-update-activation-environment; do
+        printf '#!/bin/sh\nexit 0\n' > "$h/bin/$c"; chmod +x "$h/bin/$c"
+    done
+    # Stands in for Waybar: notes which signals it was started ignoring
+    printf '#!/bin/sh\ngrep SigIgn /proc/self/status > "%s/sigign"\n' "$h" > "$h/bin/waybar"
+    chmod +x "$h/bin/waybar"
+    HOME="$h/home" XDG_RUNTIME_DIR="$h/run" TEBIAN_DIR="$ROOT" PATH="$h/bin:/usr/bin:/bin" \
+        bash "$ROOT/scripts/tebian-bar" -b bar-0 >/dev/null 2>&1
+    ign=$(awk '{print $2}' "$h/sigign")
+    # signals 34-64 are bits 33-63 of the mask
+    [ $(( (0x$ign >> 33) & 0x7fffffff )) -eq $(( 0x7fffffff )) ]
+); then
+    pass "bar: Waybar starts ignoring refresh signals until it handles them"
+else
+    fail "bar: a refresh signal during Waybar's start would end it (no bar after login)"
+fi
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then
