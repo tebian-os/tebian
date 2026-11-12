@@ -4,7 +4,8 @@
 # Brings ~/Tebian, the installed scripts and Tebian's few root-owned files up
 # to the latest release. Your settings are left alone: theme, security
 # profile, sway config.user, tebian.conf and ~/.config/tebian/machine.conf
-# are never touched.
+# are never touched (apart from one power-key line older Tebian itself put in
+# config.user, which the main config now has).
 #
 # Usage: tebian-update [--rebuild] [--allow-downgrade]
 #   --rebuild          afterwards, also re-apply tebian.conf (tebian-rebuild)
@@ -550,9 +551,29 @@ if dpkg-query -W -f='${Status}' sway 2>/dev/null | grep -q "ok installed"; then
     fi
 fi
 
+# --- 3b. A power-key line older Tebian put in config.user ---------------------
+# Tebian before 3.6 wrote this binding into config.user; the main config has
+# it now, and sway answers a key bound twice with a warning bar on every
+# reload ("Overwriting binding 'XF86PowerOff'..."). Only that exact pair of
+# lines is removed — a power-key binding of the user's own stays and wins.
+SWAY_USER="$HOME/.config/sway/config.user"
+OLD_POWER="bindsym XF86PowerOff exec tebian-settings --power"
+if grep -qsx "$OLD_POWER" "$SWAY_USER" && grep -qsx "$OLD_POWER" "$TEBIAN_DIR/configs/sway/config"; then
+    cp -p "$SWAY_USER" "$SWAY_USER.before-update"
+    awk -v line="$OLD_POWER" '
+        $0 == "# Power button opens Tebian power menu" { held = $0; next }
+        $0 == line { held = ""; drop_blank = 1; next }
+        { if (held != "") print held; held = ""
+          if (drop_blank && $0 == "") { drop_blank = 0; next }
+          drop_blank = 0; print }
+        END { if (held != "") print held }' "$SWAY_USER.before-update" > "$SWAY_USER.tmp" &&
+        mv "$SWAY_USER.tmp" "$SWAY_USER"
+    info "Removed a duplicate power-key line from ~/.config/sway/config.user (previous copy: config.user.before-update)"
+fi
+
 # --- 3b. Main sway config -------------------------------------------------------
 # ~/.config/sway/config is Tebian's file (personal settings belong in
-# config.user, which is never touched). It is replaced only if it is exactly
+# config.user, which is otherwise never touched). It is replaced only if it is exactly
 # what Tebian last installed — the recorded checksum proves that. A config
 # with local edits, or one from before checksums were recorded, is left
 # alone; the new default is saved next to it, with a one-time note.
