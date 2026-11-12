@@ -142,7 +142,7 @@ if [ -f /etc/udev/rules.d/90-tebian-drive-doctor.rules ]; then
     sudo rm -f /etc/udev/rules.d/90-tebian-drive-doctor.rules
     sudo udevadm control --reload 2>/dev/null
 fi
-sudo rm -f /etc/fonts/conf.d/40-tebian-font-rendering.conf
+sudo rm -f /etc/fonts/conf.d/40-tebian-font-rendering.conf /etc/modprobe.d/tebian-wifi.conf
 step "Tebian helpers removed from /usr/local and /etc"
 
 # SwayFX (built by tebian-install-swayfx into its own prefix). Only the

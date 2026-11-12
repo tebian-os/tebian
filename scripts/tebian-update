@@ -387,6 +387,8 @@ queue_root scripts/tebian-session             /usr/local/bin/tebian-session     
 # Drive Doctor's root half: missing on installs that predate it
 queue_root scripts/tebian-drive-probe         /usr/local/bin/tebian-drive-probe  755 yes
 queue_root configs/udev/90-tebian-drive-doctor.rules /etc/udev/rules.d/90-tebian-drive-doctor.rules 644 yes
+# Realtek rtw88 Wi-Fi firmware hang (takes effect at the next boot)
+queue_root configs/modprobe/tebian-wifi.conf   /etc/modprobe.d/tebian-wifi.conf   644 yes
 if grep -qs "nwg-hello" /etc/greetd/config.toml; then
     # The shipped config plus the user's autologin section, if they have one
     # (tebian-autologin owns that section) — a plain copy would silently

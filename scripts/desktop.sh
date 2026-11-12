@@ -303,6 +303,9 @@ sudo chmod +x /usr/local/bin/tebian-session
 sudo install -o root -g root -m 755 "$TEBIAN_DIR/scripts/tebian-drive-probe" /usr/local/bin/tebian-drive-probe
 sudo install -o root -g root -m 644 "$TEBIAN_DIR/configs/udev/90-tebian-drive-doctor.rules" /etc/udev/rules.d/90-tebian-drive-doctor.rules
 sudo udevadm control --reload 2>/dev/null || true
+# Realtek rtw88 Wi-Fi: keeps its firmware out of the power-save state it
+# hangs in (see the file)
+sudo install -o root -g root -m 644 -D "$TEBIAN_DIR/configs/modprobe/tebian-wifi.conf" /etc/modprobe.d/tebian-wifi.conf
 
 if [ "$USE_GREETD" = true ]; then
     # Create greeter user if needed
