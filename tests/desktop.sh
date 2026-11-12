@@ -12,7 +12,8 @@
 #
 # Needs sway, foot or kitty, and python3; zenity stands in for the apps that
 # draw their own frame (GTK dialogs, Chromium-family browsers). Skips, with
-# a note, when they are missing. Run by tests/run.sh, or on its own.
+# a note, when they are missing. Tabs and Alt+Tab also need jq, as the
+# scripts themselves do. Run by tests/run.sh, or on its own.
 # ==============================================================================
 set -uo pipefail
 
@@ -43,6 +44,15 @@ unset WAYLAND_DISPLAY SWAYSOCK DISPLAY I3SOCK DBUS_SESSION_BUS_ADDRESS
 printf '#!/bin/sh\nexit 0\n' > "$W/bin/pkill"
 cp "$W/bin/pkill" "$W/bin/notify-send"
 chmod +x "$W/bin/pkill" "$W/bin/notify-send"
+# A menu nobody is there to answer: it picks the row number left in
+# $W/pick (menus here are answered by position), or nothing — Escape
+cat > "$W/bin/fuzzel" <<EOF
+#!/bin/sh
+cat > /dev/null
+[ -s "$W/pick" ] && { cat "$W/pick"; : > "$W/pick"; }
+exit 0
+EOF
+chmod +x "$W/bin/fuzzel"
 export PATH="$W/bin:$ROOT/scripts:$REAL_PATH"
 
 # The shipped theme and bar, without the session's helpers (notifications,
@@ -187,6 +197,80 @@ check "feel Tiling: open windows tile" win_is t1 3 tiled
 check "feel Tiling: open windows lose their title bars" win_is t1 2 pixel
 check "feel Tiling: bar auto-hides" bar_is mode hide
 check "feel Tiling: marked as current" test "$(feel_current)" = Tiling
+
+# --- Tabs (Super+T) and Alt+Tab -----------------------------------------------
+if command -v jq >/dev/null; then
+    # "type layout windows" of whatever holds APP: "workspace splith 5" for
+    # a plain window, "floating_con tabbed 3" for a floating group of tabs
+    holder() {
+        swaymsg -t get_tree | jq -r --arg a "$1" '
+            first(.. | objects | select(((.nodes // []) + (.floating_nodes // [])) | any(.app_id == $a)))
+            | "\(.type) \(.layout) \([.. | objects | select(.pid != null)] | length)"'
+    }
+    holder_is() { [ "$(holder "$1")" = "$2" ]; }
+    focused_is() { [ "$(swaymsg -t get_tree | jq -r 'first(.. | objects | select(.focused == true)) | .app_id')" = "$1" ]; }
+    tabs() { echo "${1:-}" > "$W/pick"; tebian-tabs; settle; }
+
+    swaymsg -q '[app_id="zenity"] kill'; settle
+    swaymsg -q '[app_id="t1"] focus'
+    tabs
+    check "tabs, tiling: the windows become tabs" holder_is t1 "con tabbed 5"
+    tabs
+    check "tabs, tiling: and a split again" holder_is t1 "con splith 5"
+
+    swaymsg -q '[app_id="^t[0-9]$"] floating enable'; settle
+    swaymsg -q '[app_id="t1"] focus'
+    tabs    # Escape at the menu
+    check "tabs, floating: Escape changes nothing" win_is t1 3 floating
+    tabs 0  # All 4 Other Windows
+    check "tabs, floating: every window joins one floating group" holder_is t1 "floating_con tabbed 5"
+    tabs 0  # Take This Window Out
+    check "tabs, floating: a window taken out floats on its own" win_is t1 3 floating
+    check "tabs, floating: the rest stay a floating group" holder_is t2 "floating_con tabbed 4"
+    tabs 1  # t1 on its own again: Add, the first window listed
+    check "tabs, floating: a tab of another group can join this one" holder_is t1 "floating_con tabbed 2"
+    tabs 1  # Separate All Tabs
+    check "tabs, floating: separated, the window floats on its own" win_is t1 3 floating
+
+    # Two groups of two, then one takes a tab from the other: the window
+    # left behind must not keep a tab bar with a single tab
+    swaymsg -q '[app_id="^t[0-9]$"] floating enable'; settle
+    swaymsg -q '[app_id="t5"] kill'; settle
+    swaymsg -q '[app_id="t1"] focus'; tabs 1
+    swaymsg -q '[app_id="t1"] focus'; tabs 1   # Separate, in case it joined a group
+    swaymsg -q '[app_id="t1"] move absolute position 20 60; [app_id="t2"] move absolute position 60 100'
+    swaymsg -q '[app_id="t3"] move scratchpad; [app_id="t4"] move scratchpad'; settle
+    swaymsg -q '[app_id="t1"] focus'; tabs     # one other window: joined without a menu
+    check "tabs, floating: two windows join without a menu" holder_is t1 "floating_con tabbed 2"
+    swaymsg -q '[app_id="t3"] scratchpad show; [app_id="t3"] floating disable; [app_id="t3"] floating enable'; settle
+    swaymsg -q '[app_id="t3"] focus'; tabs 0   # All 2 Other Windows: both tabs of the other group
+    check "tabs, floating: taking every tab of a group leaves no group behind" holder_is t3 "floating_con tabbed 3"
+    swaymsg -q '[app_id="t3"] focus'; tabs 0   # Take This Window Out
+    swaymsg -q '[app_id="t3"] focus'; tabs 1   # menu: All 2, Add t1, Add t2 -> takes t1
+    lone=$(swaymsg -t get_tree | jq '[.. | objects | select(.type == "floating_con" and .pid == null)
+        | select(([.. | objects | select(.pid != null)] | length) == 1)] | length')
+    check "tabs, floating: a group left with one tab becomes a plain window" test "$lone" = 0
+    check "tabs, floating: ... and the taker has its two tabs" holder_is t3 "floating_con tabbed 2"
+    swaymsg -q '[app_id="t3"] focus'; tabs 1   # Separate All Tabs
+    swaymsg -q '[app_id="t4"] scratchpad show; [app_id="t4"] floating disable; [app_id="t4"] floating enable'; settle
+
+    # Alt+Tab: used in the order t1, t2, t3
+    for t in t1 t2 t3; do swaymsg -q "[app_id=\"$t\"] focus"; sleep 0.2; done
+    tebian-windows --next
+    check "alt+tab: one press goes to the window used before" focused_is t2
+    sleep 1.2
+    tebian-windows --next
+    check "alt+tab: pressed again later, back to where it came from" focused_is t3
+    sleep 1.2
+    tebian-windows --next; tebian-windows --next
+    check "alt+tab: pressed twice in a row, one window further back" focused_is t1
+    sleep 1.2
+    swaymsg -q '[app_id="t2"] focus; fullscreen enable'; settle
+    tebian-windows --next
+    check "alt+tab: leaves a full-screen window" focused_is t1
+else
+    echo -e "${YELLOW}!${NC} tabs and Alt+Tab checks skipped — jq not installed"
+fi
 
 # A config.user that sway rejects would have cost a setting silently
 if grep -qE 'Error on line|Unknown/invalid command' "$W/sway.log"; then

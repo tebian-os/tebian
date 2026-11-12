@@ -1,8 +1,11 @@
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 # ==============================================================================
-# TEBIAN WINDOW SWITCHER (Super+Shift+Tab)
-# Every open window, on every workspace: type to find one, Enter to go to it.
+# TEBIAN WINDOW SWITCHER
+#   tebian-windows          Super+Shift+Tab: every open window, on every
+#                           workspace — type to find one, Enter to go to it
+#   tebian-windows --next   Alt+Tab: the window used before this one
+#   tebian-windows --prev   Alt+Shift+Tab: the same list, the other way
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +18,87 @@ fi
 say() {
     notify-send "Windows" "$1" 2>/dev/null || echo "$1" >&2
 }
+
+# --- Alt+Tab -------------------------------------------------------------------
+# Windows in the order they were last used, so one press goes back to the
+# previous window and pressing again while Alt is held walks further down
+# the list. sway keeps that order itself (the "focus" lists in its tree).
+#
+# Walking needs the list as it was at the first press: every step focuses
+# a window, which moves it to the front. sway cannot tell a script that Alt
+# was let go, so the walk is told apart by time instead: a press within
+# $WALK_MS of the last one continues it, a later press starts over from
+# the previous window.
+WALK_MS=900
+cycle() {
+    local step=$1 state="${XDG_RUNTIME_DIR:-/tmp}/tebian-alttab.$UID"
+    local now last=0 i=0 n id tries focused
+    local -a list=()
+
+    if ! command -v jq >/dev/null 2>&1; then
+        # No order to go by: sway's own next/previous window instead
+        [ "$step" = 1 ] && swaymsg -q focus next || swaymsg -q focus prev
+        return
+    fi
+
+    now=$(date +%s%3N)
+    if [ -r "$state" ] && [ -O "$state" ]; then
+        { read -r last; read -r i; read -ra list; } < "$state"
+        [[ "$last" =~ ^[0-9]+$ && "$i" =~ ^[0-9]+$ ]] && [ $((now - last)) -lt "$WALK_MS" ] || list=()
+    fi
+
+    if [ "${#list[@]}" -eq 0 ]; then
+        # First line: the focused window (0 on an empty workspace); second:
+        # every window, most recently used first. Hidden scratchpad windows
+        # (the "__i3" output) are not part of the walk.
+        # shellcheck disable=SC2016
+        { read -r focused; read -ra list; } < <(swaymsg -t get_tree 2>/dev/null | jq -r '
+            def mru:
+                if .pid != null then [.id]
+                else ((.nodes // []) + (.floating_nodes // [])) as $kids
+                    | [ (.focus // [])[] as $f | $kids[] | select(.id == $f) | mru ] | add // []
+                end;
+            del(.nodes[] | select(.name == "__i3"))
+            | ([recurse(.nodes[]?, .floating_nodes[]?) | select(.focused and .pid != null) | .id][0] // 0),
+              (mru | join(" "))' 2>/dev/null)
+        # Standing on the first of the list, the walk starts from it; with
+        # nothing focused the first press should land on it
+        i=0
+        [ "${list[0]:-}" = "$focused" ] || i=-1
+        [ "$i" = -1 ] && [ "$step" = -1 ] && i=0
+    fi
+
+    n=${#list[@]}
+    if [ "$n" -eq 0 ] || { [ "$n" -eq 1 ] && [ "$i" = 0 ]; }; then
+        rm -f "$state"
+        return
+    fi
+
+    # A window closed since the list was made cannot be focused: skip it
+    for (( tries = 0; tries < n; tries++ )); do
+        i=$(( (i + step + n) % n ))
+        id=${list[$i]}
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        show "$id" && break
+    done
+    printf '%s\n%s\n%s\n' "$(date +%s%3N)" "$i" "${list[*]}" > "$state"
+}
+
+# show ID — focus a window and make sure it is the one on screen
+show() {
+    swaymsg -q "[con_id=$1] focus" 2>/dev/null || return 1
+    # A full-screen window keeps the screen and the focus of its workspace.
+    # Alt+Tab away from a full-screen video has to work, so it steps down.
+    if [ "$(swaymsg -t get_tree | jq -r 'first(recurse(.nodes[]?, .floating_nodes[]?) | select(.focused) | .id) // 0')" != "$1" ]; then
+        swaymsg -q "fullscreen disable; [con_id=$1] focus" 2>/dev/null
+    fi
+    return 0
+}
+
+case "${1:-}" in
+    --next) cycle 1;  exit 0 ;;
+    --prev) cycle -1; exit 0 ;;
+esac
 
 # sway describes its windows as JSON; jq is how a shell script reads that
 # reliably. The desktop install has it, a minimal one may not.
