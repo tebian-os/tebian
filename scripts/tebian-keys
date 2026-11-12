@@ -55,7 +55,9 @@ fi
 row "󰘒 Super+R → Resize Mode"                resize
 grep -q "bindsym.*exec gtklock" "$USER_CONF" 2>/dev/null &&
     row "󰌾 Super+L → Lock Screen"            lock
-row "󰖲 Super+Shift+Tab → Switch Window"      windows
+row "󰖲 Alt+Tab → Previous Window (hold Alt, press Tab again for the next)" ""
+row "󰖲 Super+Shift+Tab → Switch Window (list)" windows
+row "󰖲 Super+T → Tabs: Put Windows in One Frame / Separate Them" ""
 has_bind '$mod+Tab' &&
     row "󰎤 Super+Tab → Switch Workspace"     back_and_forth
 row "󰎤 Super+1-9 → Go to Workspace"          ""

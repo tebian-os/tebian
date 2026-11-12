@@ -107,7 +107,7 @@ ui_menu() {
 
     U_CHOICE=$(printf '%s\n' "$STYLE_LABEL" "$POS_LABEL" "$VIS_LABEL" "$CLOCK_LABEL" \
         "$STATS_LABEL" "$WEATHER_LABEL" "$DOCK_LABEL" "$LAYOUT_LABEL" "$TITLE_LABEL" \
-        "$SNAP_LABEL" "$FX_LABEL" "$ICON_LABEL" "󰛖 Font Rendering" \
+        "󰖲 Window Tabs (Super+T)" "$SNAP_LABEL" "$FX_LABEL" "$ICON_LABEL" "󰛖 Font Rendering" \
         "󰌌 Keyboard Shortcuts" "󰌍 Back" | tfuzzel -d -p " 󰇄 Desktop & UI | " --width 44)
 
     [ -n "$U_CHOICE" ] || menu_close
@@ -143,6 +143,7 @@ ui_menu() {
                 titlebars_set on
                 tnotify "UI" "Title bars on"
             fi ;;
+        *"Window Tabs"*)    window_tabs ;;
         *"Window Snapping"*) window_snapping_menu ;;
         *"Window Effects"*"Not Installed"*) window_effects_install ;;
         *"Window Effects"*) window_effects_menu ;;
@@ -201,6 +202,16 @@ window_layout_toggle() {
         # ones too, or tiled and floating windows end up mixed together
         ( swaymsg reload && swaymsg '[tiling] floating enable' ) >/dev/null 2>&1 &
     fi
+}
+
+# Tabs are something done to the window in front, not a setting: this row
+# is here so the feature can be found. The menu has just closed, which hands
+# the keyboard back to that window; Settings then gets out of the way so
+# the result can be seen.
+window_tabs() {
+    sleep 0.2
+    tebian-tabs
+    menu_close
 }
 
 # titlebars_set on|off — for windows opened from now on (the config.user
@@ -359,7 +370,9 @@ Super+Space ··· Toggle Float/Tile
 ${snap}Super+R ··· Resize Mode
 Super+Arrows ··· Move Focus
 Super+Shift+Arrows ··· Move Window
-Super+Shift+Tab ··· Switch Window
+Alt+Tab ··· Previous Window (hold Alt, press Tab again for the next)
+Super+Shift+Tab ··· Switch Window (list)
+Super+T ··· Tabs: Put Windows in One Frame / Separate Them
 ${lock}${ws}Super+1-9 ··· Go to Workspace
 Super+Shift+1-9 ··· Move Window to Workspace
 ${wsmenu}Super+V ··· Clipboard History

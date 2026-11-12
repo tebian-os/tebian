@@ -94,6 +94,7 @@ power-mode|Power Mode|Battery Saver, Power Saver, Performance Mode, Battery Life
 more|More|Advanced||more_menu
 desktop-ui|Desktop & UI|Bar, Taskbar, Panel, Title Bars, Floating Windows, Tiling, Window Snapping, Window Effects, Blur, Rounded Corners, Hide Bar, Bar Position|More|ui_menu
 dock|Dock|Taskbar, App Dock, Running Apps, Mac Dock, Auto-hide Dock|More > Desktop & UI|dock_menu
+window-tabs|Window Tabs|Tabs, Tabbed Windows, Group Windows, Combine Windows, Combine Title Bars, Stack Windows, Super+T|More > Desktop & UI|window_tabs
 window-snapping|Window Snapping|Snap Windows, Snap to Edge, Halves, Thirds, Quarters, Rebuild Sway, Aero Snap|More > Desktop & UI|window_snapping_menu
 snap-assist|Snap Assist|Fill Other Half, Window Picker, Side by Side|More > Desktop & UI > Window Snapping|snap_assist_toggle
 text-mode|Menu Icons|Text Mode, UI Icons, Icons in Menus, Nerd Font Icons|More > Desktop & UI|ui_icons_toggle

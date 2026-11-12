@@ -80,8 +80,15 @@ bindsym $mod+d exec ~/.local/bin/tebian-menu
 bindsym $mod+a exec ~/.local/bin/tebian-drawer
 bindsym $mod+f fullscreen toggle
 bindsym $mod+Shift+slash exec tebian-keys
-# Window switcher. Mod+Tab is workspace back_and_forth (config.user)
+# Window switcher. Alt+Tab goes back to the window used before this one
+# and, pressed again while Alt is held, on through the rest; the list to
+# search is on Mod+Shift+Tab. Mod+Tab is workspace back_and_forth
+# (config.user).
+bindsym Mod1+Tab exec tebian-windows --next
+bindsym Mod1+Shift+Tab exec tebian-windows --prev
 bindsym $mod+Shift+Tab exec tebian-windows
+# Tabs: several windows in one frame (tiled or floating)
+bindsym $mod+t exec tebian-tabs
 bindsym $mod+s exec tebian-settings
 bindsym $mod+Shift+e exec swaynag -t warning -m "Exit Sway?" -b "Yes" "swaymsg exit"
 

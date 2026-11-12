@@ -1,0 +1,214 @@
+#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+# ==============================================================================
+# TEBIAN WINDOW TABS (Super+T)
+# Several windows in one frame, a tab for each in the title bar — the way a
+# browser keeps its pages.
+#
+#   Tiling:   Super+T turns the windows around the focused one into tabs,
+#             and back into a split. That is sway's own tabbed layout.
+#   Floating: Super+T joins the focused window with others on the workspace
+#             into one floating window with tabs; inside such a group it
+#             offers to add a window, take this one out, or separate them.
+#
+# Switch tabs by clicking one, with Super+Left/Right, or with Alt+Tab.
+# ==============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/tebian-common" ]; then
+    source "$SCRIPT_DIR/tebian-common"
+elif [ -f "$HOME/.local/bin/tebian-common" ]; then
+    source "$HOME/.local/bin/tebian-common"
+fi
+
+say() {
+    notify-send "Tabs" "$1" 2>/dev/null || echo "$1" >&2
+}
+sway() { swaymsg "$@" >/dev/null 2>&1; }
+
+# Without jq there is no telling a floating window from a tiled one, and
+# the tiled case needs nothing but sway
+if ! command -v jq >/dev/null 2>&1; then
+    sway 'layout toggle tabbed split'
+    exit 0
+fi
+
+TREE=$(swaymsg -t get_tree 2>/dev/null) || { say "Can't reach sway."; exit 1; }
+
+# The focused window and what is around it, one fact per line:
+#   F  id  floating|grouped|tiled
+#   G  x y width height          the floating window it is (in)
+#   K  id                        each other tab of its group
+#   C  id <US> type <US> app <US> title   each other window on the workspace
+# \037 between text fields: titles are arbitrary text.
+# shellcheck disable=SC2016
+FACTS=$(jq -r '
+    def views: [recurse(.nodes[]?, .floating_nodes[]?) | select(.pid != null)];
+    . as $root
+    | first(paths(type == "object" and .focused == true and .pid != null)) as $p
+    | ($root | getpath($p)) as $f
+    | ($root | getpath($p[:-2])) as $par
+    # the workspace is the nearest thing above it that is one
+    | ([range(0; ($p | length); 2) as $n | $p[:$n] | select(. as $q | ($root | getpath($q)).type == "workspace")] | last) as $wp
+    | ($root | getpath($wp)) as $ws
+    | (if $f.type == "floating_con" then "floating"
+       elif $par.type == "floating_con" then "grouped"
+       else "tiled" end) as $how
+    | (if $how == "grouped" then $par else $f end) as $g
+    | (if $how == "grouped" then ($par | views | map(.id)) else [$f.id] end) as $mine
+    | "F \($f.id) \($how)",
+      "G \($g.rect.x) \($g.rect.y) \($g.rect.width) \($g.rect.height)",
+      ($mine[] | select(. != $f.id) | "K \(.)"),
+      ($ws | views[] | select(.id as $i | $mine | index($i) | not)
+       | "C \(.id)\u001f\(.type)\u001f\(.app_id // .window_properties.class // "window" | gsub("[\t\n\r\u001f]"; " "))\u001f\(.name // "" | gsub("[\t\n\r\u001f]"; " "))")
+' <<< "$TREE" 2>/dev/null)
+
+FID="" HOW="" GX=0 GY=0 GW=0 GH=0
+KIDS=() CIDS=() CLABEL=()
+declare -A CTYPE=()
+while IFS= read -r line; do
+    case "$line" in
+        "F "*) read -r _ FID HOW <<< "$line" ;;
+        "G "*) read -r _ GX GY GW GH <<< "$line" ;;
+        "K "*) KIDS+=("${line#K }") ;;
+        "C "*)
+            IFS=$'\037' read -r id type app title <<< "${line#C }"
+            [[ "$id" =~ ^[0-9]+$ ]] || continue
+            CTYPE[$id]=$type
+            [ -n "$title" ] && [ "$title" != "$app" ] && app+=" — $title"
+            CIDS+=("$id"); CLABEL+=("$app") ;;
+    esac
+done <<< "$FACTS"
+
+# Nothing focused (an empty workspace): nothing to tab
+[[ "$FID" =~ ^[0-9]+$ ]] || exit 0
+
+if [ "$HOW" = tiled ]; then
+    sway 'layout toggle tabbed split'
+    exit 0
+fi
+
+# join ID... — the given windows become tabs next to the focused one. A
+# floating window cannot be given a layout, but one split in two can, and
+# the split is what floats from then on. Windows are sent to it by a mark;
+# one starting with "_" is not drawn in the title bar.
+join() {
+    local mark="_tebian_tabs_$FID" id
+    if [ "$HOW" = floating ]; then
+        sway "[con_id=$FID] splith, layout tabbed"
+    fi
+    sway "[con_id=$FID] mark --add $mark"
+    for id in "$@"; do
+        # A floating window is not moved into another one (the command
+        # only reports success), so it is un-floated first. Only a window
+        # floating on its own: for a tab of another group that would
+        # un-float its whole group.
+        [ "${CTYPE[$id]:-}" = floating_con ] && sway "[con_id=$id] floating disable"
+        sway "[con_id=$id] move container to mark $mark"
+    done
+    sway "[con_id=$FID] unmark $mark"
+    lone_tabs
+    sway "[con_id=$FID] focus"
+    settle
+}
+
+# A window taken from another group can leave that group with a single tab:
+# a window with a tab bar and nothing to switch to. Those become plain
+# windows again, where they stood.
+lone_tabs() {
+    local id
+    # (read into the group's own G* variables: place puts a window there)
+    # shellcheck disable=SC2016
+    while read -r id GX GY GW GH; do
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        sway "[con_id=$id] floating disable"
+        place "$id" 0
+    done < <(swaymsg -t get_tree 2>/dev/null | jq -r '
+        recurse(.nodes[]?, .floating_nodes[]?)
+        | select(.type == "floating_con" and .pid == null)
+        | [recurse(.nodes[]?) | select(.pid != null)] as $v
+        | select(($v | length) == 1)
+        | "\($v[0].id) \(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"' 2>/dev/null)
+}
+
+# place ID N — a window of its own again, the size the group was, each one
+# a step down and right of the last so none hides another completely
+PLACED=()
+place() {
+    local off=$(( $2 * 32 ))
+    PLACED+=("[con_id=$1] resize set $GW $GH, move absolute position $((GX + off)) $((GY + off))")
+    sway "[con_id=$1] floating enable"
+    sway "${PLACED[-1]}"
+}
+# A floating window takes the size its app last drew, and an app that was
+# tiled a moment ago is still drawing at that size: its answer arrives
+# after the resize and undoes it. Asked again once the app has caught up.
+settle() {
+    local t c
+    [ "${#PLACED[@]}" -gt 0 ] || return 0
+    for t in 0.15 0.3; do
+        sleep "$t"
+        for c in "${PLACED[@]}"; do sway "$c"; done
+    done
+}
+
+# sway floats and un-floats a group as a whole, whichever tab is named. So
+# a tab leaves in two steps: the group is tiled for a moment, where one
+# window can be floated out of it, and then what is left floats again.
+separate_all() {
+    local i=1 id
+    sway "[con_id=$FID] floating disable"
+    for id in "${KIDS[@]}"; do
+        place "$id" "$i"
+        i=$((i + 1))
+    done
+    place "$FID" 0
+    sway "[con_id=$FID] focus"
+    settle
+}
+
+take_out() {
+    if [ "${#KIDS[@]}" -le 1 ]; then
+        # Two tabs: taking one out leaves no group
+        separate_all
+        return
+    fi
+    sway "[con_id=$FID] floating disable"
+    place "$FID" 1
+    # The rest: focus one tab, step up to the group, float that
+    sway "[con_id=${KIDS[0]}] focus; focus parent; floating enable; resize set $GW $GH; move absolute position $GX $GY"
+    sway "[con_id=$FID] focus"
+    settle
+}
+
+if [ "$HOW" = floating ]; then
+    case "${#CIDS[@]}" in
+        0) say "No other window on this workspace to put in tabs."; exit 0 ;;
+        1) join "${CIDS[0]}"; exit 0 ;;
+    esac
+fi
+
+# The menu: rows are picked by position (--index), since a window can be
+# titled like a row
+ROWS=() ACTS=()
+if [ "$HOW" = grouped ]; then
+    ROWS+=("󰩈 Take This Window Out");   ACTS+=(out)
+    ROWS+=("󰕰 Separate All Tabs");      ACTS+=(all)
+elif [ "${#CIDS[@]}" -gt 1 ]; then
+    ROWS+=("󰖲 All ${#CIDS[@]} Other Windows"); ACTS+=(everything)
+fi
+for i in "${!CIDS[@]}"; do
+    ROWS+=("󰖲 Add: ${CLABEL[$i]}"); ACTS+=("${CIDS[$i]}")
+done
+
+LINES_N=${#ROWS[@]}
+[ "$LINES_N" -gt 15 ] && LINES_N=15
+PICK=$(printf '%s\n' "${ROWS[@]}" | tfuzzel -d --index -p " 󰖲 Tabs | " --width 60 --lines "$LINES_N")
+[[ "$PICK" =~ ^[0-9]+$ ]] && [ "$PICK" -lt "${#ACTS[@]}" ] || exit 0
+
+case "${ACTS[$PICK]}" in
+    out)        take_out ;;
+    all)        separate_all ;;
+    everything) join "${CIDS[@]}" ;;
+    *)          join "${ACTS[$PICK]}" ;;
+esac

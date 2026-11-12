@@ -72,13 +72,37 @@ if command -v quickshell >/dev/null && [ -x "$(command -v tebian-panels)" ]; the
     panels_pid=$!
 fi
 
+# Waybar is a GTK app, and GTK asks the desktop portal for its settings as
+# it starts. The portal is started on demand by D-Bus, with the environment
+# D-Bus was last given — and sway's config hands that over (WAYLAND_DISPLAY)
+# with an `exec` that runs alongside the bar, not before it. When the bar
+# won that race the portal's GTK half died for lack of a display and the bar
+# never appeared, on some logins and not others. So it is handed over here,
+# before Waybar; a portal that already failed is started again.
+if command -v dbus-update-activation-environment >/dev/null; then
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE >/dev/null 2>&1
+    if systemctl --user -q is-failed xdg-desktop-portal-gtk.service 2>/dev/null; then
+        systemctl --user reset-failed xdg-desktop-portal-gtk.service 2>/dev/null
+        systemctl --user try-restart xdg-desktop-portal.service 2>/dev/null
+    fi
+fi
+
 # sway passes `-b bar-0`; with "ipc": true Waybar then follows sway's bar
 # mode, so Hide Bar / show-on-Super keep working
+bar_pid=""
+trap 'kill $bar_pid $panels_pid 2>/dev/null; exit 0' TERM INT HUP
+started=$(date +%s)
 waybar -c "$config" -s "$style" "$@" &
 bar_pid=$!
-
-trap 'kill $bar_pid $panels_pid 2>/dev/null; exit 0' TERM INT HUP
 wait "$bar_pid"
 # Waybar exited on its own (crash, or killed directly): don't strand the panels
 [ -n "$panels_pid" ] && kill "$panels_pid" 2>/dev/null
+
+# Gone within seconds of starting is not someone closing it: it could not
+# start. A bar must always come up, so the plain one takes over. (The
+# socket sway handed over went with Waybar; swaybar connects the usual way.)
+if [ $(( $(date +%s) - started )) -lt 10 ]; then
+    unset WAYLAND_SOCKET
+    exec swaybar "$@"
+fi
 exit 0

@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
-      - run: apt-get update && apt-get install -y --no-install-recommends git shellcheck python3 ca-certificates greetd dpkg sway foot zenity
+      - run: apt-get update && apt-get install -y --no-install-recommends git shellcheck python3 ca-certificates greetd dpkg sway foot zenity jq
       - uses: actions/checkout@v4
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: bash tests/run.sh
