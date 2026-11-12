@@ -349,6 +349,31 @@ else
     fail "wifi: $wifi_conf is missing from an install path, or not a single rtw88_core option"
 fi
 
+# tebian-update takes the power-key line older Tebian wrote into config.user
+# out (sway shows a warning bar for a key bound twice), and nothing else; a
+# binding of the user's own stays. Runs that section of the real script.
+if (
+    h=$(mktemp -d); trap 'rm -rf "$h"' EXIT
+    sed -n '/^# --- 3b. A power-key line/,/^# --- 3b. Main sway config/p' "$ROOT/scripts/tebian-update" > "$h/part.sh"
+    run() { HOME="$h" TEBIAN_DIR="$ROOT" bash -c 'info() { :; }; source "$1"' _ "$h/part.sh"; }
+    mkdir -p "$h/.config/sway"; u="$h/.config/sway/config.user"
+    printf '%s\n' "# Power button opens Tebian power menu" \
+        "bindsym XF86PowerOff exec tebian-settings --power" "" \
+        "# Workspace manager (Mod+W)" "bindsym \$mod+w exec tebian-workspace" > "$u"
+    run
+    [ "$(cat "$u")" = "$(printf '%s\n' "# Workspace manager (Mod+W)" "bindsym \$mod+w exec tebian-workspace")" ] &&
+        [ -f "$u.before-update" ] || exit 1
+    # The user's own power key: untouched, no backup made
+    rm "$u.before-update"
+    printf '%s\n' "bindsym XF86PowerOff exec my-power-menu" > "$u"
+    run
+    [ "$(cat "$u")" = "bindsym XF86PowerOff exec my-power-menu" ] && [ ! -e "$u.before-update" ]
+); then
+    pass "update: the old power-key line leaves config.user (no warning bar on reload)"
+else
+    fail "update: config.user still binds XF86PowerOff twice, or lost a line of the user's"
+fi
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then
