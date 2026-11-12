@@ -91,18 +91,15 @@ fi
 # mode, so Hide Bar / show-on-Super keep working
 bar_pid=""
 trap 'kill $bar_pid $panels_pid 2>/dev/null; exit 0' TERM INT HUP
-started=$(date +%s)
 waybar -c "$config" -s "$style" "$@" &
 bar_pid=$!
 wait "$bar_pid"
 # Waybar exited on its own (crash, or killed directly): don't strand the panels
 [ -n "$panels_pid" ] && kill "$panels_pid" 2>/dev/null
-
-# Gone within seconds of starting is not someone closing it: it could not
-# start. A bar must always come up, so the plain one takes over. (The
-# socket sway handed over went with Waybar; swaybar connects the usual way.)
-if [ $(( $(date +%s) - started )) -lt 10 ]; then
-    unset WAYLAND_SOCKET
-    exec swaybar "$@"
-fi
+# Nothing is started in its place. 3.7.2 started plain swaybar when Waybar
+# was gone within ten seconds, taking that for "could not start" — but sway
+# ends a bar on every reload by closing its connection, which looks the
+# same from here, and by then sway has already started the next bar. The
+# stand-in was on a connection of its own that sway never closes: a second
+# bar that stayed for good.
 exit 0

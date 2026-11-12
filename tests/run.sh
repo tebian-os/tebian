@@ -294,6 +294,25 @@ for f in configs/themes/*/kitty.conf; do
 done
 [ "$bad" = 0 ] && pass "kitty: every theme opens new windows at a set size"
 
+# The Modern bar's launcher starts one bar and nothing after it. sway ends
+# the bar on every reload and starts the next itself; a launcher that put
+# plain swaybar in Waybar's place (3.7.2) left two bars on screen.
+if (
+    h=$(mktemp -d); trap 'rm -rf "$h"' EXIT
+    mkdir -p "$h/bin" "$h/home/.config/sway" "$h/run"
+    for c in waybar swaybar swaymsg systemctl dbus-update-activation-environment; do
+        printf '#!/bin/sh\necho "$0" >> "%s/started"\nexit 0\n' "$h" > "$h/bin/$c"
+        chmod +x "$h/bin/$c"
+    done
+    HOME="$h/home" XDG_RUNTIME_DIR="$h/run" TEBIAN_DIR="$ROOT" PATH="$h/bin:/usr/bin:/bin" \
+        bash "$ROOT/scripts/tebian-bar" -b bar-0 >/dev/null 2>&1
+    grep -q '/waybar$' "$h/started" && ! grep -q '/swaybar$' "$h/started"
+); then
+    pass "bar: when Waybar ends, the launcher starts no second bar"
+else
+    fail "bar: tebian-bar started swaybar after Waybar ended (two bars after a reload)"
+fi
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then
