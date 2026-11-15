@@ -1,5 +1,6 @@
 // Tebian Plymouth Boot Theme
-// Dark background with centered text and a subtle progress spinner
+// Dark background, the Tebian wordmark with a soft white glow that slowly
+// breathes — the breathing is the sign that the machine is working
 
 // Background
 Window.SetBackgroundTopColor(0.12, 0.12, 0.18);    // #1e1e2e
@@ -9,47 +10,37 @@ Window.SetBackgroundBottomColor(0.07, 0.07, 0.11);  // #11111b
 screen_width = Window.GetWidth();
 screen_height = Window.GetHeight();
 
-// Title text
-title_sprite = Sprite();
-title_image = Image.Text("T E B I A N", 0.80, 0.84, 0.96, 1, "Sans Bold 36");  // #cdd6f4
-title_sprite.SetImage(title_image);
-title_sprite.SetX(screen_width / 2 - title_image.GetWidth() / 2);
-title_sprite.SetY(screen_height / 2 - 50);
+// Title: the wordmark from tebian.org as two pictures of the same size
+// (build/splash-art.py draws them) — the letters, and under them a white
+// halo. The pictures are wider than the letters, to leave the halo room:
+// title_part is the letters' share of the width (1200 of 1480 px).
+// The letters take 2/5 of the screen's width, within sane limits.
+title_part = 1200 / 1480;
+title_width = screen_width * 0.4;
+if (title_width > 760) title_width = 760;
+if (title_width < 280) title_width = 280;
+title_full = Image("title.png");
+art_width = Math.Int(title_width / title_part);
+art_height = Math.Int(art_width * title_full.GetHeight() / title_full.GetWidth());
+title_image = title_full.Scale(art_width, art_height);
+glow_image = Image("glow.png").Scale(art_width, art_height);
+// The letters' middle sits a little above the screen's, as the text did
+art_x = screen_width / 2 - art_width / 2;
+art_y = screen_height / 2 - 30 - art_height / 2;
 
-// Progress dots
-NUM_DOTS = 5;
-DOT_SPACING = 26;
-dot_sprites = [];
-dot_opacity = [];
+glow_sprite = Sprite(glow_image);
+glow_sprite.SetPosition(art_x, art_y, 1);
+title_sprite = Sprite(title_image);
+title_sprite.SetPosition(art_x, art_y, 2);
 
-for (i = 0; i < NUM_DOTS; i++) {
-    dot_sprites[i] = Sprite();
-    dot_image = Image.Text("●", 0.54, 0.71, 0.98, 1, "Sans 16");  // #89b4fa
-    dot_sprites[i].SetImage(dot_image);
-    dot_sprites[i].SetX(screen_width / 2 - (NUM_DOTS * DOT_SPACING) / 2 + i * DOT_SPACING);
-    dot_sprites[i].SetY(screen_height / 2 + 20);
-    dot_opacity[i] = 0.2;
-    dot_sprites[i].SetOpacity(0.2);
-}
-
-// Animation counter
+// Animation counter (the halo is the only thing that moves)
 counter = 0;
 
 fun refresh_callback() {
     counter++;
-    active = Math.Int(counter / 8) % NUM_DOTS;
-
-    for (i = 0; i < NUM_DOTS; i++) {
-        if (i == active)
-            target = 1.0;
-        else if (i == (active + NUM_DOTS - 1) % NUM_DOTS)
-            target = 0.5;
-        else
-            target = 0.2;
-
-        dot_opacity[i] = dot_opacity[i] * 0.7 + target * 0.3;
-        dot_sprites[i].SetOpacity(dot_opacity[i]);
-    }
+    // The halo breathes: one slow rise and fall about every four seconds
+    // (this runs 50 times a second), never fully out
+    glow_sprite.SetOpacity(0.72 + 0.28 * Math.Sin(counter / 32));
 }
 
 Plymouth.SetRefreshFunction(refresh_callback);
@@ -67,7 +58,7 @@ fun display_password_callback(prompt, bullets) {
     prompt_image = Image.Text(prompt, 0.80, 0.84, 0.96, 1, "Sans 16");  // #cdd6f4
     prompt_sprite.SetImage(prompt_image);
     prompt_sprite.SetX(screen_width / 2 - prompt_image.GetWidth() / 2);
-    prompt_sprite.SetY(screen_height / 2 + 80);
+    prompt_sprite.SetY(screen_height / 2 + 70);
     prompt_sprite.SetOpacity(1);
 
     // A placeholder bar before the first keypress, so it reads as a field
@@ -81,7 +72,7 @@ fun display_password_callback(prompt, bullets) {
     bullet_image = Image.Text(bullet_str, 0.54, 0.71, 0.98, 1, "Sans 18");  // #89b4fa
     bullet_sprite.SetImage(bullet_image);
     bullet_sprite.SetX(screen_width / 2 - bullet_image.GetWidth() / 2);
-    bullet_sprite.SetY(screen_height / 2 + 115);
+    bullet_sprite.SetY(screen_height / 2 + 105);
     bullet_sprite.SetOpacity(1);
 }
 

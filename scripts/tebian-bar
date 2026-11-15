@@ -58,6 +58,8 @@ if [ -f "$HOME/.config/waybar/style.css" ]; then
 else
     style="$RUN/style.css"
     cat "$RUN/colors.css" "$SHIP/style.css" > "$style.tmp" && mv -f "$style.tmp" "$style"
+    # The style names its images relative to itself
+    cp -f "$SHIP"/*.svg "$RUN/" 2>/dev/null || true
 fi
 
 # The drop-down panels daemon (tebian-panels, optional) lives and dies with

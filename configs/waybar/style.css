@@ -81,9 +81,17 @@ tooltip label {
 }
 #clock { font-size: 13px; }
 
-#custom-tebian {
+/* The A of the Tebian wordmark, painted in this item's colour (the file
+   sits next to this one; tebian-bar copies both to the same place). :hover
+   is named too: the pills' hover rule above sets the whole background */
+#custom-tebian,
+#custom-tebian:hover {
     color: @accent;
-    font-size: 16px;
+    background-image: -gtk-recolor(url("tebian-a-symbolic.svg"));
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px 15px;
+    min-width: 17px;
     margin-left: 6px;
 }
 #custom-power { margin-right: 6px; }

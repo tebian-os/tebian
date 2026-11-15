@@ -10,6 +10,9 @@ jobs:
     container: debian:trixie
     steps:
       - run: apt-get update && apt-get install -y --no-install-recommends git shellcheck python3 ca-certificates greetd dpkg sway foot zenity jq
+      # Full history: tests/upgrade.sh replays every release tag
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: bash tests/run.sh

@@ -33,7 +33,9 @@
   ],
 
   "custom/tebian": {
-    "format": "\uf306",
+    // The mark itself is drawn by style.css (#custom-tebian); a module
+    // with empty text would be hidden, hence the space
+    "format": " ",
     "tooltip-format": "Apps — Super+D\nRight-click: Settings — Super+S",
     "on-click": "tebian-bar-menu launcher left",
     "on-click-right": "tebian-bar-menu settings left"

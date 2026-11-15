@@ -24,8 +24,8 @@ echo "Installing Tebian Plymouth theme..."
 
 # Copy theme files
 sudo mkdir -p "$THEME_DIR"
-sudo cp "$ASSETS_DIR/tebian.plymouth" "$THEME_DIR/"
-sudo cp "$ASSETS_DIR/tebian.script" "$THEME_DIR/"
+# All of it: the script, and the pictures it shows
+sudo cp "$ASSETS_DIR"/* "$THEME_DIR/"
 
 # Set as default and rebuild initramfs
 PLYMOUTH_BIN="/usr/sbin/plymouth-set-default-theme"
