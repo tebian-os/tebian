@@ -374,12 +374,49 @@ else
     fail "update: config.user still binds XF86PowerOff twice, or lost a line of the user's"
 fi
 
+# tebian-update installs the tools the scripts call when an older install
+# lacks them — and only those: the section is run against stand-ins for
+# dpkg-query (everything installed but jq) and sudo (records its arguments)
+tools_section=$(sed -n '/^# --- 3a0\. Tools Tebian/,/^# --- 3a\. Packages the Modern bar/p' "$ROOT/scripts/tebian-update")
+base_pkgs=$(sed -n '/^PACKAGES=(/,/^)/p' "$ROOT/scripts/desktop.sh" | grep -v '^[[:space:]]*#')
+if [ -n "$tools_section" ] && (
+    h=$(mktemp -d); trap 'rm -rf "$h"' EXIT
+    mkdir "$h/bin"
+    printf '#!/bin/sh\n:\n' > "$h/bin/sway"
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\nfor a; do p=$a; done\n[ "$p" = jq ] && exit 1\necho "install ok installed"\n' > "$h/bin/dpkg-query"
+    printf '#!/bin/sh\necho "$*" >> "%s/sudo.log"\n' "$h" > "$h/bin/sudo"
+    chmod +x "$h/bin/"*
+    # Each step ends the subshell itself: errexit is off inside an "if"
+    tools=$(PATH="$h/bin:/usr/bin:/bin" bash -c "set -euo pipefail; info() { :; }; warn() { :; }
+$tools_section
+echo \"\$BASE_TOOLS\"") || exit 1
+    [ "$(cat "$h/sudo.log")" = "-v
+apt-get install -y jq" ] || exit 1
+    [ -n "$tools" ] || exit 1
+    for pkg in $tools; do
+        grep -qw -- "$pkg" <<< "$base_pkgs" || exit 1
+    done
+); then
+    pass "update: a missing tool (jq) is installed, nothing else, all from the base list"
+else
+    fail "update: the base-tools step doesn't install exactly the missing tool, or lists a package desktop.sh doesn't"
+fi
+
 # What the Desktop & UI switches do to real windows (its own hidden sway;
 # skips with a note where sway or a terminal is missing)
 if bash "$ROOT/tests/desktop.sh"; then
     pass "desktop: switches change real windows (tests/desktop.sh)"
 else
     fail "desktop: tests/desktop.sh"
+fi
+
+# tebian-update over an install of every earlier release (skips with a
+# note where the release tags or sway are missing)
+if bash "$ROOT/tests/upgrade.sh"; then
+    pass "upgrade: every earlier release updates cleanly (tests/upgrade.sh)"
+else
+    fail "upgrade: tests/upgrade.sh"
 fi
 
 echo

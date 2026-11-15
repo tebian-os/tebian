@@ -390,6 +390,12 @@ queue_root scripts/tebian-drive-probe         /usr/local/bin/tebian-drive-probe 
 queue_root configs/udev/90-tebian-drive-doctor.rules /etc/udev/rules.d/90-tebian-drive-doctor.rules 644 yes
 # Realtek rtw88 Wi-Fi firmware hang (takes effect at the next boot)
 queue_root configs/modprobe/tebian-wifi.conf   /etc/modprobe.d/tebian-wifi.conf   644 yes
+# Boot splash, where Tebian's is installed (pictures arrived with 3.7.7)
+if [ -f /usr/share/plymouth/themes/tebian/tebian.script ]; then
+    for f in "$TEBIAN_DIR"/assets/plymouth/tebian/*; do
+        queue_root "$f" "/usr/share/plymouth/themes/tebian/${f##*/}" 644 yes
+    done
+fi
 if grep -qs "nwg-hello" /etc/greetd/config.toml; then
     # The shipped config plus the user's autologin section, if they have one
     # (tebian-autologin owns that section) — a plain copy would silently
@@ -414,12 +420,19 @@ if [ "${#ROOT_DST[@]}" -gt 0 ]; then
     info "System files to refresh:"
     for dst in "${ROOT_DST[@]}"; do echo "    $dst"; done
     if sudo -v; then
-        udev_changed=""
+        udev_changed="" splash_changed=""
         for i in "${!ROOT_DST[@]}"; do
             sudo install -o root -g root -m "${ROOT_MODE[$i]}" -D "${ROOT_SRC[$i]}" "${ROOT_DST[$i]}"
             [[ "${ROOT_DST[$i]}" == /etc/udev/* ]] && udev_changed=1
+            [[ "${ROOT_DST[$i]}" == /usr/share/plymouth/* ]] && splash_changed=1
         done
         [ -n "$udev_changed" ] && sudo udevadm control --reload 2>/dev/null
+        # The splash shown at boot is the copy inside the initramfs
+        if [ -n "$splash_changed" ] && command -v update-initramfs >/dev/null; then
+            info "Boot splash changed — rebuilding the boot image (about a minute)..."
+            sudo update-initramfs -u >/dev/null 2>&1 ||
+                warn "Could not rebuild the boot image; the new splash appears after the next kernel update"
+        fi
         info "System files refreshed"
     else
         warn "No sudo — system files not refreshed. Run tebian-update in a terminal to finish."
@@ -444,6 +457,33 @@ if dpkg-query -W minecraft-launcher >/dev/null 2>&1 && ! apt-get -s check >/dev/
         fi
     else
         warn "No sudo — apt is blocked by the old Minecraft package. Run tebian-update in a terminal."
+    fi
+fi
+
+# --- 3a0. Tools Tebian's own scripts call ------------------------------------------
+# Updates otherwise only move files, so a script that starts using a tool
+# newer than the install (jq for Alt+Tab, tabs, workspaces and screenshots)
+# arrives without it. Only the command-line tools the scripts shell out to,
+# and only on a sway desktop — never the apps from the base list (terminal,
+# launcher, notifications), which are the user's to replace or remove.
+# tests/run.sh keeps this list inside desktop.sh's base packages.
+BASE_TOOLS="jq grim slurp wl-clipboard wtype brightnessctl wob libnotify-bin xdg-utils curl"
+if command -v sway >/dev/null || [ -x /opt/tebian-swayfx/bin/sway ]; then
+    TOOLS_MISSING=()
+    for pkg in $BASE_TOOLS; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed" || TOOLS_MISSING+=("$pkg")
+    done
+    if [ ${#TOOLS_MISSING[@]} -gt 0 ]; then
+        info "Installing tools Tebian needs: ${TOOLS_MISSING[*]}"
+        if sudo -v; then
+            # One at a time: a package this release of Debian doesn't have
+            # must not keep the others out
+            for pkg in "${TOOLS_MISSING[@]}"; do
+                sudo apt-get install -y "$pkg" || warn "Could not install $pkg"
+            done
+        else
+            warn "No sudo — skipped installing ${TOOLS_MISSING[*]}. Run tebian-update in a terminal."
+        fi
     fi
 fi
 

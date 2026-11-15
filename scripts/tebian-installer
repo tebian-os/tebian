@@ -1579,8 +1579,8 @@ KBEOF
         local plymouth_theme_dir="$TARGET/usr/share/plymouth/themes/tebian"
         mkdir -p "$plymouth_theme_dir"
         if [ -d "$TEBIAN_SRC/assets/plymouth/tebian" ]; then
-            cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.plymouth" "$plymouth_theme_dir/"
-            cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.script" "$plymouth_theme_dir/"
+            # All of it: the script, and the pictures it shows
+            cp "$TEBIAN_SRC"/assets/plymouth/tebian/* "$plymouth_theme_dir/"
         fi
         chroot "$TARGET" plymouth-set-default-theme tebian >> "$INSTALL_LOG" 2>&1 || true
         # Plymouth shutdown services (poweroff/reboot/halt) are statically

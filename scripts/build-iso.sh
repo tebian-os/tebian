@@ -291,8 +291,8 @@ cp "$TEBIAN_SRC/assets/wallpapers/glass.jpg" config/includes.chroot/usr/share/ba
 
 # Plymouth theme for live session
 mkdir -p config/includes.chroot/usr/share/plymouth/themes/tebian
-cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.plymouth" config/includes.chroot/usr/share/plymouth/themes/tebian/
-cp "$TEBIAN_SRC/assets/plymouth/tebian/tebian.script" config/includes.chroot/usr/share/plymouth/themes/tebian/
+# All of it: the script, and the pictures it shows
+cp "$TEBIAN_SRC"/assets/plymouth/tebian/* config/includes.chroot/usr/share/plymouth/themes/tebian/
 
 # Font rendering for the live session — same sharp defaults the installer
 # seeds for installed users (RGB subpixel + medium hinting). Numbered 40 so

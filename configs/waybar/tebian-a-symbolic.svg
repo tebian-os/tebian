@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="482.425 0 101.5 101.5">
+  <!-- The A of the Tebian wordmark (assets/logo/tebian.svg). "symbolic":
+       GTK paints it in the bar's text colour, so it follows the theme. -->
+  <path d="M533.175 0 L487.5 101.5 L499.562 101.5 L533.175 26.805 L566.788 101.5 L578.85 101.5 Z" fill="#bebebe"/>
+</svg>

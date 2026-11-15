@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 709.85 101.5" fill="currentColor">
+  <!-- The Tebian wordmark, as on tebian.org. Drawn, not set in a font. -->
+  <rect x="0" y="1.5" width="88" height="11"/>
+  <rect x="38.5" y="1.5" width="11" height="100"/>
+  <rect x="145" y="1.5" width="75" height="11"/>
+  <rect x="145" y="46" width="75" height="11"/>
+  <rect x="145" y="90.5" width="75" height="11"/>
+  <path d="M287.5 1.5V101.5M287.5 7H333.75A22.25 22.25 0 0 1 333.75 51.5H287.5M333.75 51.5A22.25 22.25 0 0 1 333.75 96H287.5" fill="none" stroke="currentColor" stroke-width="11"/>
+  <rect x="419.5" y="1.5" width="11" height="100"/>
+  <path d="M533.175 0 L487.5 101.5 L499.562 101.5 L533.175 26.805 L566.788 101.5 L578.85 101.5 Z"/>
+  <path d="M635.35 101.5V1.5L704.35 101.5V1.5" fill="none" stroke="currentColor" stroke-width="11" stroke-linejoin="miter"/>
+</svg>
