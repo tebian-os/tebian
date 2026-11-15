@@ -420,22 +420,37 @@ if [ "${#ROOT_DST[@]}" -gt 0 ]; then
     info "System files to refresh:"
     for dst in "${ROOT_DST[@]}"; do echo "    $dst"; done
     if sudo -v; then
-        udev_changed="" splash_changed=""
+        udev_changed=""
         for i in "${!ROOT_DST[@]}"; do
             sudo install -o root -g root -m "${ROOT_MODE[$i]}" -D "${ROOT_SRC[$i]}" "${ROOT_DST[$i]}"
             [[ "${ROOT_DST[$i]}" == /etc/udev/* ]] && udev_changed=1
-            [[ "${ROOT_DST[$i]}" == /usr/share/plymouth/* ]] && splash_changed=1
         done
         [ -n "$udev_changed" ] && sudo udevadm control --reload 2>/dev/null
-        # The splash shown at boot is the copy inside the initramfs
-        if [ -n "$splash_changed" ] && command -v update-initramfs >/dev/null; then
-            info "Boot splash changed — rebuilding the boot image (about a minute)..."
-            sudo update-initramfs -u >/dev/null 2>&1 ||
-                warn "Could not rebuild the boot image; the new splash appears after the next kernel update"
-        fi
         info "System files refreshed"
     else
         warn "No sudo — system files not refreshed. Run tebian-update in a terminal to finish."
+    fi
+fi
+
+# The splash shown at boot is the copy inside the initramfs, so a changed
+# theme needs the boot image rebuilt (shutdown reads the theme from disk and
+# shows the new one either way). What the boot image was last built with is
+# remembered, rather than "did this run change a file": 3.7.7 looked for
+# update-initramfs on PATH, where a normal user has no /usr/sbin, skipped
+# the rebuild in silence and left installs booting with the old splash —
+# with the theme files already current, nothing would ever have retried.
+SPLASH_DIR=/usr/share/plymouth/themes/tebian
+SPLASH_SUM="$HOME/.local/share/tebian/splash-initramfs.sha256"
+if [ -f "$SPLASH_DIR/tebian.script" ] && [ -x /usr/sbin/update-initramfs ]; then
+    splash_now=$(cat "$SPLASH_DIR"/* 2>/dev/null | sha256sum | cut -d' ' -f1)
+    if [ "$splash_now" != "$(cat "$SPLASH_SUM" 2>/dev/null)" ]; then
+        info "Boot splash changed — rebuilding the boot image (about a minute)..."
+        if sudo /usr/sbin/update-initramfs -u >/dev/null 2>&1; then
+            mkdir -p "${SPLASH_SUM%/*}"
+            echo "$splash_now" > "$SPLASH_SUM"
+        else
+            warn "Could not rebuild the boot image; the new splash appears after the next kernel update"
+        fi
     fi
 fi
 

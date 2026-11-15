@@ -411,6 +411,35 @@ else
     fail "desktop: tests/desktop.sh"
 fi
 
+# The boot image is rebuilt when the splash it was built with has changed —
+# found by path, because a normal user's PATH has no /usr/sbin (3.7.7 looked
+# there, and skipped the rebuild without a word) — and only once
+if (
+    t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+    mkdir -p "$t/theme" "$t/sbin" "$t/bin" "$t/home"
+    echo one > "$t/theme/tebian.script"
+    printf '#!/bin/sh\necho rebuilt >> "%s/log"\n[ ! -e "%s/broken" ]\n' "$t" "$t" > "$t/sbin/update-initramfs"
+    printf '#!/bin/sh\nexec "$@"\n' > "$t/bin/sudo"
+    chmod +x "$t/sbin/update-initramfs" "$t/bin/sudo"
+    {
+        echo 'info() { :; }; warn() { :; }'
+        sed -n '/^SPLASH_DIR=/,/^fi$/p' "$ROOT/scripts/tebian-update" |
+            sed "s|/usr/share/plymouth/themes/tebian|$t/theme|; s|/usr/sbin/update-initramfs|$t/sbin/update-initramfs|g"
+    } > "$t/step.sh"
+    grep -q "$t/sbin/update-initramfs -u" "$t/step.sh" || exit 1
+    run() { env -i HOME="$t/home" PATH="$t/bin:/usr/bin:/bin" bash "$t/step.sh"; }
+    touch "$t/broken"; run || exit 1          # a failed rebuild is not remembered
+    [ ! -e "$t/home/.local/share/tebian/splash-initramfs.sha256" ] || exit 1
+    rm "$t/broken"; run || exit 1; run || exit 1
+    [ "$(grep -c rebuilt "$t/log")" = 2 ] || exit 1   # the failed one, then once
+    echo two > "$t/theme/tebian.script"; run || exit 1
+    [ "$(grep -c rebuilt "$t/log")" = 3 ] || exit 1
+); then
+    pass "update: a changed boot splash rebuilds the boot image, once, without /usr/sbin on PATH"
+else
+    fail "update: boot image not rebuilt for a changed splash (or rebuilt every time)"
+fi
+
 # tebian-update over an install of every earlier release (skips with a
 # note where the release tags or sway are missing)
 if bash "$ROOT/tests/upgrade.sh"; then
