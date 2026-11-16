@@ -1559,32 +1559,41 @@ KBEOF
         # Enable os-prober for dual-boot detection
         echo "GRUB_DISABLE_OS_PROBER=false" >> "$TARGET/etc/default/grub"
 
-        # Clean boot: Plymouth covers the text. No console palette tricks —
-        # zeroing vt.default_* made every TTY, rescue shell and fsck prompt
-        # black-on-black. loglevel=3 still hides noise but shows real errors.
-        sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 systemd.show_status=auto rd.udev.log_level=3"/' "$TARGET/etc/default/grub"
         sed -i 's/^#\?GRUB_GFXMODE=.*/GRUB_GFXMODE=auto/' "$TARGET/etc/default/grub"
-        if $DUAL_BOOT; then
-            sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$TARGET/etc/default/grub"
+        if [ "$MODE" = desktop ]; then
+            # Clean boot: Plymouth covers the text. No console palette tricks —
+            # zeroing vt.default_* made every TTY, rescue shell and fsck prompt
+            # black-on-black. loglevel=3 still hides noise but shows real errors.
+            sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 systemd.show_status=auto rd.udev.log_level=3"/' "$TARGET/etc/default/grub"
+            if $DUAL_BOOT; then
+                sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$TARGET/etc/default/grub"
+            else
+                sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' "$TARGET/etc/default/grub"
+                sed -i 's/^#\?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' "$TARGET/etc/default/grub"
+            fi
+
+            echo 68; echo "# Installing boot splash..."
+            chroot_apt_install \
+                plymouth plymouth-themes
+
+            # Install custom Tebian Plymouth theme
+            local plymouth_theme_dir="$TARGET/usr/share/plymouth/themes/tebian"
+            mkdir -p "$plymouth_theme_dir"
+            if [ -d "$TEBIAN_SRC/assets/plymouth/tebian" ]; then
+                # All of it: the script, and the pictures it shows
+                cp "$TEBIAN_SRC"/assets/plymouth/tebian/* "$plymouth_theme_dir/"
+            fi
+            chroot "$TARGET" plymouth-set-default-theme tebian >> "$INSTALL_LOG" 2>&1 || true
+            # Plymouth shutdown services (poweroff/reboot/halt) are statically
+            # pulled in by systemd targets — no explicit enable needed.
         else
-            sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' "$TARGET/etc/default/grub"
-            sed -i 's/^#\?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' "$TARGET/etc/default/grub"
+            # A server is plain Debian that says what it is doing: every
+            # boot message on the console, no splash to hide them, and the
+            # boot menu on screen for Debian's usual five seconds — where an
+            # older kernel or recovery mode is picked when one is needed
+            sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=""/' "$TARGET/etc/default/grub"
+            sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$TARGET/etc/default/grub"
         fi
-
-        echo 68; echo "# Installing boot splash..."
-        chroot_apt_install \
-            plymouth plymouth-themes
-
-        # Install custom Tebian Plymouth theme
-        local plymouth_theme_dir="$TARGET/usr/share/plymouth/themes/tebian"
-        mkdir -p "$plymouth_theme_dir"
-        if [ -d "$TEBIAN_SRC/assets/plymouth/tebian" ]; then
-            # All of it: the script, and the pictures it shows
-            cp "$TEBIAN_SRC"/assets/plymouth/tebian/* "$plymouth_theme_dir/"
-        fi
-        chroot "$TARGET" plymouth-set-default-theme tebian >> "$INSTALL_LOG" 2>&1 || true
-        # Plymouth shutdown services (poweroff/reboot/halt) are statically
-        # pulled in by systemd targets — no explicit enable needed.
 
         if $ENCRYPT; then
             chroot_apt_install \
@@ -1636,26 +1645,30 @@ KBEOF
             chmod 600 "$nm_target"/*.nmconnection
         fi
 
-        echo 85; echo "# Copying Tebian files..."
-        # Copy Tebian repo
-        local user_home="$TARGET/home/$USERNAME"
-        cp -r "$TEBIAN_SRC" "$user_home/Tebian"
-        # Seed tebian-update's manifest (sha256 of every shipped file) so
-        # the first update can tell the user's edits from upstream changes,
-        # instead of backing up every file it touches
-        mkdir -p "$user_home/.local/share/tebian"
-        ( cd "$user_home/Tebian" && find . -type f ! -path './.git/*' ! -name tebian.conf -printf '%P\0' |
-            sort -z | xargs -0 -r sha256sum ) > "$user_home/.local/share/tebian/manifest.sha256"
-        chroot "$TARGET" chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/Tebian" "/home/$USERNAME/.local"
+        # Tebian's own files are the desktop's. A server gets none of them:
+        # what it was installed from is on record in /etc/tebian-release
+        if [ "$MODE" = desktop ]; then
+            echo 85; echo "# Copying Tebian files..."
+            # Copy Tebian repo
+            local user_home="$TARGET/home/$USERNAME"
+            cp -r "$TEBIAN_SRC" "$user_home/Tebian"
+            # Seed tebian-update's manifest (sha256 of every shipped file) so
+            # the first update can tell the user's edits from upstream changes,
+            # instead of backing up every file it touches
+            mkdir -p "$user_home/.local/share/tebian"
+            ( cd "$user_home/Tebian" && find . -type f ! -path './.git/*' ! -name tebian.conf -printf '%P\0' |
+                sort -z | xargs -0 -r sha256sum ) > "$user_home/.local/share/tebian/manifest.sha256"
+            chroot "$TARGET" chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/Tebian" "/home/$USERNAME/.local"
 
-        # Install tebian-bootstrap system-wide
-        cp "$TEBIAN_SRC/bootstrap.sh" "$TARGET/usr/local/bin/tebian-bootstrap"
-        chmod +x "$TARGET/usr/local/bin/tebian-bootstrap"
+            # Install tebian-bootstrap system-wide
+            cp "$TEBIAN_SRC/bootstrap.sh" "$TARGET/usr/local/bin/tebian-bootstrap"
+            chmod +x "$TARGET/usr/local/bin/tebian-bootstrap"
 
-        # tebian-session system-wide
-        if [ -f "$TEBIAN_SRC/scripts/tebian-session" ]; then
-            cp "$TEBIAN_SRC/scripts/tebian-session" "$TARGET/usr/local/bin/tebian-session"
-            chmod +x "$TARGET/usr/local/bin/tebian-session"
+            # tebian-session system-wide
+            if [ -f "$TEBIAN_SRC/scripts/tebian-session" ]; then
+                cp "$TEBIAN_SRC/scripts/tebian-session" "$TARGET/usr/local/bin/tebian-session"
+                chmod +x "$TARGET/usr/local/bin/tebian-session"
+            fi
         fi
 
         if [ "$MODE" = "desktop" ]; then

@@ -9,6 +9,9 @@
 #
 #   bash tests/vm.sh [tebian.iso]      # default: newest ~/tebian-*.iso
 #   bash tests/vm.sh --bios [iso]      # legacy BIOS instead of UEFI
+#   bash tests/vm.sh --server [iso]    # the Bare Server install: console
+#                                      # login, SSH from outside, no desktop
+#   bash tests/vm.sh --server-secure   # the Secure Server: firewall as well
 #   bash tests/vm.sh --keep ...        # keep the work dir after a pass
 #   bash tests/vm.sh --reuse           # skip the install: boot the disk a
 #                                      # kept or failed run left behind
@@ -36,15 +39,18 @@ fail() { echo -e "${RED}✗${NC} $*"; fails=$((fails + 1)); }
 stop() { echo -e "${RED}✗${NC} $*"; echo "  Left for inspection: $WORK"; exit 1; }
 
 FIRMWARE=uefi
+MODE=desktop
 KEEP=false
 REUSE=false
 ISO=""
 for arg in "$@"; do
     case "$arg" in
         --bios) FIRMWARE=bios ;;
+        --server) MODE=server-bare ;;
+        --server-secure) MODE=server-secure ;;
         --keep) KEEP=true ;;
         --reuse) REUSE=true; KEEP=true ;;
-        -h|--help) sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option: $arg (see --help)"; exit 1 ;;
         *) ISO="$arg" ;;
     esac
@@ -103,6 +109,10 @@ case "$FIRMWARE" in
         FW=(-machine pc) ;;
 esac
 
+# A server's SSH is tried from outside: its port 22 is reachable on a free
+# port of this host, and nowhere else
+SSH_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+
 # Starts the machine in the background; extra arguments are the media
 vm_start() {
     rm -f qmp.sock
@@ -110,7 +120,7 @@ vm_start() {
         -drive file=disk.qcow2,format=qcow2,if=virtio "$@" \
         -device virtio-vga -display none \
         -device qemu-xhci -device usb-kbd \
-        -nic user,model=virtio-net-pci \
+        -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
         -qmp unix:qmp.sock,server,nowait -no-reboot > qemu.log 2>&1 &
     VM_PID=$!
 }
@@ -135,7 +145,7 @@ vm_wait_off() {
 #   vm status          running, or why not (io-error: the host disk is full)
 vm() {
     python3 - "$@" <<'PY'
-import json, socket, sys
+import json, socket, sys, time
 s = socket.socket(socket.AF_UNIX); s.connect("qmp.sock"); f = s.makefile("rw")
 def cmd(name, **args):
     f.write(json.dumps({"execute": name, "arguments": args}) + "\n"); f.flush()
@@ -145,6 +155,7 @@ def cmd(name, **args):
         if "return" in r: return r["return"]
 def key(*codes):
     cmd("send-key", keys=[{"type": "qcode", "data": c} for c in codes])
+    time.sleep(0.15)   # a text console drops keys that arrive faster
 NAMES = {"-": "minus", "_": ("shift", "minus"), " ": "spc", ".": "dot", ";": "semicolon"}
 f.readline(); cmd("qmp_capabilities")
 what, arg = sys.argv[1], (sys.argv[2:] or [""])[0]
@@ -168,12 +179,13 @@ disk_open() {
     rm -f disk.raw
 }
 disk_cat() { debugfs -R "cat $1" root.img 2>/dev/null; }
+disk_has() { debugfs -R "stat $1" root.img 2>/dev/null | grep -q "^Inode:"; }
 
 # --- 1. Install ---------------------------------------------------------------
 if ! $REUSE; then
-echo "ISO: $ISO ($FIRMWARE)"
+echo "ISO: $ISO ($FIRMWARE, $MODE)"
 qemu-img create -f qcow2 disk.qcow2 20G >/dev/null
-printf 'disk=/dev/vda\nusername=%s\npassword=%s\nhostname=vmcheck\n' "$VM_USER" "$VM_PASS" > answers
+printf 'disk=/dev/vda\nusername=%s\npassword=%s\nhostname=vmcheck\nmode=%s\n' "$VM_USER" "$VM_PASS" "$MODE" > answers
 note "Installing unattended (the slow part)..."
 vm_start -drive file="$ISO",media=cdrom,readonly=on -boot order=d \
     -fw_cfg name=opt/org.tebian/answers,file=answers
@@ -196,6 +208,7 @@ fi
 # --- 2. First boot of the installed system -------------------------------------
 note "Booting the installed disk..."
 vm_start -boot order=c
+if [ "$MODE" = desktop ]; then
 sleep 90
 vm shot greeter.png
 # The greeter has the only user selected and the password field focused
@@ -214,11 +227,25 @@ vm type "$VM_USER"; vm key ret; sleep 2
 vm type "$VM_PASS"; vm key ret; sleep 5
 vm type "if pgrep -x sway; then touch sway-is-up; fi"; vm key ret; sleep 2
 vm type "systemctl poweroff"; vm key ret
+
+else
+# A server has no greeter and no power menu: log in on the console it
+# boots to, and shut down the way its admin would — with sudo, which is
+# also the proof that the account can administer the machine. Before
+# that, knock on its SSH port from outside.
+sleep 60
+vm shot console.png
+ssh_banner=$(timeout 10 bash -c "exec 3<>/dev/tcp/127.0.0.1/$SSH_PORT && head -c 7 <&3" 2>/dev/null || true)
+vm type "$VM_USER"; vm key ret; sleep 2
+vm type "$VM_PASS"; vm key ret; sleep 5
+vm type "sudo systemctl poweroff"; vm key ret; sleep 3
+vm type "$VM_PASS"; vm key ret
+fi
 if vm_wait_off 120; then
     pass "boot: the installed system took a console login and shut down cleanly"
 else
     vm shot shutdown-stuck.png || true
-    stop "boot: did not shut down from a console login within 2 minutes — not booted? (see greeter.png, shutdown-stuck.png)"
+    stop "boot: did not shut down from a console login within 2 minutes — not booted? (see the *.png)"
 fi
 
 # --- 3. What the installed system says happened --------------------------------
@@ -228,6 +255,7 @@ debugfs -R "rdump /var/log/journal journal" root.img >/dev/null 2>&1 || true
 journalctl -D journal/journal --no-pager -o short-monotonic > journal.txt 2>/dev/null || true
 [ -s journal.txt ] || stop "boot: the installed system left no journal"
 
+if [ "$MODE" = desktop ]; then
 if grep -q "Reached target graphical.target" journal.txt; then
     pass "boot: reached the graphical target"
 else
@@ -242,6 +270,58 @@ if debugfs -R "stat /home/$VM_USER/sway-is-up" root.img 2>/dev/null | grep -q "^
     pass "desktop: sway was running after the login"
 else
     fail "desktop: sway was not running after the login (see desktop.png)"
+fi
+else
+if grep -q "Reached target multi-user.target" journal.txt; then
+    pass "boot: reached the multi-user target"
+else
+    fail "boot: never reached the multi-user target"
+fi
+if grep -q "pam_unix(login:session): session opened for user $VM_USER" journal.txt; then
+    pass "login: the console accepted the password"
+else
+    fail "login: no console session opened for $VM_USER (see console.png)"
+fi
+if [ "$ssh_banner" = "SSH-2.0" ]; then
+    pass "ssh: answers a connection from outside"
+else
+    fail "ssh: no answer on port 22 from outside (got '${ssh_banner:-nothing}')"
+fi
+# Plain Debian: nothing of the desktop, and a boot that shows its messages
+extras=""
+disk_cat /var/lib/dpkg/status > dpkg-status
+for pkg in sway swayfx greetd plymouth waybar fuzzel kitty; do
+    grep -qx "Package: $pkg" dpkg-status && extras+=" package $pkg;"
+done
+for f in "/home/$VM_USER/Tebian" /usr/local/bin/tebian-session /usr/local/bin/tebian-bootstrap /usr/share/plymouth/themes/tebian; do
+    disk_has "$f" && extras+=" $f;"
+done
+if [ -z "$extras" ]; then
+    pass "server: no desktop packages or Tebian files on the disk"
+else
+    fail "server: desktop leftovers —$extras"
+fi
+kernel_line=$(disk_cat /boot/grub/grub.cfg | grep -m1 '^[[:space:]]*linux[[:space:]]' || true)
+if [ -n "$kernel_line" ] && ! grep -Eq '(^| )(quiet|splash)( |$)' <<< "$kernel_line" &&
+   disk_cat /etc/default/grub | grep -qx 'GRUB_TIMEOUT=5'; then
+    pass "server: boot messages are shown and the boot menu waits 5 seconds"
+else
+    fail "server: boot is quiet or the menu is hidden ($kernel_line)"
+fi
+if [ "$MODE" = server-secure ]; then
+    # ufw logs nothing of its own; its unit finishing is the firewall loading
+    if grep -q "Finished ufw.service" journal.txt && disk_cat /etc/ufw/ufw.conf | grep -qx 'ENABLED=yes' &&
+       disk_cat /etc/ufw/user.rules | grep -q 'dport 22 '; then
+        pass "secure: the firewall came up at boot, with SSH let through"
+    else
+        fail "secure: firewall not up at boot, or SSH not in its rules"
+    fi
+    if grep -q "Started fail2ban.service" journal.txt; then
+        pass "secure: fail2ban is running"
+    else
+        fail "secure: fail2ban did not start"
+    fi
+fi
 fi
 rm -f root.img
 failed_units=$(grep -oE "Failed to start [^ ]+\.(service|mount|socket)" journal.txt | sort -u || true)
